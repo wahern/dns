@@ -51,7 +51,7 @@
 
 #include <netinet/in.h>	/* struct sockaddr_in struct sockaddr_in6 */
 
-#include <arpa/inet.h>	/* inet_pton(3) */
+#include <arpa/inet.h>	/* inet_pton(3) inet_ntop(3) */
 
 
 #include "dns.h"
@@ -152,8 +152,33 @@ static int dns_inet_pton(int af, const void *src, void *dst) {
 		return 0;
 	}
 } /* dns_inet_pton() */
+
+static const char *dns_inet_ntop(int af, const void *src, void *dst, int lim) {
+	union { struct sockaddr_in sin; struct sockaddr_in6 sin6 } u;
+
+	switch (af) {
+	case AF_INET:
+		sin.sin_family		= AF_INET;
+		sin.sin_addr		= *(struct sin_addr *)src;
+
+		break;
+	case AF_INET6:
+		sin6.sin6_family	= AF_INET6;
+		sin6.sin6_addr		= *(struct sin_addr6 *)src;
+
+		break;
+	default:
+		return 0;
+	}
+
+	if (0 != WSAAddressToStringA((struct sockaddr *)&u, sa_len(&u), (void *)0, dst, &lim))
+		return 0;
+
+	return dst;
+} /* dns_inet_ntop() */
 #else
 #define dns_inet_pton(...)	inet_pton(__VA_ARGS__)
+#define dns_inet_ntop(...)	inet_ntop(__VA_ARGS__)
 #endif
 
 
@@ -987,25 +1012,14 @@ int dns_a_push(struct dns_packet *P, struct dns_a *a) {
 
 
 size_t dns_a_print(void *dst, size_t lim, struct dns_a *a) {
-	size_t cp		= 0;
-	unsigned long addr	= ntohl(a->addr.s_addr);
-	unsigned octet[4], i;
+	char addr[INET_ADDRSTRLEN + 1]	= "0.0.0.0";
+	size_t len;
 
-	octet[0]	= 0xff & (addr >> 24);
-	octet[1]	= 0xff & (addr >> 16);
-	octet[2]	= 0xff & (addr >> 8);
-	octet[3]	= 0xff & (addr >> 0);
+	dns_inet_ntop(AF_INET, &a->addr, addr, sizeof addr);
 
-	for (i = 0; i < lengthof(octet); i++) {
-		cp	+= dns__print10(dst, lim, cp, octet[i]);
-		cp	+= dns__printchar(dst, lim, cp, '.');
-	}
+	dns__printnul(dst, lim, (len = dns__printstring(dst, lim, 0, addr)));
 
-	cp--;
-
-	dns__printnul(dst, lim, cp);
-
-	return cp;
+	return len;
 } /* dns_a_print() */
 
 
@@ -1035,23 +1049,14 @@ int dns_aaaa_push(struct dns_packet *P, struct dns_aaaa *aaaa) {
 
 
 size_t dns_aaaa_print(void *dst, size_t lim, struct dns_aaaa *aaaa) {
-	static const char hex[]	= "0123456789abcdef";
-	size_t cp		= 0;
-	unsigned i;
+	char addr[INET6_ADDRSTRLEN + 1]	= "::";
+	size_t len;
 
-	for (i = 0; i < lengthof(aaaa->addr.s6_addr);) {
-		cp	+= dns__printchar(dst, lim, cp, hex[0x0f & (aaaa->addr.s6_addr[i] >> 4)]);
-		cp	+= dns__printchar(dst, lim, cp, hex[0x0f & (aaaa->addr.s6_addr[i] >> 0)]);
+	dns_inet_ntop(AF_INET6, &aaaa->addr, addr, sizeof addr);
 
-		if (0 == (++i % 4))
-			cp	+= dns__printchar(dst, lim, cp, ':');
-	}
+	dns__printnul(dst, lim, (len = dns__printstring(dst, lim, 0, addr)));
 
-	cp--;
-
-	dns__printnul(dst, lim, cp);
-
-	return cp;
+	return len;
 } /* dns_aaaa_print() */
 
 
@@ -1784,6 +1789,50 @@ int dns_resconf_loadpath(struct dns_resolv_conf *resconf, const char *path) {
 } /* dns_resconf_loadpath() */
 
 
+static void dns_resconf_dump(struct dns_resolv_conf *resconf, FILE *fp) {
+	char addr[INET6_ADDRSTRLEN + 1];
+	unsigned i;
+
+	for (i = 0; i < lengthof(resconf->nameserver) && resconf->nameserver[i].sa_len > 0; i++) {
+		memcpy(addr, "[OOPS]", sizeof "[OOPS]");
+
+		switch (resconf->nameserver[i].ss.ss_family) {
+		case AF_INET6:
+			dns_inet_ntop(AF_INET6, &((struct sockaddr_in6 *)&resconf->nameserver[i].ss)->sin6_addr, addr, sizeof addr);
+
+			break;
+		case AF_INET:
+			dns_inet_ntop(AF_INET, &((struct sockaddr_in *)&resconf->nameserver[i].ss)->sin_addr, addr, sizeof addr);
+
+			break;
+		}
+
+		fprintf(fp, "nameserver %s\n", addr);
+	}
+
+	for (i = 0; i < lengthof(resconf->search) && resconf->search[i][0]; i++)
+		fprintf(fp, "search %s\n", resconf->search[i]);
+
+	fprintf(fp, "lookup");
+
+	for (i = 0; i < lengthof(resconf->lookup) && resconf->lookup[i]; i++) {
+		switch (resconf->lookup[i]) {
+		case 'b':
+			fprintf(fp, " bind"); break;
+		case 'f':
+			fprintf(fp, " file"); break;
+		}
+	}
+
+	fprintf(fp, "\n");
+
+
+	fprintf(fp, "options ndots:%d %s\n", resconf->options.ndots, (resconf->options.edns0)? "edns0" : "");
+
+	return /* void */;
+} /* dns_resconf_dump() */
+
+
 /*
  * R E S O L V E R  R O U T I N E S
  *
@@ -1920,32 +1969,15 @@ int main(void) {
 	char pretty[sizeof any * 2];
 	size_t len;
 
-#if 1
+#if 0
 	struct dns_resolv_conf *resconf	= dns_resconf_open(&error);
-	char addr[INET6_ADDRSTRLEN + 1];
 
 	if (0 != dns_resconf_loadpath(resconf, "/etc/resolv.conf"))
 		return 1;
 
-	for (unsigned i = 0; i < lengthof(resconf->nameserver) && resconf->nameserver[i].sa_len > 0; i++) {
-		switch (resconf->nameserver[i].ss.ss_family) {
-		case AF_INET6:
-			inet_ntop(AF_INET6, &((struct sockaddr_in6 *)&resconf->nameserver[i].ss)->sin6_addr, addr, sizeof addr);
+	dns_resconf_dump(resconf, stderr);
 
-			break;
-		case AF_INET:
-			inet_ntop(AF_INET, &((struct sockaddr_in *)&resconf->nameserver[i].ss)->sin_addr, addr, sizeof addr);
-
-			break;
-		}
-
-		fprintf(stderr, "nameserver %s\n", addr);
-	}
-
-	for (unsigned i = 0; i < lengthof(resconf->search) && resconf->search[i][0]; i++)
-		fprintf(stderr, "search %s\n", resconf->search[i]);
-
-	fprintf(stderr, "lookup %.*s\n", (int)lengthof(resconf->lookup), resconf->lookup);
+	dns_resconf_close(resconf);
 
 	return 0;
 #elif 0

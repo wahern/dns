@@ -1,4 +1,4 @@
-CFLAGS	+= -std=c99 -Wall -Werror -O2 -g
+CFLAGS	+= -std=c99 -Wall -Werror -Wno-unused-function -O2 -g
 
 
 #packet.c: packet.h
