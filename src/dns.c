@@ -27,7 +27,7 @@
 #include <stdlib.h>	/* malloc(3) free(3) random(3) arc4random(3) */
 #include <stdio.h>	/* FILE fopen(3) fclose(3) getc(3) rewind(3) */
 
-#include <string.h>	/* memcpy(3) strlen(3) memmove(3) memchr(3) memcmp(3) */
+#include <string.h>	/* memcpy(3) strlen(3) memmove(3) memchr(3) memcmp(3) strchr(3) */
 #include <strings.h>	/* strcasecmp(3) */
 
 #include <ctype.h>	/* isspace(3) */
@@ -48,6 +48,10 @@
 #endif
 
 #include <unistd.h>	/* gethostname(3) */
+
+#include <netinet/in.h>	/* struct sockaddr_in struct sockaddr_in6 */
+
+#include <arpa/inet.h>	/* inet_pton(3) */
 
 
 #include "dns.h"
@@ -123,6 +127,35 @@ static time_t dns_now(void) {
 
 	return tick;
 } /* dns_now() */
+
+
+#if _WIN32
+static int dns_inet_pton(int af, const void *src, void *dst) {
+	union { struct sockaddr_in sin; struct sockaddr_in6 sin6 } u;
+
+	u.sin.sin_family	= af;
+
+	if (0 != WSAStringToAddressA(src, af, (void *)0, (struct sockaddr *)&u, &(int){ sizeof u; }))
+		return -1;
+	
+	switch (af) {
+	case AF_INET:
+		*(struct sin_addr *)dst	= sin.sin_addr;
+
+		return 1;
+	case AF_INET6:
+		*(struct sin6_addr *)dst
+					= sin6.sin6_addr;
+
+		return 1;
+	default:
+		return 0;
+	}
+} /* dns_inet_pton() */
+#else
+#define dns_inet_pton(...)	inet_pton(__VA_ARGS__)
+#endif
+
 
 
 /*
@@ -1638,6 +1671,7 @@ unsigned dns_resconf_release(struct dns_resolv_conf *resconf) {
 #define dns_resconf_iscom(ch)	((ch) == '#' || (ch) == ';')
 
 int dns_resconf_loadfile(struct dns_resolv_conf *resconf, FILE *fp) {
+	unsigned sa_count	= 0;
 	char words[6][DNS_D_MAXNAME + 1];
 	unsigned wp, wc, i;
 	int ch;
@@ -1677,8 +1711,38 @@ skip:
 			continue;
 
 		if (0 == strcasecmp(words[0], "nameserver")) {
-			
-		} else if (0 == strcasecmp(words[0], "domain") || 0 == strcasecmp(words[0], "search")) {
+			union { struct sockaddr_in *sin; struct sockaddr_in6 *sin6; } u;
+			int af;
+
+			if (sa_count >= lengthof(resconf->nameserver))
+				continue;
+
+			u.sin	= (struct sockaddr_in *)&resconf->nameserver[sa_count].ss;
+
+			switch ((af = (strchr(words[1], ':'))? AF_INET6 : AF_INET)) {
+			case AF_INET6:
+				if (1 != dns_inet_pton(af, words[1], &u.sin6->sin6_addr))
+					continue;
+
+				u.sin6->sin6_port	= 53;
+
+				break;
+			case AF_INET:
+				if (1 != dns_inet_pton(af, words[1], &u.sin->sin_addr))
+					continue;
+
+				u.sin->sin_port		= 53;
+
+				break;
+			default:
+				continue;
+			}
+
+			u.sin->sin_family	= af;
+
+			resconf->nameserver[sa_count++].sa_len	= sa_len(u.sin);
+		} else if (0 == strcasecmp(words[0], "domain")
+		       ||  0 == strcasecmp(words[0], "search")) {
 			memset(resconf->search, '\0', sizeof resconf->search);
 
 			/*
@@ -1688,12 +1752,20 @@ skip:
 
 			for (i = 0; i < wc && i < lengthof(resconf->search); i++)
 				dns_d_anchor(resconf->search[i], sizeof resconf->search[i], words[i], strlen(words[i]));
-		} else if (0 == strcasecmp(words[0], "lookup") || 0 == strcasecmp(words[0], "order")) {
-		
+		} else if (0 == strcasecmp(words[0], "lookup")
+		       ||  0 == strcasecmp(words[0], "order")) {
+			unsigned i, j;
+
+			for (i = 1, j = 0; i < wc && j < lengthof(resconf->lookup); i++) {
+				if (0 == strcasecmp(words[i], "file") || 0 == strcasecmp(words[i], "hosts"))
+					resconf->lookup[j++]	= 'f';
+				else if (0 == strcasecmp(words[i], "bind"))
+					resconf->lookup[j++]	= 'b';
+			}
 		}
 	} while (ch != EOF);
 
-	return -1;
+	return 0;
 } /* dns_resconf_loadfile() */
 
 
@@ -1848,7 +1920,35 @@ int main(void) {
 	char pretty[sizeof any * 2];
 	size_t len;
 
-#if 0
+#if 1
+	struct dns_resolv_conf *resconf	= dns_resconf_open(&error);
+	char addr[INET6_ADDRSTRLEN + 1];
+
+	if (0 != dns_resconf_loadpath(resconf, "/etc/resolv.conf"))
+		return 1;
+
+	for (unsigned i = 0; i < lengthof(resconf->nameserver) && resconf->nameserver[i].sa_len > 0; i++) {
+		switch (resconf->nameserver[i].ss.ss_family) {
+		case AF_INET6:
+			inet_ntop(AF_INET6, &((struct sockaddr_in6 *)&resconf->nameserver[i].ss)->sin6_addr, addr, sizeof addr);
+
+			break;
+		case AF_INET:
+			inet_ntop(AF_INET, &((struct sockaddr_in *)&resconf->nameserver[i].ss)->sin_addr, addr, sizeof addr);
+
+			break;
+		}
+
+		fprintf(stderr, "nameserver %s\n", addr);
+	}
+
+	for (unsigned i = 0; i < lengthof(resconf->search) && resconf->search[i][0]; i++)
+		fprintf(stderr, "search %s\n", resconf->search[i]);
+
+	fprintf(stderr, "lookup %.*s\n", (int)lengthof(resconf->lookup), resconf->lookup);
+
+	return 0;
+#elif 0
 	char *dn	= dns_d_new("sfo9.g.remotv.com");
 
 	do {

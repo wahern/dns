@@ -1,7 +1,7 @@
 CFLAGS	+= -std=c99 -Wall -Werror -O2 -g
 
 
-packet.c: packet.h
+#packet.c: packet.h
 
 
 .PHONY: clean
