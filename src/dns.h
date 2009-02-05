@@ -115,6 +115,11 @@ const char *dns_strtype(enum dns_type, void *, size_t);
 #define dns_strtype(...)	DNS_PP_CALL(DNS_PP_XPASTE(dns_strtype, DNS_PP_NARG(__VA_ARGS__)), __VA_ARGS__)
 
 
+/*
+ * P A C K E T  I N T E R F A C E
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
 struct dns_header {
 		unsigned qid:16;
 
@@ -178,6 +183,10 @@ int dns_p_push(struct dns_packet *, enum dns_section, const void *, size_t, enum
 void dns_p_dictadd(struct dns_packet *, unsigned short);
 
 
+/*
+ * D O M A I N  N A M E  I N T E R F A C E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 #define DNS_D_MAXLABEL	63	/* + 1 '\0' */
 #define DNS_D_MAXNAME	255	/* + 1 '\0' */
@@ -204,6 +213,11 @@ unsigned short dns_d_skip(unsigned short, struct dns_packet *);
 
 int dns_d_push(struct dns_packet *, const void *, size_t);
 
+
+/*
+ * R E S O U R C E  R E C O R D  I N T E R F A C E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 struct dns_rr {
 	enum dns_section section;
@@ -331,34 +345,10 @@ int dns_any_push(struct dns_packet *, union dns_any *, enum dns_type);
 size_t dns_any_print(void *, size_t, union dns_any *, enum dns_type);
 
 
-struct dns_hints;
-
-struct dns_hints *dns_h_open(int *);
-
-void dns_h_close(struct dns_hints *);
-
-unsigned dns_h_acquire(struct dns_hints *);
-
-unsigned dns_h_release(struct dns_hints *);
-
-int dns_h_insert(struct dns_hints *, const char *, const struct sockaddr *, socklen_t, unsigned);
-
-void dns_h_update(struct dns_hints *, const char *, const struct sockaddr *, socklen_t, int);
-
-
-struct dns_h_i {
-	const char *zone;
-
-	struct {
-		unsigned p, end;
-        	unsigned priority;
-	} state;
-}; /* struct dns_h_i */
-
-#define dns_h_i_new(...)	(&(struct dns_h_i){ __VA_ARGS__ })
-
-unsigned dns_h_grep(struct sockaddr **, socklen_t *, unsigned, struct dns_h_i *, struct dns_hints *);
-
+/*
+ * R E S O L V . C O N F  I N T E R F A C E
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 struct dns_resolv_conf {
 	struct {
@@ -395,8 +385,46 @@ int dns_resconf_loadpath(struct dns_resolv_conf *, const char *);
 
 
 /*
- * C99 MACRO MAGIC.
- */
+ * H I N T  S E R V E R  I N T E R F A C E
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+struct dns_hints;
+
+struct dns_hints *dns_h_open(int *);
+
+void dns_h_close(struct dns_hints *);
+
+unsigned dns_h_acquire(struct dns_hints *);
+
+unsigned dns_h_release(struct dns_hints *);
+
+int dns_h_insert(struct dns_hints *, const char *, const struct sockaddr *, socklen_t, unsigned);
+
+unsigned dns_h_insert_resconf(struct dns_hints *, const struct dns_resolv_conf *, int *);
+
+void dns_h_update(struct dns_hints *, const char *, const struct sockaddr *, socklen_t, int);
+
+
+struct dns_h_i {
+	const char *zone;
+
+	struct {
+		unsigned p, end;
+        	unsigned priority;
+	} state;
+}; /* struct dns_h_i */
+
+#define dns_h_i_new(...)	(&(struct dns_h_i){ __VA_ARGS__ })
+
+unsigned dns_h_grep(struct sockaddr **, socklen_t *, unsigned, struct dns_h_i *, struct dns_hints *);
+
+
+/*
+ * M A C R O  M A G I C S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
 #define DNS_PP_NARG_(a, b, c, d, e, f, g, N,...) N
 #define DNS_PP_NARG(...)	DNS_PP_NARG_(__VA_ARGS__, 7, 6, 5, 4, 3, 2, 1, 0)
 #define DNS_PP_CALL(F, ...)	F(__VA_ARGS__)

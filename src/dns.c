@@ -295,7 +295,6 @@ error:
 } /* dns_p_push() */
 
 
-
 /*
  * D O M A I N  N A M E  R O U T I N E S
  *
@@ -1391,229 +1390,6 @@ size_t dns_any_print(void *dst_, size_t lim, union dns_any *any, enum dns_type t
 
 
 /*
- * H I N T  S E R V E R  R O U T I N E S
- *
- * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-
-struct dns_h_soa {
-	unsigned char zone[DNS_D_MAXNAME + 1];
-	
-
-	struct {
-		struct sockaddr_storage ss;
-		socklen_t salen;
-
-		struct {
-			unsigned saved, effective;
-			time_t ttl;
-		} pri;
-
-		unsigned nlost;
-	} addrs[16];
-
-	unsigned count;
-
-	struct dns_h_soa *next;
-}; /* struct dns_h_soa */
-
-
-struct dns_hints {
-	unsigned refcount;
-
-	struct dns_h_soa *head;
-}; /* struct dns_hints */
-
-
-struct dns_hints *dns_h_open(int *error) {
-	static const struct dns_hints H_initializer;
-	struct dns_hints *H;
-
-	if (!(H = malloc(sizeof *H)))
-		goto syerr;
-
-	*H	= H_initializer;
-
-	dns_h_acquire(H);
-
-	return H;
-syerr:
-	*error	= errno;
-
-	free(H);
-
-	return 0;
-} /* dns_h_open() */
-
-
-void dns_h_close(struct dns_hints *H) {
-	struct dns_h_soa *soa, *nxt;
-
-	if (!H || 1 != dns_h_release(H))
-		return /* void */;
-
-	for (soa = H->head; soa; soa = nxt) {
-		nxt	= soa->next;
-
-		free(soa);
-	}
-
-	free(H);
-
-	return /* void */;
-} /* dns_h_close() */
-
-
-unsigned dns_h_acquire(struct dns_hints *H) {
-	return H->refcount++;	/* FIXME: Need true atomic operation. */
-} /* dns_h_acquire() */
-
-
-unsigned dns_h_release(struct dns_hints *H) {
-	return H->refcount--;	/* FIXME: Need true atomic operation. */
-} /* dns_h_release() */
-
-
-static struct dns_h_soa *dns_h_fetch(struct dns_hints *H, const char *zone) {
-	struct dns_h_soa *soa;
-
-	for (soa = H->head; soa; soa = soa->next) {
-		if (0 == strcasecmp(zone, (char *)soa->zone))
-			return soa;
-	}
-
-	return 0;
-} /* dns_h_fetch() */
-
-
-int dns_h_insert(struct dns_hints *H, const char *zone, const struct sockaddr *sa, socklen_t salen, unsigned priority) {
-	static const struct dns_h_soa soa_initializer;
-	struct dns_h_soa *soa;
-	unsigned i;
-
-	if (!(soa = dns_h_fetch(H, zone))) {
-		if (!(soa = malloc(sizeof *soa)))
-			return errno;
-
-		*soa	= soa_initializer;
-
-		dns__printstring(soa->zone, sizeof soa->zone, 0, zone);
-
-		soa->next	= H->head;
-		H->head		= soa->next;
-	}
-
-	i	= soa->count % lengthof(soa->addrs);
-
-	memcpy(&soa->addrs[i].ss, sa, salen);
-	soa->addrs[i].salen	= salen;
-
-	soa->addrs[i].pri.effective	= soa->addrs[i].pri.saved
-					= MAX(1, priority);
-
-	if (soa->count < lengthof(soa->addrs))
-		soa->count++;
-
-	return 0;
-} /* dns_h_insert() */
-
-
-void dns_h_update(struct dns_hints *H, const char *zone, const struct sockaddr *sa, socklen_t salen, int nice) {
-	struct dns_h_soa *soa;
-	unsigned i;
-	time_t now	= dns_now();
-
-	if (!(soa = dns_h_fetch(H, zone)))
-		return /* void */;
-
-	for (i = 0; i < soa->count; i++) {
-		if (0 == memcmp(&soa->addrs[i].ss, sa, salen)) {
-			if (nice < 0) {
-				soa->addrs[i].nlost++;
-				soa->addrs[i].pri.effective	= 0;
-				soa->addrs[i].pri.ttl		= now + MIN(60, 3 * soa->addrs[i].nlost);
-			} else if (nice > 0) {
-				goto reset;
-			}
-		} else if (soa->addrs[i].pri.ttl > 0 && soa->addrs[i].pri.ttl < now) {
-reset:
-			soa->addrs[i].pri.effective
-				= soa->addrs[i].pri.saved;
-
-			soa->addrs[i].pri.ttl	= 0;
-			soa->addrs[i].nlost	= 0;
-		}
-	}
-
-	return /* void */;
-} /* dns_h_update() */
-
-
-struct dns_h_i *dns_h_i_init(struct dns_h_i *i) {
-	static const struct dns_h_i i_initializer;
-
-	i->state	= i_initializer.state;
-
-	return i;
-} /* dns_h_i_init() */
-
-
-static int dns_h_i_ffwd(struct dns_h_i *i, struct dns_h_soa *soa) {
-	unsigned min, max;
-	int j, found;
-
-	do {
-		while (i->state.p < i->state.end) {
-			j = i->state.p++ % soa->count;
-
-			if (soa->addrs[j].pri.effective == i->state.priority)
-				return j;
-		}
-
-		/* Scan for next priority */
-		min	= ++i->state.priority;
-		max	= -1;
-		found	= 0;
-
-		for (j = 0; j < soa->count; j++) {
-			if (soa->addrs[j].pri.effective >= min && soa->addrs[j].pri.effective <= max) {
-				i->state.priority	= soa->addrs[j].pri.effective;
-				max			= soa->addrs[j].pri.effective;
-				found			= 1;
-			}
-		}
-
-		i->state.p	= 0xff & (unsigned)DNS_RANDOM();
-		i->state.end	= i->state.p + soa->count;
-	} while (found);
-
-	return -1;
-} /* dns_h_i_ffwd() */
-
-
-unsigned dns_h_grep(struct sockaddr **sa, socklen_t *salen, unsigned lim, struct dns_h_i *i, struct dns_hints *H) {
-	struct dns_h_soa *soa;
-	unsigned n;
-	int j;
-
-	if (!(soa = dns_h_fetch(H, i->zone)))
-		return 0;
-
-	n	= 0;
-
-	while (n < lim && -1 != (j = dns_h_i_ffwd(i, soa))) {
-		*sa	= (struct sockaddr *)&soa->addrs[j].ss;
-		*salen	= sa_len(*sa);
-
-		sa++;
-		salen++;
-		n++;
-	}
-
-	return n;
-} /* dns_h_grep() */
-
-
-/*
  * R E S O L V . C O N F  R O U T I N E S
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -1831,6 +1607,243 @@ static void dns_resconf_dump(struct dns_resolv_conf *resconf, FILE *fp) {
 
 	return /* void */;
 } /* dns_resconf_dump() */
+
+
+/*
+ * H I N T  S E R V E R  R O U T I N E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+struct dns_h_soa {
+	unsigned char zone[DNS_D_MAXNAME + 1];
+	
+
+	struct {
+		struct sockaddr_storage ss;
+		socklen_t salen;
+
+		struct {
+			unsigned saved, effective;
+			time_t ttl;
+		} pri;
+
+		unsigned nlost;
+	} addrs[16];
+
+	unsigned count;
+
+	struct dns_h_soa *next;
+}; /* struct dns_h_soa */
+
+
+struct dns_hints {
+	unsigned refcount;
+
+	struct dns_h_soa *head;
+}; /* struct dns_hints */
+
+
+struct dns_hints *dns_h_open(int *error) {
+	static const struct dns_hints H_initializer;
+	struct dns_hints *H;
+
+	if (!(H = malloc(sizeof *H)))
+		goto syerr;
+
+	*H	= H_initializer;
+
+	dns_h_acquire(H);
+
+	return H;
+syerr:
+	*error	= errno;
+
+	free(H);
+
+	return 0;
+} /* dns_h_open() */
+
+
+void dns_h_close(struct dns_hints *H) {
+	struct dns_h_soa *soa, *nxt;
+
+	if (!H || 1 != dns_h_release(H))
+		return /* void */;
+
+	for (soa = H->head; soa; soa = nxt) {
+		nxt	= soa->next;
+
+		free(soa);
+	}
+
+	free(H);
+
+	return /* void */;
+} /* dns_h_close() */
+
+
+unsigned dns_h_acquire(struct dns_hints *H) {
+	return H->refcount++;	/* FIXME: Need true atomic operation. */
+} /* dns_h_acquire() */
+
+
+unsigned dns_h_release(struct dns_hints *H) {
+	return H->refcount--;	/* FIXME: Need true atomic operation. */
+} /* dns_h_release() */
+
+
+static struct dns_h_soa *dns_h_fetch(struct dns_hints *H, const char *zone) {
+	struct dns_h_soa *soa;
+
+	for (soa = H->head; soa; soa = soa->next) {
+		if (0 == strcasecmp(zone, (char *)soa->zone))
+			return soa;
+	}
+
+	return 0;
+} /* dns_h_fetch() */
+
+
+int dns_h_insert(struct dns_hints *H, const char *zone, const struct sockaddr *sa, socklen_t salen, unsigned priority) {
+	static const struct dns_h_soa soa_initializer;
+	struct dns_h_soa *soa;
+	unsigned i;
+
+	if (!(soa = dns_h_fetch(H, zone))) {
+		if (!(soa = malloc(sizeof *soa)))
+			return errno;
+
+		*soa	= soa_initializer;
+
+		dns__printstring(soa->zone, sizeof soa->zone, 0, zone);
+
+		soa->next	= H->head;
+		H->head		= soa->next;
+	}
+
+	i	= soa->count % lengthof(soa->addrs);
+
+	memcpy(&soa->addrs[i].ss, sa, salen);
+	soa->addrs[i].salen	= salen;
+
+	soa->addrs[i].pri.effective	= soa->addrs[i].pri.saved
+					= MAX(1, priority);
+
+	if (soa->count < lengthof(soa->addrs))
+		soa->count++;
+
+	return 0;
+} /* dns_h_insert() */
+
+
+unsigned dns_h_insert_resconf(struct dns_hints *H, const struct dns_resolv_conf *resconf, int *error) {
+	unsigned i, n;
+
+	for (i = 0, n = 0; i < lengthof(resconf->nameserver) && resconf->nameserver[i].sa_len > 0; i++) {
+		if ((*error = dns_h_insert(H, ".", (struct sockaddr *)&resconf->nameserver[i].ss, resconf->nameserver[i].sa_len, n + 1)))
+			break;
+
+		n++;
+	}
+
+	return n;
+} /* dns_h_insert_resconf() */
+
+
+void dns_h_update(struct dns_hints *H, const char *zone, const struct sockaddr *sa, socklen_t salen, int nice) {
+	struct dns_h_soa *soa;
+	unsigned i;
+	time_t now	= dns_now();
+
+	if (!(soa = dns_h_fetch(H, zone)))
+		return /* void */;
+
+	for (i = 0; i < soa->count; i++) {
+		if (0 == memcmp(&soa->addrs[i].ss, sa, salen)) {
+			if (nice < 0) {
+				soa->addrs[i].nlost++;
+				soa->addrs[i].pri.effective	= 0;
+				soa->addrs[i].pri.ttl		= now + MIN(60, 3 * soa->addrs[i].nlost);
+			} else if (nice > 0) {
+				goto reset;
+			}
+		} else if (soa->addrs[i].pri.ttl > 0 && soa->addrs[i].pri.ttl < now) {
+reset:
+			soa->addrs[i].pri.effective
+				= soa->addrs[i].pri.saved;
+
+			soa->addrs[i].pri.ttl	= 0;
+			soa->addrs[i].nlost	= 0;
+		}
+	}
+
+	return /* void */;
+} /* dns_h_update() */
+
+
+struct dns_h_i *dns_h_i_init(struct dns_h_i *i) {
+	static const struct dns_h_i i_initializer;
+
+	i->state	= i_initializer.state;
+
+	return i;
+} /* dns_h_i_init() */
+
+
+static int dns_h_i_ffwd(struct dns_h_i *i, struct dns_h_soa *soa) {
+	unsigned min, max;
+	int j, found;
+
+	do {
+		while (i->state.p < i->state.end) {
+			j = i->state.p++ % soa->count;
+
+			if (soa->addrs[j].pri.effective == i->state.priority)
+				return j;
+		}
+
+		/* Scan for next priority */
+		min	= ++i->state.priority;
+		max	= -1;
+		found	= 0;
+
+		for (j = 0; j < soa->count; j++) {
+			if (soa->addrs[j].pri.effective >= min && soa->addrs[j].pri.effective <= max) {
+				i->state.priority	= soa->addrs[j].pri.effective;
+				max			= soa->addrs[j].pri.effective;
+				found			= 1;
+			}
+		}
+
+		i->state.p	= 0xff & (unsigned)DNS_RANDOM();
+		i->state.end	= i->state.p + soa->count;
+	} while (found);
+
+	return -1;
+} /* dns_h_i_ffwd() */
+
+
+unsigned dns_h_grep(struct sockaddr **sa, socklen_t *salen, unsigned lim, struct dns_h_i *i, struct dns_hints *H) {
+	struct dns_h_soa *soa;
+	unsigned n;
+	int j;
+
+	if (!(soa = dns_h_fetch(H, i->zone)))
+		return 0;
+
+	n	= 0;
+
+	while (n < lim && -1 != (j = dns_h_i_ffwd(i, soa))) {
+		*sa	= (struct sockaddr *)&soa->addrs[j].ss;
+		*salen	= sa_len(*sa);
+
+		sa++;
+		salen++;
+		n++;
+	}
+
+	return n;
+} /* dns_h_grep() */
 
 
 /*
