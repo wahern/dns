@@ -24,8 +24,14 @@
  * ==========================================================================
  */
 #include <stddef.h>	/* offsetof() */
+#include <stdio.h>	/* FILE */
 
 #include <string.h>	/* strlen(3) */
+
+#include <sys/types.h>	/* socklen_t */
+#include <sys/socket.h>	/* struct socket */
+
+#include <netinet/in.h>	/* struct in_addr struct in6_addr */
 
 
 enum dns_section {
@@ -253,7 +259,7 @@ unsigned dns_rr_grep(struct dns_rr *, unsigned, struct dns_rr_i *, struct dns_pa
 
 
 struct dns_a {
-	unsigned long addr;
+	struct in_addr addr;
 }; /* struct dns_a */
 
 int dns_a_parse(struct dns_a *, struct dns_rr *, struct dns_packet *);
@@ -262,7 +268,7 @@ size_t dns_a_print(void *, size_t, struct dns_a *);
 
 
 struct dns_aaaa {
-	unsigned char addr[16];
+	struct in6_addr addr;
 }; /* struct dns_aaaa */
 
 int dns_aaaa_parse(struct dns_aaaa *, struct dns_rr *, struct dns_packet *);
@@ -325,12 +331,67 @@ int dns_any_push(struct dns_packet *, union dns_any *, enum dns_type);
 size_t dns_any_print(void *, size_t, union dns_any *, enum dns_type);
 
 
-struct dns_hints {
+struct dns_hints;
 
-}; /* struct dns_hints */
+struct dns_hints *dns_h_open(int *);
+
+void dns_h_close(struct dns_hints *);
+
+unsigned dns_h_acquire(struct dns_hints *);
+
+unsigned dns_h_release(struct dns_hints *);
+
+int dns_h_insert(struct dns_hints *, const char *, const struct sockaddr *, socklen_t, unsigned);
+
+void dns_h_update(struct dns_hints *, const char *, const struct sockaddr *, socklen_t, int);
 
 
+struct dns_h_i {
+	const char *zone;
 
+	struct {
+		unsigned p, end;
+        	unsigned priority;
+	} state;
+}; /* struct dns_h_i */
+
+#define dns_h_i_new(...)	(&(struct dns_h_i){ __VA_ARGS__ })
+
+unsigned dns_h_grep(struct sockaddr **, socklen_t *, unsigned, struct dns_h_i *, struct dns_hints *);
+
+
+struct dns_resolv_conf {
+	struct {
+		struct sockaddr_storage ss;
+		socklen_t sa_len;
+	} nameserver[3];
+
+	char search[4][DNS_D_MAXNAME + 1];
+
+	char lookup[3];
+
+	struct {
+		int edns0;
+
+		unsigned ndots;
+	} options;
+
+	struct { /* PRIVATE */
+		unsigned refcount;
+	} _;
+}; /* struct dns_resolv_conf */
+
+struct dns_resolv_conf *dns_resconf_open(int *);
+
+void dns_resconf_close(struct dns_resolv_conf *);
+
+unsigned dns_resconf_acquire(struct dns_resolv_conf *);
+
+unsigned dns_resconf_release(struct dns_resolv_conf *);
+
+int dns_resconf_loadfile(struct dns_resolv_conf *, FILE *);
+
+int dns_resconf_loadpath(struct dns_resolv_conf *, const char *);
 
 
 /*
