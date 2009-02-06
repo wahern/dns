@@ -1538,9 +1538,7 @@ enum dns_resconf_keyword {
 	DNS_RESCONF_DOMAIN,
 	DNS_RESCONF_SEARCH,
 	DNS_RESCONF_LOOKUP,
-	DNS_RESCONF_ORDER,
 	DNS_RESCONF_FILE,
-	DNS_RESCONF_HOSTS,
 	DNS_RESCONF_BIND,
 	DNS_RESCONF_OPTIONS,
 	DNS_RESCONF_EDNS0,
@@ -1554,9 +1552,7 @@ static enum dns_resconf_keyword dns_resconf_keyword(const char *word) {
 		[DNS_RESCONF_DOMAIN]		= "domain",
 		[DNS_RESCONF_SEARCH]		= "search",
 		[DNS_RESCONF_LOOKUP]		= "lookup",
-		[DNS_RESCONF_ORDER]		= "order",
 		[DNS_RESCONF_FILE]		= "file",
-		[DNS_RESCONF_HOSTS]		= "hosts",
 		[DNS_RESCONF_BIND]		= "bind",
 		[DNS_RESCONF_OPTIONS]		= "options",
 		[DNS_RESCONF_EDNS0]		= "edns0",
@@ -1649,12 +1645,10 @@ skip:
 				dns_d_anchor(resconf->search[j], sizeof resconf->search[j], words[i], strlen(words[i]));
 
 			break;
-		case DNS_RESCONF_LOOKUP:	/* BSD resolv.conf */
-		case DNS_RESCONF_ORDER:		/* GNU hosts.txt */
+		case DNS_RESCONF_LOOKUP:
 			for (i = 1, j = 0; i < wc && j < lengthof(resconf->lookup); i++) {
 				switch (dns_resconf_keyword(words[i])) {
-				case DNS_RESCONF_FILE:	/* BSD resolv.conf */
-				case DNS_RESCONF_HOSTS:	/* GNU hosts.txt */
+				case DNS_RESCONF_FILE:
 					resconf->lookup[j++]	= 'f';
 
 					break;
