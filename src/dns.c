@@ -41,13 +41,15 @@
 #include <assert.h>	/* assert(3) */
 
 #include <sys/types.h>	/* socklen_t htons(3) ntohs(3) */
-#include <sys/socket.h>	/* struct sockaddr struct sockaddr_in struct sockaddr_in6 */
+#include <sys/socket.h>	/* struct sockaddr struct sockaddr_in struct sockaddr_in6 socket(2) */
 
 #if defined(AF_UNIX)
 #include <sys/un.h>	/* struct sockaddr_un */
 #endif
 
-#include <unistd.h>	/* gethostname(3) */
+#include <fcntl.h>	/* F_SETFD F_GETFL F_SETFL O_NONBLOCK fcntl(2) */
+
+#include <unistd.h>	/* gethostname(3) close(2) */
 
 #include <netinet/in.h>	/* struct sockaddr_in struct sockaddr_in6 */
 
@@ -79,21 +81,6 @@
 
 #ifndef lengthof
 #define lengthof(a)	(sizeof (a) / sizeof (a)[0])
-#endif
-
-
-#if defined(AF_UNIX)
-#define sa_len(sa)							\
-	((((struct sockaddr *)(sa))->sa_family == AF_INET6)		\
-		? (sizeof (struct sockaddr_in6))			\
-		: (((struct sockaddr *)(sa))->sa_family == AF_UNIX)	\
-			? (sizeof (struct sockaddr_un))			\
-			: (sizeof (struct sockaddr_in)))
-#else
-#define sa_len(sa)							\
-	((((struct sockaddr *)(sa))->sa_family == AF_INET6)		\
-		? (sizeof (struct sockaddr_in6))			\
-		: (sizeof (struct sockaddr_in)))
 #endif
 
 
@@ -129,6 +116,49 @@ static time_t dns_now(void) {
 } /* dns_now() */
 
 
+#if defined(AF_UNIX)
+#define dns_sa_len(sa)							\
+	((((struct sockaddr *)(sa))->sa_family == AF_INET6)		\
+		? (sizeof (struct sockaddr_in6))			\
+		: (((struct sockaddr *)(sa))->sa_family == AF_UNIX)	\
+			? (sizeof (struct sockaddr_un))			\
+			: (sizeof (struct sockaddr_in)))
+#else
+#define dns_sa_len(sa)							\
+	((((struct sockaddr *)(sa))->sa_family == AF_INET6)		\
+		? (sizeof (struct sockaddr_in6))			\
+		: (sizeof (struct sockaddr_in)))
+#endif
+
+
+#define DNS_SA_NOPORT	&dns_sa_noport;
+static unsigned short dns_sa_noport;
+
+static unsigned short *dns_sa_port(int af, void *sa) {
+
+	switch (af) {
+	case AF_INET6:
+		return &((struct sockaddr_in6 *)sa)->sin6_port;
+	case AF_INET:
+		return &((struct sockaddr_in *)sa)->sin_port;
+	default:
+		return DNS_SA_NOPORT;
+	}
+} /* dns_sa_port() */
+
+
+static void *dns_sa_addr(int af, void *sa) {
+	switch (af) {
+	case AF_INET6:
+		return &((struct sockaddr_in6 *)sa)->sin6_addr;
+	case AF_INET:
+		return &((struct sockaddr_in *)sa)->sin_addr;
+	default:
+		return 0;
+	}
+} /* dns_sa_addr() */
+
+
 #if _WIN32
 static int dns_inet_pton(int af, const void *src, void *dst) {
 	union { struct sockaddr_in sin; struct sockaddr_in6 sin6 } u;
@@ -137,15 +167,14 @@ static int dns_inet_pton(int af, const void *src, void *dst) {
 
 	if (0 != WSAStringToAddressA(src, af, (void *)0, (struct sockaddr *)&u, &(int){ sizeof u; }))
 		return -1;
-	
+
 	switch (af) {
-	case AF_INET:
-		*(struct sin_addr *)dst	= sin.sin_addr;
+	case AF_INET6:
+		*(struct in6_addr *)dst	= u.sin6->sin6_addr;
 
 		return 1;
-	case AF_INET6:
-		*(struct sin6_addr *)dst
-					= sin6.sin6_addr;
+	case AF_INET:
+		*(struct in_addr *)dst	= u.sin->sin_addr;
 
 		return 1;
 	default:
@@ -156,22 +185,21 @@ static int dns_inet_pton(int af, const void *src, void *dst) {
 static const char *dns_inet_ntop(int af, const void *src, void *dst, int lim) {
 	union { struct sockaddr_in sin; struct sockaddr_in6 sin6 } u;
 
-	switch (af) {
-	case AF_INET:
-		sin.sin_family		= AF_INET;
-		sin.sin_addr		= *(struct sin_addr *)src;
+	u.sin.sin_family	= af;
 
-		break;
+	switch (af) {
 	case AF_INET6:
-		sin6.sin6_family	= AF_INET6;
-		sin6.sin6_addr		= *(struct sin_addr6 *)src;
+		u.sin6->sin6_addr	= *(struct in6_addr *)src;
+		break;
+	case AF_INET:
+		u.sin->sin_addr		= *(struct in_addr *)src;
 
 		break;
 	default:
 		return 0;
 	}
 
-	if (0 != WSAAddressToStringA((struct sockaddr *)&u, sa_len(&u), (void *)0, dst, &lim))
+	if (0 != WSAAddressToStringA((struct sockaddr *)&u, dns_sa_len(&u), (void *)0, dst, &lim))
 		return 0;
 
 	return dst;
@@ -181,6 +209,46 @@ static const char *dns_inet_ntop(int af, const void *src, void *dst, int lim) {
 #define dns_inet_ntop(...)	inet_ntop(__VA_ARGS__)
 #endif
 
+
+static void dns_soclose(int fd) {
+	if (fd != -1) {
+#if _WIN32
+		closesocket(fd);
+#else
+		close(fd);
+#endif
+	}
+} /* dns_soclose() */
+
+
+static int dns_socket(struct sockaddr *port, int type, int *error) {
+	int flags, fd	= -1;
+
+	if (-1 == (fd = socket(port->sa_family, type, 0)))
+		goto syerr;
+
+	if (-1 == fcntl(fd, F_SETFD, 1))
+		goto syerr;
+
+	if (-1 == (flags = fcntl(fd, F_GETFL)))
+		goto syerr;
+
+	if (-1 == fcntl(fd, F_SETFL, flags | O_NONBLOCK))
+		goto syerr;
+
+	/* TODO: Randomize the port. */
+
+	if (0 != bind(fd, port, dns_sa_len(port)))
+		goto syerr;
+
+	return fd;
+syerr:
+	*error	= errno;
+
+	dns_soclose(fd);
+
+	return -1;
+} /* dns_socket() */
 
 
 /*
@@ -1174,6 +1242,21 @@ size_t dns_ns_print(void *dst, size_t lim, struct dns_ns *ns) {
 } /* dns_ns_print() */
 
 
+int dns_cname_parse(struct dns_cname *cname, struct dns_rr *rr, struct dns_packet *P) {
+	return dns_ns_parse((struct dns_ns *)cname, rr, P);
+} /* dns_cname_parse() */
+
+
+int dns_cname_push(struct dns_packet *P, struct dns_cname *cname) {
+	return dns_ns_push(P, (struct dns_ns *)cname);
+} /* dns_cname_push() */
+
+
+size_t dns_cname_print(void *dst, size_t lim, struct dns_cname *cname) {
+	return dns_ns_print(dst, lim, (struct dns_ns *)cname);
+} /* dns_cname_print() */
+
+
 struct dns_txt *dns_txt_init(struct dns_txt *txt, size_t size) {
 	assert(size > offsetof(struct dns_txt, data));
 
@@ -1303,11 +1386,12 @@ static const struct {
 	int (*push)();
 	size_t (*print)();
 } dns_rrtypes[]	= {
-	{ DNS_T_A,    "A",    &dns_a_parse,    &dns_a_push,    &dns_a_print    },
-	{ DNS_T_AAAA, "AAAA", &dns_aaaa_parse, &dns_aaaa_push, &dns_aaaa_print },
-	{ DNS_T_MX,   "MX",   &dns_mx_parse,   &dns_mx_push,   &dns_mx_print   },
-	{ DNS_T_NS,   "NS",   &dns_ns_parse,   &dns_ns_push,   &dns_ns_print   },
-	{ DNS_T_TXT,  "TXT",  &dns_txt_parse,  &dns_txt_push,  &dns_txt_print  },
+	{ DNS_T_A,     "A",     &dns_a_parse,     &dns_a_push,     &dns_a_print     },
+	{ DNS_T_AAAA,  "AAAA",  &dns_aaaa_parse,  &dns_aaaa_push,  &dns_aaaa_print  },
+	{ DNS_T_MX,    "MX",    &dns_mx_parse,    &dns_mx_push,    &dns_mx_print    },
+	{ DNS_T_NS,    "NS",    &dns_ns_parse,    &dns_ns_push,    &dns_ns_print    },
+	{ DNS_T_CNAME, "CNAME", &dns_cname_parse, &dns_cname_push, &dns_cname_print },
+	{ DNS_T_TXT,   "TXT",   &dns_txt_parse,   &dns_txt_push,   &dns_txt_print   },
 }; /* dns_rrtypes[] */
 
 
@@ -1396,7 +1480,8 @@ size_t dns_any_print(void *dst_, size_t lim, union dns_any *any, enum dns_type t
 
 struct dns_resolv_conf *dns_resconf_open(int *error) {
 	static const struct dns_resolv_conf resconf_initializer
-		= { .lookup = "bf", .options = { .ndots = 1, }, };
+		= { .lookup = "bf", .options = { .ndots = 1, },
+		    .interface = { .ss_family = AF_INET }, };
 	struct dns_resolv_conf *resconf;
 
 	if (!(resconf = malloc(sizeof *resconf)))
@@ -1448,14 +1533,57 @@ unsigned dns_resconf_release(struct dns_resolv_conf *resconf) {
 } /* dns_resconf_release() */
 
 
+enum dns_resconf_keyword {
+	DNS_RESCONF_NAMESERVER,
+	DNS_RESCONF_DOMAIN,
+	DNS_RESCONF_SEARCH,
+	DNS_RESCONF_LOOKUP,
+	DNS_RESCONF_ORDER,
+	DNS_RESCONF_FILE,
+	DNS_RESCONF_HOSTS,
+	DNS_RESCONF_BIND,
+	DNS_RESCONF_OPTIONS,
+	DNS_RESCONF_EDNS0,
+	DNS_RESCONF_NDOTS,
+	DNS_RESCONF_INTERFACE,
+}; /* enum dns_resconf_keyword */ 
+
+static enum dns_resconf_keyword dns_resconf_keyword(const char *word) {
+	static const char *words[]	= {
+		[DNS_RESCONF_NAMESERVER]	= "nameserver",
+		[DNS_RESCONF_DOMAIN]		= "domain",
+		[DNS_RESCONF_SEARCH]		= "search",
+		[DNS_RESCONF_LOOKUP]		= "lookup",
+		[DNS_RESCONF_ORDER]		= "order",
+		[DNS_RESCONF_FILE]		= "file",
+		[DNS_RESCONF_HOSTS]		= "hosts",
+		[DNS_RESCONF_BIND]		= "bind",
+		[DNS_RESCONF_OPTIONS]		= "options",
+		[DNS_RESCONF_EDNS0]		= "edns0",
+		[DNS_RESCONF_INTERFACE]		= "interface",
+	};
+	unsigned i;
+
+	for (i = 0; i < lengthof(words); i++) {
+		if (words[i] && 0 == strcasecmp(words[i], word))
+			return i;
+	}
+
+	if (0 == strncasecmp(word, "ndots:", sizeof "ndots:" - 1))
+		return DNS_RESCONF_NDOTS;
+
+	return 0;
+} /* dns_resconf_keyword() */
+
 #define dns_resconf_issep(ch)	(isspace(ch) || (ch) == ',')
 #define dns_resconf_iscom(ch)	((ch) == '#' || (ch) == ';')
 
 int dns_resconf_loadfile(struct dns_resolv_conf *resconf, FILE *fp) {
 	unsigned sa_count	= 0;
 	char words[6][DNS_D_MAXNAME + 1];
-	unsigned wp, wc, i;
-	int ch;
+	unsigned wp, wc, i, j, n;
+	int ch, af;
+	struct sockaddr *sa;
 
 	rewind(fp);
 
@@ -1491,39 +1619,25 @@ skip:
 		if (wc < 2)
 			continue;
 
-		if (0 == strcasecmp(words[0], "nameserver")) {
-			union { struct sockaddr_in *sin; struct sockaddr_in6 *sin6; } u;
-			int af;
-
+		switch (dns_resconf_keyword(words[0])) {
+		case DNS_RESCONF_NAMESERVER:
 			if (sa_count >= lengthof(resconf->nameserver))
 				continue;
 
-			u.sin	= (struct sockaddr_in *)&resconf->nameserver[sa_count].ss;
+			af	= (strchr(words[1], ':'))? AF_INET6 : AF_INET;
+			sa	= (struct sockaddr *)&resconf->nameserver[sa_count];
 
-			switch ((af = (strchr(words[1], ':'))? AF_INET6 : AF_INET)) {
-			case AF_INET6:
-				if (1 != dns_inet_pton(af, words[1], &u.sin6->sin6_addr))
-					continue;
-
-				u.sin6->sin6_port	= 53;
-
-				break;
-			case AF_INET:
-				if (1 != dns_inet_pton(af, words[1], &u.sin->sin_addr))
-					continue;
-
-				u.sin->sin_port		= 53;
-
-				break;
-			default:
+			if (1 != dns_inet_pton(af, words[1], dns_sa_addr(af, sa)))
 				continue;
-			}
 
-			u.sin->sin_family	= af;
+			*dns_sa_port(af, sa)	= htons(53);
+			sa->sa_family		= af;
 
-			resconf->nameserver[sa_count++].sa_len	= sa_len(u.sin);
-		} else if (0 == strcasecmp(words[0], "domain")
-		       ||  0 == strcasecmp(words[0], "search")) {
+			sa_count++;
+
+			break;
+		case DNS_RESCONF_DOMAIN:
+		case DNS_RESCONF_SEARCH:
 			memset(resconf->search, '\0', sizeof resconf->search);
 
 			/*
@@ -1531,19 +1645,63 @@ skip:
 			 * sub-domains, to generate a search list?
 			 */
 
-			for (i = 0; i < wc && i < lengthof(resconf->search); i++)
-				dns_d_anchor(resconf->search[i], sizeof resconf->search[i], words[i], strlen(words[i]));
-		} else if (0 == strcasecmp(words[0], "lookup")
-		       ||  0 == strcasecmp(words[0], "order")) {
-			unsigned i, j;
+			for (i = 1, j = 0; i < wc && j < lengthof(resconf->search); i++, j++)
+				dns_d_anchor(resconf->search[j], sizeof resconf->search[j], words[i], strlen(words[i]));
 
+			break;
+		case DNS_RESCONF_LOOKUP:	/* BSD resolv.conf */
+		case DNS_RESCONF_ORDER:		/* GNU hosts.txt */
 			for (i = 1, j = 0; i < wc && j < lengthof(resconf->lookup); i++) {
-				if (0 == strcasecmp(words[i], "file") || 0 == strcasecmp(words[i], "hosts"))
+				switch (dns_resconf_keyword(words[i])) {
+				case DNS_RESCONF_FILE:	/* BSD resolv.conf */
+				case DNS_RESCONF_HOSTS:	/* GNU hosts.txt */
 					resconf->lookup[j++]	= 'f';
-				else if (0 == strcasecmp(words[i], "bind"))
+
+					break;
+				case DNS_RESCONF_BIND:
 					resconf->lookup[j++]	= 'b';
+
+					break;
+				default:
+					break;
+				} /* switch() */
+			} /* for() */
+
+			break;
+		case DNS_RESCONF_OPTIONS:
+			for (i = 1; i < wc; i++) {
+				switch (dns_resconf_keyword(words[i])) {
+				case DNS_RESCONF_EDNS0:
+					resconf->options.edns0	= 1;
+
+					break;
+				case DNS_RESCONF_NDOTS:
+					for (j = sizeof "ndots:" - 1, n = 0; isdigit((int)words[i][j]); j++) {
+						n	*= 10;
+						n	+= words[i][j] - '0';
+					} /* for() */
+
+					resconf->options.ndots	= n;
+
+					break;
+				default:
+					break;
+				} /* switch() */
+			} /* for() */
+
+			break;
+		case DNS_RESCONF_INTERFACE:
+			for (i = 0, n = 0; isdigit((int)words[2][i]); i++) {
+				n	*= 10;
+				n	+= words[2][i] - '0';
 			}
-		}
+
+			dns_resconf_setiface(resconf, words[1], n);
+
+			break;
+		default:
+			break;
+		} /* switch() */
 	} while (ch != EOF);
 
 	return 0;
@@ -1565,29 +1723,37 @@ int dns_resconf_loadpath(struct dns_resolv_conf *resconf, const char *path) {
 } /* dns_resconf_loadpath() */
 
 
+int dns_resconf_setiface(struct dns_resolv_conf *resconf, const char *addr, unsigned short port) {
+	int af	= (strchr(addr, ':'))? AF_INET6 : AF_INET;
+
+	if (1 != dns_inet_pton(af, addr, dns_sa_addr(af, &resconf->interface)))
+		return errno;
+
+	*dns_sa_port(af, &resconf->interface)	= htons(port);
+	resconf->interface.ss_family		= af;
+
+	return 0;
+} /* dns_resconf_setiface() */
+
+
 static void dns_resconf_dump(struct dns_resolv_conf *resconf, FILE *fp) {
-	char addr[INET6_ADDRSTRLEN + 1];
 	unsigned i;
+	int af;
 
-	for (i = 0; i < lengthof(resconf->nameserver) && resconf->nameserver[i].sa_len > 0; i++) {
-		memcpy(addr, "[OOPS]", sizeof "[OOPS]");
+	for (i = 0; i < lengthof(resconf->nameserver) && (af = resconf->nameserver[i].ss_family) != AF_UNSPEC; i++) {
+		char addr[INET6_ADDRSTRLEN + 1]	= "[INVALID]";
 
-		switch (resconf->nameserver[i].ss.ss_family) {
-		case AF_INET6:
-			dns_inet_ntop(AF_INET6, &((struct sockaddr_in6 *)&resconf->nameserver[i].ss)->sin6_addr, addr, sizeof addr);
-
-			break;
-		case AF_INET:
-			dns_inet_ntop(AF_INET, &((struct sockaddr_in *)&resconf->nameserver[i].ss)->sin_addr, addr, sizeof addr);
-
-			break;
-		}
+		dns_inet_ntop(af, dns_sa_addr(af, &resconf->nameserver[i]), addr, sizeof addr);
 
 		fprintf(fp, "nameserver %s\n", addr);
 	}
 
+	fprintf(fp, "search");
+
 	for (i = 0; i < lengthof(resconf->search) && resconf->search[i][0]; i++)
-		fprintf(fp, "search %s\n", resconf->search[i]);
+		fprintf(fp, " %s", resconf->search[i]);
+
+	fprintf(fp, "\n");
 
 	fprintf(fp, "lookup");
 
@@ -1602,8 +1768,15 @@ static void dns_resconf_dump(struct dns_resolv_conf *resconf, FILE *fp) {
 
 	fprintf(fp, "\n");
 
-
 	fprintf(fp, "options ndots:%d %s\n", resconf->options.ndots, (resconf->options.edns0)? "edns0" : "");
+
+	if ((af = resconf->interface.ss_family) != AF_UNSPEC) {
+		char addr[INET6_ADDRSTRLEN + 1]	= "[INVALID]";
+
+		dns_inet_ntop(af, dns_sa_addr(af, &resconf->interface), addr, sizeof addr);
+
+		fprintf(fp, "interface %s %hu\n", addr, ntohs(*dns_sa_port(af, &resconf->interface)));
+	}
 
 	return /* void */;
 } /* dns_resconf_dump() */
@@ -1617,10 +1790,8 @@ static void dns_resconf_dump(struct dns_resolv_conf *resconf, FILE *fp) {
 struct dns_h_soa {
 	unsigned char zone[DNS_D_MAXNAME + 1];
 	
-
 	struct {
 		struct sockaddr_storage ss;
-		socklen_t salen;
 
 		struct {
 			unsigned saved, effective;
@@ -1704,7 +1875,7 @@ static struct dns_h_soa *dns_h_fetch(struct dns_hints *H, const char *zone) {
 } /* dns_h_fetch() */
 
 
-int dns_h_insert(struct dns_hints *H, const char *zone, const struct sockaddr *sa, socklen_t salen, unsigned priority) {
+int dns_h_insert(struct dns_hints *H, const char *zone, const struct sockaddr *sa, unsigned priority) {
 	static const struct dns_h_soa soa_initializer;
 	struct dns_h_soa *soa;
 	unsigned i;
@@ -1723,8 +1894,7 @@ int dns_h_insert(struct dns_hints *H, const char *zone, const struct sockaddr *s
 
 	i	= soa->count % lengthof(soa->addrs);
 
-	memcpy(&soa->addrs[i].ss, sa, salen);
-	soa->addrs[i].salen	= salen;
+	memcpy(&soa->addrs[i].ss, sa, dns_sa_len(sa));
 
 	soa->addrs[i].pri.effective	= soa->addrs[i].pri.saved
 					= MAX(1, priority);
@@ -1739,8 +1909,8 @@ int dns_h_insert(struct dns_hints *H, const char *zone, const struct sockaddr *s
 unsigned dns_h_insert_resconf(struct dns_hints *H, const struct dns_resolv_conf *resconf, int *error) {
 	unsigned i, n;
 
-	for (i = 0, n = 0; i < lengthof(resconf->nameserver) && resconf->nameserver[i].sa_len > 0; i++) {
-		if ((*error = dns_h_insert(H, ".", (struct sockaddr *)&resconf->nameserver[i].ss, resconf->nameserver[i].sa_len, n + 1)))
+	for (i = 0, n = 0; i < lengthof(resconf->nameserver) && resconf->nameserver[i].ss_family != AF_UNSPEC; i++) {
+		if ((*error = dns_h_insert(H, ".", (struct sockaddr *)&resconf->nameserver[i], n + 1)))
 			break;
 
 		n++;
@@ -1750,7 +1920,7 @@ unsigned dns_h_insert_resconf(struct dns_hints *H, const struct dns_resolv_conf 
 } /* dns_h_insert_resconf() */
 
 
-void dns_h_update(struct dns_hints *H, const char *zone, const struct sockaddr *sa, socklen_t salen, int nice) {
+void dns_h_update(struct dns_hints *H, const char *zone, const struct sockaddr *sa, int nice) {
 	struct dns_h_soa *soa;
 	unsigned i;
 	time_t now	= dns_now();
@@ -1759,7 +1929,7 @@ void dns_h_update(struct dns_hints *H, const char *zone, const struct sockaddr *
 		return /* void */;
 
 	for (i = 0; i < soa->count; i++) {
-		if (0 == memcmp(&soa->addrs[i].ss, sa, salen)) {
+		if (sa->sa_family == soa->addrs[i].ss.ss_family && 0 == memcmp(&soa->addrs[i].ss, sa, dns_sa_len(sa))) {
 			if (nice < 0) {
 				soa->addrs[i].nlost++;
 				soa->addrs[i].pri.effective	= 0;
@@ -1823,7 +1993,7 @@ static int dns_h_i_ffwd(struct dns_h_i *i, struct dns_h_soa *soa) {
 } /* dns_h_i_ffwd() */
 
 
-unsigned dns_h_grep(struct sockaddr **sa, socklen_t *salen, unsigned lim, struct dns_h_i *i, struct dns_hints *H) {
+unsigned dns_h_grep(struct sockaddr **sa, socklen_t *sa_len, unsigned lim, struct dns_h_i *i, struct dns_hints *H) {
 	struct dns_h_soa *soa;
 	unsigned n;
 	int j;
@@ -1835,10 +2005,10 @@ unsigned dns_h_grep(struct sockaddr **sa, socklen_t *salen, unsigned lim, struct
 
 	while (n < lim && -1 != (j = dns_h_i_ffwd(i, soa))) {
 		*sa	= (struct sockaddr *)&soa->addrs[j].ss;
-		*salen	= sa_len(*sa);
+		*sa_len	= dns_sa_len(*sa);
 
 		sa++;
-		salen++;
+		sa_len++;
 		n++;
 	}
 
@@ -1855,11 +2025,60 @@ unsigned dns_h_grep(struct sockaddr **sa, socklen_t *salen, unsigned lim, struct
 
 struct dns_resolver {
 	int flags;
+	int fd;
 
+	struct dns_resolver_conf *resconf;
 	struct dns_hints *hints;
+
+	unsigned refcount;
 }; /* struct dns_resolver */
 
+#if 0
+struct dns_resolver *dns_r_open(struct dns_resolver_conf *resconf, struct dns_hints *hints, int flags, int *error) {
+	static const struct dns_resolver R_initializer
+		= { .fd = -1, .refcount = 1, };
+	struct dns_resolver *R;
 
+	if (!(R = malloc(sizeof *R)))
+		goto syerr;
+
+	*R	= R_initializer;
+
+	if (-1 == (R->fd = dns_socket())
+
+
+	return R;
+syerr:
+	*error	= errno;
+
+	dns_r_close(R);
+
+	return 0;
+} /* dns_r_open() */
+
+
+void dns_r_close(struct dns_resolver *R) {
+	if (!R || 1 < dns_r_release(R))
+		return;
+
+	dns_soclose(R->fd);
+
+	dns_hints_close(R->hints);
+	dns_resconf_close(R->resconf);
+
+	free(R);
+} /* dns_r_close() */
+
+
+unsigned dns_r_acquire(struct dns_resolver *R) {
+	return R->refcount++;
+} /* dns_r_acquire() */
+
+
+unsigned dns_r_release(struct dns_resolver *R) {
+	return R->refcount--;
+} /* dns_r_release() */
+#endif
 
 /*
  * M I S C E L L A N E O U S  R O U T I N E S
@@ -1982,7 +2201,7 @@ int main(void) {
 	char pretty[sizeof any * 2];
 	size_t len;
 
-#if 0
+#if 1
 	struct dns_resolv_conf *resconf	= dns_resconf_open(&error);
 
 	if (0 != dns_resconf_loadpath(resconf, "/etc/resolv.conf"))
@@ -2040,7 +2259,10 @@ int main(void) {
 		section	= rr.section;
 	}
 
+	fprintf(stderr, "orig:%zu\n", P->end);
 	dump(P->data, P->end, stdout);
+
+	fprintf(stderr, "copy:%zu\n", Q->end);
 	dump(Q->data, Q->end, stdout);
 
 	return 0;

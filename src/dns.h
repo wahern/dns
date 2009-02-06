@@ -272,6 +272,10 @@ unsigned dns_rr_grep(struct dns_rr *, unsigned, struct dns_rr_i *, struct dns_pa
 #define dns_rr_foreach(...)	dns_rr_foreach_(__VA_ARGS__, .state = DNS_RR_I_STATE_INITIALIZER)
 
 
+/*
+ * A  R E S O U R C E  R E C O R D
+ */
+
 struct dns_a {
 	struct in_addr addr;
 }; /* struct dns_a */
@@ -281,6 +285,10 @@ int dns_a_push(struct dns_packet *, struct dns_a *);
 size_t dns_a_print(void *, size_t, struct dns_a *);
 
 
+/*
+ * AAAA  R E S O U R C E  R E C O R D
+ */
+
 struct dns_aaaa {
 	struct in6_addr addr;
 }; /* struct dns_aaaa */
@@ -289,6 +297,10 @@ int dns_aaaa_parse(struct dns_aaaa *, struct dns_rr *, struct dns_packet *);
 int dns_aaaa_push(struct dns_packet *, struct dns_aaaa *);
 size_t dns_aaaa_print(void *, size_t, struct dns_aaaa *);
 
+
+/*
+ * MX  R E S O U R C E  R E C O R D
+ */
 
 struct dns_mx {
 	unsigned short preference;
@@ -300,6 +312,10 @@ int dns_mx_push(struct dns_packet *, struct dns_mx *);
 size_t dns_mx_print(void *, size_t, struct dns_mx *);
 
 
+/*
+ * NS  R E S O U R C E  R E C O R D
+ */
+
 struct dns_ns {
 	char host[256];
 }; /* struct dns_ns */
@@ -309,11 +325,22 @@ int dns_ns_push(struct dns_packet *, struct dns_ns *);
 size_t dns_ns_print(void *, size_t, struct dns_ns *);
 
 
-struct dns_srv {
-	
-}; /* struct dns_srv */
+/*
+ * CNAME  R E S O U R C E  R E C O R D
+ */
+
+struct dns_cname {
+	char host[256];
+}; /* struct dns_cname */
+
+int dns_cname_parse(struct dns_cname *, struct dns_rr *, struct dns_packet *);
+int dns_cname_push(struct dns_packet *, struct dns_cname *);
+size_t dns_cname_print(void *, size_t, struct dns_cname *);
 
 
+/*
+ * TXT  R E S O U R C E  R E C O R D
+ */
 
 #ifndef DNS_TXT_MINDATA
 #define DNS_TXT_MINDATA	1024
@@ -330,12 +357,17 @@ int dns_txt_push(struct dns_packet *, struct dns_txt *);
 size_t dns_txt_print(void *, size_t, struct dns_txt *);
 
 
+/*
+ * ANY  R E S O U R C E  R E C O R D
+ */
+
 union dns_any {
 	struct dns_a a;
 	struct dns_aaaa aaaa;
 	struct dns_mx mx;
 	struct dns_ns ns;
-	struct dns_srv srv;
+	struct dns_cname cname;
+//	struct dns_srv srv;
 	struct dns_txt txt, rdata;
 }; /* union dns_any */
 
@@ -351,10 +383,7 @@ size_t dns_any_print(void *, size_t, union dns_any *, enum dns_type);
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 struct dns_resolv_conf {
-	struct {
-		struct sockaddr_storage ss;
-		socklen_t sa_len;
-	} nameserver[3];
+	struct sockaddr_storage nameserver[3];
 
 	char search[4][DNS_D_MAXNAME + 1];
 
@@ -365,6 +394,8 @@ struct dns_resolv_conf {
 
 		unsigned ndots;
 	} options;
+
+	struct sockaddr_storage interface;
 
 	struct { /* PRIVATE */
 		unsigned refcount;
@@ -383,6 +414,8 @@ int dns_resconf_loadfile(struct dns_resolv_conf *, FILE *);
 
 int dns_resconf_loadpath(struct dns_resolv_conf *, const char *);
 
+int dns_resconf_setiface(struct dns_resolv_conf *, const char *, unsigned short);
+
 
 /*
  * H I N T  S E R V E R  I N T E R F A C E
@@ -399,11 +432,11 @@ unsigned dns_h_acquire(struct dns_hints *);
 
 unsigned dns_h_release(struct dns_hints *);
 
-int dns_h_insert(struct dns_hints *, const char *, const struct sockaddr *, socklen_t, unsigned);
+int dns_h_insert(struct dns_hints *, const char *, const struct sockaddr *, unsigned);
 
 unsigned dns_h_insert_resconf(struct dns_hints *, const struct dns_resolv_conf *, int *);
 
-void dns_h_update(struct dns_hints *, const char *, const struct sockaddr *, socklen_t, int);
+void dns_h_update(struct dns_hints *, const char *, const struct sockaddr *, int);
 
 
 struct dns_h_i {
