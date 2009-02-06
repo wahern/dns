@@ -28,9 +28,9 @@
 #include <stdio.h>	/* FILE fopen(3) fclose(3) getc(3) rewind(3) */
 
 #include <string.h>	/* memcpy(3) strlen(3) memmove(3) memchr(3) memcmp(3) strchr(3) */
-#include <strings.h>	/* strcasecmp(3) */
+#include <strings.h>	/* strcasecmp(3) strncasecmp(3) */
 
-#include <ctype.h>	/* isspace(3) */
+#include <ctype.h>	/* isspace(3) isdigit(3) */
 
 #include <time.h>	/* time_t time(2) */
 
@@ -84,7 +84,6 @@
 #endif
 
 
-#include <stdio.h>
 #define MARK	fprintf(stderr, "@@ %s:%d\n", __FILE__, __LINE__);
 
 
@@ -1540,6 +1539,7 @@ enum dns_resconf_keyword {
 	DNS_RESCONF_OPTIONS,
 	DNS_RESCONF_EDNS0,
 	DNS_RESCONF_NDOTS,
+	DNS_RESCONF_RECURSIVE,
 	DNS_RESCONF_INTERFACE,
 }; /* enum dns_resconf_keyword */ 
 
@@ -1553,6 +1553,7 @@ static enum dns_resconf_keyword dns_resconf_keyword(const char *word) {
 		[DNS_RESCONF_BIND]		= "bind",
 		[DNS_RESCONF_OPTIONS]		= "options",
 		[DNS_RESCONF_EDNS0]		= "edns0",
+		[DNS_RESCONF_RECURSIVE]		= "recursive",
 		[DNS_RESCONF_INTERFACE]		= "interface",
 	};
 	unsigned i;
@@ -1670,6 +1671,10 @@ skip:
 					resconf->options.ndots	= n;
 
 					break;
+				case DNS_RESCONF_RECURSIVE:
+					resconf->options.recursive	= 1;
+
+					break;
 				default:
 					break;
 				} /* switch() */
@@ -1734,12 +1739,14 @@ static void dns_resconf_dump(struct dns_resolv_conf *resconf, FILE *fp) {
 		fprintf(fp, "nameserver %s\n", addr);
 	}
 
+
 	fprintf(fp, "search");
 
 	for (i = 0; i < lengthof(resconf->search) && resconf->search[i][0]; i++)
 		fprintf(fp, " %s", resconf->search[i]);
 
-	fprintf(fp, "\n");
+	fputc('\n', fp);
+
 
 	fprintf(fp, "lookup");
 
@@ -1752,9 +1759,18 @@ static void dns_resconf_dump(struct dns_resolv_conf *resconf, FILE *fp) {
 		}
 	}
 
-	fprintf(fp, "\n");
+	fputc('\n', fp);
 
-	fprintf(fp, "options ndots:%d %s\n", resconf->options.ndots, (resconf->options.edns0)? "edns0" : "");
+
+	fprintf(fp, "options ndits:%d", resconf->options.ndots);
+
+	if (resconf->options.edns0)
+		fprintf(fp, " edns0");
+	if (resconf->options.recursive)
+		fprintf(fp, " recursive");
+	
+	fputc('\n', fp);
+
 
 	if ((af = resconf->interface.ss_family) != AF_UNSPEC) {
 		char addr[INET6_ADDRSTRLEN + 1]	= "[INVALID]";
@@ -2007,20 +2023,17 @@ unsigned dns_h_grep(struct sockaddr **sa, socklen_t *sa_len, unsigned lim, struc
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-#define DNS_R_STUB	1
-
 struct dns_resolver {
-	int flags;
 	int fd;
 
-	struct dns_resolver_conf *resconf;
+	struct dns_resolv_conf *resconf;
 	struct dns_hints *hints;
 
 	unsigned refcount;
 }; /* struct dns_resolver */
 
-#if 0
-struct dns_resolver *dns_r_open(struct dns_resolver_conf *resconf, struct dns_hints *hints, int flags, int *error) {
+
+struct dns_resolver *dns_r_open(struct dns_resolv_conf *resconf, struct dns_hints *hints, int *error) {
 	static const struct dns_resolver R_initializer
 		= { .fd = -1, .refcount = 1, };
 	struct dns_resolver *R;
@@ -2030,13 +2043,16 @@ struct dns_resolver *dns_r_open(struct dns_resolver_conf *resconf, struct dns_hi
 
 	*R	= R_initializer;
 
-	if (-1 == (R->fd = dns_socket())
+	if (-1 == (R->fd = dns_socket((struct sockaddr *)&resconf->interface, SOCK_DGRAM, error)))
+		goto error;
 
+	R->resconf	= resconf;
+	R->hints	= hints;
 
 	return R;
 syerr:
 	*error	= errno;
-
+error:
 	dns_r_close(R);
 
 	return 0;
@@ -2049,7 +2065,7 @@ void dns_r_close(struct dns_resolver *R) {
 
 	dns_soclose(R->fd);
 
-	dns_hints_close(R->hints);
+	dns_h_close(R->hints);
 	dns_resconf_close(R->resconf);
 
 	free(R);
@@ -2064,7 +2080,7 @@ unsigned dns_r_acquire(struct dns_resolver *R) {
 unsigned dns_r_release(struct dns_resolver *R) {
 	return R->refcount--;
 } /* dns_r_release() */
-#endif
+
 
 /*
  * M I S C E L L A N E O U S  R O U T I N E S
@@ -2177,7 +2193,12 @@ void dump(const unsigned char *src, size_t len, FILE *fp) {
 } /* dump() */
 
 
-int main(void) {
+struct {
+	int verbose;
+} opts;
+
+
+static int parse_packet(int argc, char *argv[]) {
 	struct dns_packet *P	= dns_p_new(512);
 	struct dns_packet *Q	= dns_p_new(512);
 	enum dns_section section;
@@ -2187,42 +2208,23 @@ int main(void) {
 	char pretty[sizeof any * 2];
 	size_t len;
 
-#if 1
-	struct dns_resolv_conf *resconf	= dns_resconf_open(&error);
-
-	if (0 != dns_resconf_loadpath(resconf, "/etc/resolv.conf"))
-		return 1;
-
-	dns_resconf_dump(resconf, stderr);
-
-	dns_resconf_close(resconf);
-
-	return 0;
-#elif 0
-	char *dn	= dns_d_new("sfo9.g.remotv.com");
-
-	do {
-		puts(dn);
-	} while (dns_d_cleave(dn, strlen(dn) + 1, dn, strlen(dn)));
-
-	return 0;
-#endif
-
 	P->end	= fread(P->data, 1, P->size, stdin);
 
 	section	= 0;
 
 	dns_rr_foreach(&rr, P) {
 		if (section != rr.section)
-			fprintf(stderr, ";; [%s]\n", dns_strsection(rr.section));
+			fprintf(stdout, ";; [%s]\n", dns_strsection(rr.section));
 
 		if ((len = dns_rr_print(pretty, sizeof pretty, &rr, P, &error)))
-			fprintf(stderr, "%s\n", pretty);
+			fprintf(stdout, "%s\n", pretty);
 
 		dns_rr_copy(Q, &rr, P);
 
 		section	= rr.section;
 	}
+
+	fputc('\n', stdout);
 
 	section	= 0;
 
@@ -2237,19 +2239,87 @@ int main(void) {
 		rr	= rrset[i];
 #endif
 		if (section != rr.section)
-			fprintf(stderr, ";; [%s]\n", dns_strsection(rr.section));
+			fprintf(stdout, ";; [%s]\n", dns_strsection(rr.section));
 
 		if ((len = dns_rr_print(pretty, sizeof pretty, &rr, Q, &error)))
-			fprintf(stderr, "%s\n", pretty);
+			fprintf(stdout, "%s\n", pretty);
 
 		section	= rr.section;
 	}
 
-	fprintf(stderr, "orig:%zu\n", P->end);
-	dump(P->data, P->end, stdout);
+	if (opts.verbose) {
+		fprintf(stderr, "orig:%zu\n", P->end);
+		dump(P->data, P->end, stdout);
 
-	fprintf(stderr, "copy:%zu\n", Q->end);
-	dump(Q->data, Q->end, stdout);
+		fprintf(stderr, "copy:%zu\n", Q->end);
+		dump(Q->data, Q->end, stdout);
+	}
+
+	return 0;
+} /* parse_packet() */
+
+
+static int parse_domain(int argc, char *argv[]) {
+	char *dn;
+
+	dn	= (argc)? argv[0] : "f.l.google.com";
+
+	printf("[%s]\n", dn);
+
+	dn	= dns_d_new(dn);
+
+	do {
+		puts(dn);
+	} while (dns_d_cleave(dn, strlen(dn) + 1, dn, strlen(dn)));
+
+	return 0;
+} /* parse_domain() */
+
+
+static int parse_resconf(int argc, char *argv[]) {
+	struct dns_resolv_conf *resconf;
+	const char *path	= (argc)? argv[0] : "/etc/resolv.conf";
+	int error;
+	
+	resconf	= dns_resconf_open(&error);
+
+	if (0 == strcmp(path, "-"))
+		error	= dns_resconf_loadfile(resconf, stdin);
+	else
+		error	= dns_resconf_loadpath(resconf, path);
+
+	dns_resconf_dump(resconf, stderr);
+
+	dns_resconf_close(resconf);
+
+	return 0;
+} /* parse_resconf() */
+
+
+int main(int argc, char **argv) {
+	static const struct { const char *cmd; int (*run)(); } cmds[]
+		= {{ "parse-packet",	&parse_packet	},
+		   { "parse-domain",	&parse_domain	},
+		   { "parse-resconf",	&parse_resconf	}};
+	extern int optind;
+	int ch, i;
+
+	while (-1 != (ch = getopt(argc, argv, "v"))) {
+		switch (ch) {
+		case 'v':
+			opts.verbose	= 1;
+
+			break;
+		} /* switch() */
+	} /* while() */
+
+	argc	-= optind;
+	argv	+= optind;
+
+	for (i = 0; i < lengthof(cmds) && argv[0]; i++) {
+		if (0 == strcmp(cmds[i].cmd, argv[0]))
+			return cmds[i].run(--argc, ++argv);
+	}
 
 	return 0;
 } /* main() */

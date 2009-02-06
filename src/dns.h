@@ -393,6 +393,8 @@ struct dns_resolv_conf {
 		int edns0;
 
 		unsigned ndots;
+
+		int recursive;
 	} options;
 
 	struct sockaddr_storage interface;
@@ -451,6 +453,22 @@ struct dns_h_i {
 #define dns_h_i_new(...)	(&(struct dns_h_i){ __VA_ARGS__ })
 
 unsigned dns_h_grep(struct sockaddr **, socklen_t *, unsigned, struct dns_h_i *, struct dns_hints *);
+
+
+/*
+ * R E S O L V E R  R O U T I N E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+struct dns_resolver;
+
+struct dns_resolver *dns_r_open(struct dns_resolv_conf *, struct dns_hints *, int *);
+
+void dns_r_close(struct dns_resolver *);
+
+unsigned dns_r_acquire(struct dns_resolver *);
+
+unsigned dns_r_release(struct dns_resolver *);
 
 
 /*
