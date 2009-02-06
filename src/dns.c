@@ -1498,9 +1498,6 @@ struct dns_resolv_conf *dns_resconf_open(int *error) {
 	/*
 	 * XXX: If gethostname() returned a string without any label
 	 *      separator, then search[0][0] should be NUL.
-	 *
-	 * XXX: See loadfile() below concerning whether we should generate a
-	 *      search list using the domain.
 	 */
 
 	dns_resconf_acquire(resconf);
@@ -1635,11 +1632,6 @@ skip:
 		case DNS_RESCONF_DOMAIN:
 		case DNS_RESCONF_SEARCH:
 			memset(resconf->search, '\0', sizeof resconf->search);
-
-			/*
-			 * XXX: If "domain", should we loop, cleaving
-			 * sub-domains, to generate a search list?
-			 */
 
 			for (i = 1, j = 0; i < wc && j < lengthof(resconf->search); i++, j++)
 				dns_d_anchor(resconf->search[j], sizeof resconf->search[j], words[i], strlen(words[i]));
