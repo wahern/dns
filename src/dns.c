@@ -1762,7 +1762,7 @@ static void dns_resconf_dump(struct dns_resolv_conf *resconf, FILE *fp) {
 	fputc('\n', fp);
 
 
-	fprintf(fp, "options ndits:%d", resconf->options.ndots);
+	fprintf(fp, "options ndots:%d", resconf->options.ndots);
 
 	if (resconf->options.edns0)
 		fprintf(fp, " edns0");
