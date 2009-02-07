@@ -418,6 +418,8 @@ int dns_resconf_loadpath(struct dns_resolv_conf *, const char *);
 
 int dns_resconf_setiface(struct dns_resolv_conf *, const char *, unsigned short);
 
+size_t dns_resconf_search(void *, size_t, const void *, size_t, struct dns_resolv_conf *, unsigned long *);
+
 
 /*
  * H I N T  S E R V E R  I N T E R F A C E
@@ -426,33 +428,33 @@ int dns_resconf_setiface(struct dns_resolv_conf *, const char *, unsigned short)
 
 struct dns_hints;
 
-struct dns_hints *dns_h_open(int *);
+struct dns_hints *dns_hints_open(int *);
 
-void dns_h_close(struct dns_hints *);
+void dns_hints_close(struct dns_hints *);
 
-unsigned dns_h_acquire(struct dns_hints *);
+unsigned dns_hints_acquire(struct dns_hints *);
 
-unsigned dns_h_release(struct dns_hints *);
+unsigned dns_hints_release(struct dns_hints *);
 
-int dns_h_insert(struct dns_hints *, const char *, const struct sockaddr *, unsigned);
+int dns_hints_insert(struct dns_hints *, const char *, const struct sockaddr *, unsigned);
 
-unsigned dns_h_insert_resconf(struct dns_hints *, const struct dns_resolv_conf *, int *);
+unsigned dns_hints_insert_resconf(struct dns_hints *, const struct dns_resolv_conf *, int *);
 
-void dns_h_update(struct dns_hints *, const char *, const struct sockaddr *, int);
+void dns_hints_update(struct dns_hints *, const char *, const struct sockaddr *, int);
 
 
-struct dns_h_i {
+struct dns_hints_i {
 	const char *zone;
 
 	struct {
 		unsigned p, end;
         	unsigned priority;
 	} state;
-}; /* struct dns_h_i */
+}; /* struct dns_hints_i */
 
-#define dns_h_i_new(...)	(&(struct dns_h_i){ __VA_ARGS__ })
+#define dns_hints_i_new(...)	(&(struct dns_hints_i){ __VA_ARGS__ })
 
-unsigned dns_h_grep(struct sockaddr **, socklen_t *, unsigned, struct dns_h_i *, struct dns_hints *);
+unsigned dns_hints_grep(struct sockaddr **, socklen_t *, unsigned, struct dns_hints_i *, struct dns_hints *);
 
 
 /*

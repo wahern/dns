@@ -115,6 +115,11 @@ static time_t dns_now(void) {
 } /* dns_now() */
 
 
+static unsigned dns_random() {
+	return DNS_RANDOM();
+} /* dns_random() */
+
+
 #if defined(AF_UNIX)
 #define dns_sa_len(sa)							\
 	((((struct sockaddr *)(sa))->sa_family == AF_INET6)		\
@@ -220,10 +225,12 @@ static void dns_soclose(int fd) {
 } /* dns_soclose() */
 
 
-static int dns_socket(struct sockaddr *port, int type, int *error) {
+#define DNS_SO_MAXTRY	7
+
+static int dns_socket(struct sockaddr *origin, int type, int *error) {
 	int flags, fd	= -1;
 
-	if (-1 == (fd = socket(port->sa_family, type, 0)))
+	if (-1 == (fd = socket(origin->sa_family, type, 0)))
 		goto syerr;
 
 	if (-1 == fcntl(fd, F_SETFD, 1))
@@ -235,12 +242,29 @@ static int dns_socket(struct sockaddr *port, int type, int *error) {
 	if (-1 == fcntl(fd, F_SETFL, flags | O_NONBLOCK))
 		goto syerr;
 
-	/* TODO: Randomize the port. */
+	if (origin->sa_family != AF_INET && origin->sa_family != AF_INET6)
+		return fd;
 
-	if (0 != bind(fd, port, dns_sa_len(port)))
-		goto syerr;
+	if (*dns_sa_port(origin->sa_family, origin) == 0) {
+		struct sockaddr_storage tmp;
+		unsigned i, port;
 
-	return fd;
+		memcpy(&tmp, origin, dns_sa_len(origin));
+
+		for (i = 0; i < DNS_SO_MAXTRY; i++) {
+			port	= 1025 + (dns_random() % 64510);
+
+			*dns_sa_port(tmp.ss_family, &tmp)	= htons(port);
+
+			if (0 == bind(fd, (struct sockaddr *)&tmp, dns_sa_len(&tmp)))
+				return fd;
+		}
+	}
+	
+	if (0 == bind(fd, origin, dns_sa_len(origin)))
+		return fd;
+
+	/* FALL THROUGH */
 syerr:
 	*error	= errno;
 
@@ -1727,6 +1751,69 @@ int dns_resconf_setiface(struct dns_resolv_conf *resconf, const char *addr, unsi
 } /* dns_resconf_setiface() */
 
 
+size_t dns_resconf_search(void *dst, size_t lim, const void *qname, size_t qlen, struct dns_resolv_conf *resconf, unsigned long *state) {
+	unsigned srchi		= 0xff & (*state >> 8);
+	unsigned ndots		= 0xff & (*state >> 16);
+	unsigned slen, len	= 0;
+	const char *qp, *qe;
+
+//	assert(0xff > lengthof(resconf->search));
+
+	switch (0xff & *state) {
+	case 0:
+		qp	= qname;
+		qe	= qp + qlen;
+
+		while ((qp = memchr(qp, '.', qe - qp)))
+			{ ndots++; qp++; }
+
+		++*state;
+
+		if (ndots >= resconf->options.ndots) {
+			len	= dns_d_anchor(dst, lim, qname, qlen);
+
+			break;
+		}
+
+		/* FALL THROUGH */
+	case 1:
+		if (srchi < lengthof(resconf->search) && (slen = strlen(resconf->search[srchi]))) {
+			len	= dns__printstring(dst, lim, 0, qname, qlen);
+			len	= dns_d_anchor(dst, lim, dst, len);
+			len	+= dns__printstring(dst, lim, len, resconf->search[srchi], slen);
+
+			srchi++;
+
+			break;
+		}
+
+		++*state;
+
+		/* FALL THROUGH */
+	case 2:
+		++*state;
+
+		if (ndots < resconf->options.ndots) {
+			len	= dns_d_anchor(dst, lim, qname, qlen);
+
+			break;
+		}
+
+		/* FALL THROUGH */
+	default:
+		break;
+	} /* switch() */
+
+	dns__printnul(dst, lim, len);
+
+	*state	= ((0xff & *state) << 0)
+		| ((0xff & srchi) << 8)
+		| ((0xff & ndots) << 16);
+
+	return len;
+} /* dns_resconf_search() */
+
+
 static void dns_resconf_dump(struct dns_resolv_conf *resconf, FILE *fp) {
 	unsigned i;
 	int af;
@@ -1789,7 +1876,7 @@ static void dns_resconf_dump(struct dns_resolv_conf *resconf, FILE *fp) {
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-struct dns_h_soa {
+struct dns_hints_soa {
 	unsigned char zone[DNS_D_MAXNAME + 1];
 	
 	struct {
@@ -1805,18 +1892,18 @@ struct dns_h_soa {
 
 	unsigned count;
 
-	struct dns_h_soa *next;
-}; /* struct dns_h_soa */
+	struct dns_hints_soa *next;
+}; /* struct dns_hints_soa */
 
 
 struct dns_hints {
 	unsigned refcount;
 
-	struct dns_h_soa *head;
+	struct dns_hints_soa *head;
 }; /* struct dns_hints */
 
 
-struct dns_hints *dns_h_open(int *error) {
+struct dns_hints *dns_hints_open(int *error) {
 	static const struct dns_hints H_initializer;
 	struct dns_hints *H;
 
@@ -1825,7 +1912,7 @@ struct dns_hints *dns_h_open(int *error) {
 
 	*H	= H_initializer;
 
-	dns_h_acquire(H);
+	dns_hints_acquire(H);
 
 	return H;
 syerr:
@@ -1834,13 +1921,13 @@ syerr:
 	free(H);
 
 	return 0;
-} /* dns_h_open() */
+} /* dns_hints_open() */
 
 
-void dns_h_close(struct dns_hints *H) {
-	struct dns_h_soa *soa, *nxt;
+void dns_hints_close(struct dns_hints *H) {
+	struct dns_hints_soa *soa, *nxt;
 
-	if (!H || 1 != dns_h_release(H))
+	if (!H || 1 != dns_hints_release(H))
 		return /* void */;
 
 	for (soa = H->head; soa; soa = nxt) {
@@ -1852,21 +1939,21 @@ void dns_h_close(struct dns_hints *H) {
 	free(H);
 
 	return /* void */;
-} /* dns_h_close() */
+} /* dns_hints_close() */
 
 
-unsigned dns_h_acquire(struct dns_hints *H) {
+unsigned dns_hints_acquire(struct dns_hints *H) {
 	return H->refcount++;	/* FIXME: Need true atomic operation. */
-} /* dns_h_acquire() */
+} /* dns_hints_acquire() */
 
 
-unsigned dns_h_release(struct dns_hints *H) {
+unsigned dns_hints_release(struct dns_hints *H) {
 	return H->refcount--;	/* FIXME: Need true atomic operation. */
-} /* dns_h_release() */
+} /* dns_hints_release() */
 
 
-static struct dns_h_soa *dns_h_fetch(struct dns_hints *H, const char *zone) {
-	struct dns_h_soa *soa;
+static struct dns_hints_soa *dns_hints_fetch(struct dns_hints *H, const char *zone) {
+	struct dns_hints_soa *soa;
 
 	for (soa = H->head; soa; soa = soa->next) {
 		if (0 == strcasecmp(zone, (char *)soa->zone))
@@ -1874,15 +1961,15 @@ static struct dns_h_soa *dns_h_fetch(struct dns_hints *H, const char *zone) {
 	}
 
 	return 0;
-} /* dns_h_fetch() */
+} /* dns_hints_fetch() */
 
 
-int dns_h_insert(struct dns_hints *H, const char *zone, const struct sockaddr *sa, unsigned priority) {
-	static const struct dns_h_soa soa_initializer;
-	struct dns_h_soa *soa;
+int dns_hints_insert(struct dns_hints *H, const char *zone, const struct sockaddr *sa, unsigned priority) {
+	static const struct dns_hints_soa soa_initializer;
+	struct dns_hints_soa *soa;
 	unsigned i;
 
-	if (!(soa = dns_h_fetch(H, zone))) {
+	if (!(soa = dns_hints_fetch(H, zone))) {
 		if (!(soa = malloc(sizeof *soa)))
 			return errno;
 
@@ -1905,29 +1992,29 @@ int dns_h_insert(struct dns_hints *H, const char *zone, const struct sockaddr *s
 		soa->count++;
 
 	return 0;
-} /* dns_h_insert() */
+} /* dns_hints_insert() */
 
 
-unsigned dns_h_insert_resconf(struct dns_hints *H, const struct dns_resolv_conf *resconf, int *error) {
+unsigned dns_hints_insert_resconf(struct dns_hints *H, const struct dns_resolv_conf *resconf, int *error) {
 	unsigned i, n;
 
 	for (i = 0, n = 0; i < lengthof(resconf->nameserver) && resconf->nameserver[i].ss_family != AF_UNSPEC; i++) {
-		if ((*error = dns_h_insert(H, ".", (struct sockaddr *)&resconf->nameserver[i], n + 1)))
+		if ((*error = dns_hints_insert(H, ".", (struct sockaddr *)&resconf->nameserver[i], n + 1)))
 			break;
 
 		n++;
 	}
 
 	return n;
-} /* dns_h_insert_resconf() */
+} /* dns_hints_insert_resconf() */
 
 
-void dns_h_update(struct dns_hints *H, const char *zone, const struct sockaddr *sa, int nice) {
-	struct dns_h_soa *soa;
+void dns_hints_update(struct dns_hints *H, const char *zone, const struct sockaddr *sa, int nice) {
+	struct dns_hints_soa *soa;
 	unsigned i;
 	time_t now	= dns_now();
 
-	if (!(soa = dns_h_fetch(H, zone)))
+	if (!(soa = dns_hints_fetch(H, zone)))
 		return /* void */;
 
 	for (i = 0; i < soa->count; i++) {
@@ -1950,19 +2037,19 @@ reset:
 	}
 
 	return /* void */;
-} /* dns_h_update() */
+} /* dns_hints_update() */
 
 
-struct dns_h_i *dns_h_i_init(struct dns_h_i *i) {
-	static const struct dns_h_i i_initializer;
+struct dns_hints_i *dns_hints_i_init(struct dns_hints_i *i) {
+	static const struct dns_hints_i i_initializer;
 
 	i->state	= i_initializer.state;
 
 	return i;
-} /* dns_h_i_init() */
+} /* dns_hints_i_init() */
 
 
-static int dns_h_i_ffwd(struct dns_h_i *i, struct dns_h_soa *soa) {
+static int dns_hints_i_ffwd(struct dns_hints_i *i, struct dns_hints_soa *soa) {
 	unsigned min, max;
 	int j, found;
 
@@ -1987,25 +2074,25 @@ static int dns_h_i_ffwd(struct dns_h_i *i, struct dns_h_soa *soa) {
 			}
 		}
 
-		i->state.p	= 0xff & (unsigned)DNS_RANDOM();
+		i->state.p	= 0xff & dns_random();
 		i->state.end	= i->state.p + soa->count;
 	} while (found);
 
 	return -1;
-} /* dns_h_i_ffwd() */
+} /* dns_hints_i_ffwd() */
 
 
-unsigned dns_h_grep(struct sockaddr **sa, socklen_t *sa_len, unsigned lim, struct dns_h_i *i, struct dns_hints *H) {
-	struct dns_h_soa *soa;
+unsigned dns_hints_grep(struct sockaddr **sa, socklen_t *sa_len, unsigned lim, struct dns_hints_i *i, struct dns_hints *H) {
+	struct dns_hints_soa *soa;
 	unsigned n;
 	int j;
 
-	if (!(soa = dns_h_fetch(H, i->zone)))
+	if (!(soa = dns_hints_fetch(H, i->zone)))
 		return 0;
 
 	n	= 0;
 
-	while (n < lim && -1 != (j = dns_h_i_ffwd(i, soa))) {
+	while (n < lim && -1 != (j = dns_hints_i_ffwd(i, soa))) {
 		*sa	= (struct sockaddr *)&soa->addrs[j].ss;
 		*sa_len	= dns_sa_len(*sa);
 
@@ -2015,7 +2102,7 @@ unsigned dns_h_grep(struct sockaddr **sa, socklen_t *sa_len, unsigned lim, struc
 	}
 
 	return n;
-} /* dns_h_grep() */
+} /* dns_hints_grep() */
 
 
 /*
@@ -2030,6 +2117,8 @@ struct dns_resolver {
 	struct dns_hints *hints;
 
 	unsigned refcount;
+
+	unsigned char qname[DNS_D_MAXNAME];
 }; /* struct dns_resolver */
 
 
@@ -2046,7 +2135,10 @@ struct dns_resolver *dns_r_open(struct dns_resolv_conf *resconf, struct dns_hint
 	if (-1 == (R->fd = dns_socket((struct sockaddr *)&resconf->interface, SOCK_DGRAM, error)))
 		goto error;
 
+	dns_resconf_acquire(resconf);
 	R->resconf	= resconf;
+
+	dns_hints_acquire(hints);
 	R->hints	= hints;
 
 	return R;
@@ -2065,7 +2157,7 @@ void dns_r_close(struct dns_resolver *R) {
 
 	dns_soclose(R->fd);
 
-	dns_h_close(R->hints);
+	dns_hints_close(R->hints);
 	dns_resconf_close(R->resconf);
 
 	free(R);
@@ -2153,8 +2245,23 @@ const char *(dns_strtype)(enum dns_type type, void *dst, size_t lim) {
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+#include <stdarg.h>
+#include <stdlib.h>
 #include <stdio.h>
+
 #include <ctype.h>
+
+#include <err.h>
+
+
+struct {
+	struct {
+		const char *path[8];
+		unsigned count;
+	} resconf;
+
+	int verbose;
+} MAIN;
 
 
 void dump(const unsigned char *src, size_t len, FILE *fp) {
@@ -2193,9 +2300,43 @@ void dump(const unsigned char *src, size_t len, FILE *fp) {
 } /* dump() */
 
 
-struct {
-	int verbose;
-} opts;
+static void panic(const char *fmt, ...) {
+	va_list ap;
+
+	va_start(ap, fmt);
+
+	verrx(EXIT_FAILURE, fmt, ap);
+} /* panic() */
+
+
+static struct dns_resolv_conf *resconf(void) {
+	static struct dns_resolv_conf *resconf;
+	const char *path;
+	int error, i;
+
+	if (resconf)
+		return resconf;
+
+	if (!(resconf = dns_resconf_open(&error)))
+		panic("dns_resconf_open: %s", strerror(error));
+
+	if (!MAIN.resconf.count)
+		MAIN.resconf.path[MAIN.resconf.count++]	= "/etc/resolv.conf";
+
+	for (i = 0; i < MAIN.resconf.count; i++) {
+		path	= MAIN.resconf.path[i];
+
+		if (0 == strcmp(path, "-"))
+			error	= dns_resconf_loadfile(resconf, stdin);
+		else
+			error	= dns_resconf_loadpath(resconf, path);
+
+		if (error)
+			panic("%s: %s", path, strerror(error));
+	}
+
+	return resconf;
+} /* resconf() */
 
 
 static int parse_packet(int argc, char *argv[]) {
@@ -2247,7 +2388,7 @@ static int parse_packet(int argc, char *argv[]) {
 		section	= rr.section;
 	}
 
-	if (opts.verbose) {
+	if (MAIN.verbose) {
 		fprintf(stderr, "orig:%zu\n", P->end);
 		dump(P->data, P->end, stdout);
 
@@ -2277,39 +2418,50 @@ static int parse_domain(int argc, char *argv[]) {
 
 
 static int parse_resconf(int argc, char *argv[]) {
-	struct dns_resolv_conf *resconf;
-	const char *path	= (argc)? argv[0] : "/etc/resolv.conf";
-	int error;
-	
-	resconf	= dns_resconf_open(&error);
-
-	if (0 == strcmp(path, "-"))
-		error	= dns_resconf_loadfile(resconf, stdin);
-	else
-		error	= dns_resconf_loadpath(resconf, path);
-
-	dns_resconf_dump(resconf, stderr);
-
-	dns_resconf_close(resconf);
+	dns_resconf_dump(resconf(), stdout);
 
 	return 0;
 } /* parse_resconf() */
+
+
+static int search_list(int argc, char *argv[]) {
+	const char *qname	= (argc)? argv[0] : "f.l.google.com";
+	unsigned long i		= 0;
+	char name[DNS_D_MAXNAME + 1];
+
+	printf("[%s]\n", qname);
+
+	while (dns_resconf_search(name, sizeof name, qname, strlen(qname), resconf(), &i))
+		puts(name);
+
+	return 0;
+} /* search_list() */
 
 
 int main(int argc, char **argv) {
 	static const struct { const char *cmd; int (*run)(); } cmds[]
 		= {{ "parse-packet",	&parse_packet	},
 		   { "parse-domain",	&parse_domain	},
-		   { "parse-resconf",	&parse_resconf	}};
+		   { "parse-resconf",	&parse_resconf	},
+		   { "search-list",	&search_list	}};
 	extern int optind;
+	extern char *optarg;
 	int ch, i;
 
-	while (-1 != (ch = getopt(argc, argv, "v"))) {
+	while (-1 != (ch = getopt(argc, argv, "c:v"))) {
 		switch (ch) {
-		case 'v':
-			opts.verbose	= 1;
+		case 'c':
+			assert(MAIN.resconf.count < lengthof(MAIN.resconf.path));
+
+			MAIN.resconf.path[MAIN.resconf.count++]	= optarg;
 
 			break;
+		case 'v':
+			MAIN.verbose	= 1;
+
+			break;
+		default:
+			return 1;
 		} /* switch() */
 	} /* while() */
 
