@@ -1,7 +1,7 @@
 /* ==========================================================================
  * dns.c - Restartable DNS Resolver.
  * --------------------------------------------------------------------------
- * Copyright (c) 2009  William Ahern
+ * Copyright (c) 2008, 2009  William Ahern
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
@@ -24,6 +24,7 @@
  * ==========================================================================
  */
 #include <stddef.h>	/* offsetof() */
+#include <stdint.h>	/* uint32_t */
 #include <stdlib.h>	/* malloc(3) free(3) rand(3) random(3) arc4random(3) */
 #include <stdio.h>	/* FILE fopen(3) fclose(3) getc(3) rewind(3) */
 
@@ -121,6 +122,10 @@ static unsigned dns_atomic_store(dns_atomic_t *i, unsigned n) {
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+/*
+ * P R N G 
+ */
+
 #ifndef DNS_RANDOM
 #if defined(HAVE_ARC4RANDOM)	\
  || defined(__OpenBSD__)	\
@@ -140,6 +145,172 @@ static unsigned dns__random(void) {
 } /* dns__random() */
 
 unsigned (*dns_random)(void)	= &dns__random;
+
+
+/*
+ * P E R M U T A T I O N  G E N E R A T O R
+ */
+
+#define DNS_K_TEA_KEY_SIZE	16
+#define DNS_K_TEA_BLOCK_SIZE	8
+#define DNS_K_TEA_CYCLES	32
+#define DNS_K_TEA_MAGIC		0x9E3779B9U
+
+struct dns_k_tea {
+	uint32_t key[DNS_K_TEA_KEY_SIZE / sizeof (uint32_t)];
+	unsigned cycles;
+}; /* struct dns_k_tea */
+
+
+static void dns_k_tea_init(struct dns_k_tea *tea, uint32_t key[], unsigned cycles) {
+	memcpy(tea->key, key, sizeof tea->key);
+
+	tea->cycles	= (cycles)? cycles : DNS_K_TEA_CYCLES;
+} /* dns_k_tea_init() */
+
+
+static void dns_k_tea_encrypt(struct dns_k_tea *tea, uint32_t v[], uint32_t *w) {
+	uint32_t y, z, sum, n;
+
+	y	= v[0];
+	z	= v[1];
+	sum	= 0;
+
+	for (n = 0; n < tea->cycles; n++) {
+		sum	+= DNS_K_TEA_MAGIC;
+		y	+= ((z << 4) + tea->key[0]) ^ (z + sum) ^ ((z >> 5) + tea->key[1]);
+		z	+= ((y << 4) + tea->key[2]) ^ (y + sum) ^ ((y >> 5) + tea->key[3]);
+	}
+
+	w[0]	= y;
+	w[1]	= z;
+
+	return /* void */;
+} /* dns_k_tea_encrypt() */
+
+
+/*
+ * Permutation generator, based on a Luby-Rackoff Feistel construction.
+ *
+ * Specifically, this is a generic balanced Feistel block cipher using TEA
+ * (another block cipher) as the pseudo-random function, F. At best it's as
+ * strong as F (TEA), notwithstanding the seeding. F could be AES, SHA-1, or
+ * perhaps Bernstein's Salsa20 core; I am naively trying to keep things
+ * simple.
+ *
+ * The generator can create a permutation of any set of numbers, as long as
+ * the size of the set is an even power of 2. This limitation arises either
+ * out of an inherent property of balanced Feistel constructions, or by my
+ * own ignorance. I'll tackle an unbalanced construction after I wrap my
+ * head around Schneier and Kelsey's paper.
+ *
+ * CAVEAT EMPTOR. IANAC.
+ */
+#define DNS_K_PERMUTOR_ROUNDS	8
+
+struct dns_k_permutor {
+	unsigned stepi, length, limit;
+	unsigned shift, mask, rounds;
+
+	struct dns_k_tea tea;
+}; /* struct dns_k_permutor */
+
+
+static inline unsigned dns_k_permutor_powof(unsigned n) {
+	unsigned m, i = 0;
+
+	for (m = 1; m < n; m <<= 1, i++)
+		;;
+
+	return i;
+} /* dns_k_permutor_powof() */
+
+static void dns_k_permutor_init(struct dns_k_permutor *p, unsigned low, unsigned high) {
+	uint32_t key[DNS_K_TEA_KEY_SIZE / sizeof (uint32_t)];
+	unsigned width;
+
+	p->stepi	= 0;
+
+	p->length	= (high - low) + 1;
+	p->limit	= high;
+
+	width		= dns_k_permutor_powof(p->length);
+	width		+= width % 2;
+
+	p->shift	= width / 2;
+	p->mask		= (1U << p->shift) - 1;
+	p->rounds	= DNS_K_PERMUTOR_ROUNDS;
+
+	for (unsigned i = 0; i < sizeof key / sizeof key[0]; i++)
+		key[i]	= dns_random();
+
+	dns_k_tea_init(&p->tea, key, 0);
+
+	return /* void */;
+} /* dns_k_permutor_init() */
+
+
+static unsigned dns_k_permutor_F(struct dns_k_permutor *p, unsigned k, unsigned x) {
+	uint32_t in[DNS_K_TEA_BLOCK_SIZE / sizeof (uint32_t)], out[DNS_K_TEA_BLOCK_SIZE / sizeof (uint32_t)];
+
+	memset(in, '\0', sizeof in);
+
+	in[0]	= k;
+	in[1]	= x;
+
+	dns_k_tea_encrypt(&p->tea, in, out);
+
+	return p->mask & out[0];
+} /* dns_k_permutor_F() */
+
+
+static unsigned dns_k_permutor_E(struct dns_k_permutor *p, unsigned n) {
+	unsigned l[2], r[2];
+	unsigned i;
+
+	i	= 0;
+	l[i]	= p->mask & (n >> p->shift);
+	r[i]	= p->mask & (n >> 0);
+
+	do {
+		l[(i + 1) % 2]	= r[i % 2];
+		r[(i + 1) % 2]	= l[i % 2] ^ dns_k_permutor_F(p, i, r[i % 2]);
+
+		i++;
+	} while (i < p->rounds - 1);
+
+	return ((l[i % 2] & p->mask) << p->shift) | ((r[i % 2] & p->mask) << 0);
+} /* dns_k_permutor_E() */
+
+
+static unsigned dns_k_permutor_D(struct dns_k_permutor *p, unsigned n) {
+	unsigned l[2], r[2];
+	unsigned i;
+
+	i		= p->rounds - 1;
+	l[i % 2]	= p->mask & (n >> p->shift);
+	r[i % 2]	= p->mask & (n >> 0);
+
+	do {
+		i--;
+
+		r[i % 2]	= l[(i + 1) % 2];
+		l[i % 2]	= r[(i + 1) % 2] ^ dns_k_permutor_F(p, i, l[(i + 1) % 2]);
+	} while (i > 0);
+
+	return ((l[i % 2] & p->mask) << p->shift) | ((r[i % 2] & p->mask) << 0);
+} /* dns_k_permutor_D() */
+
+
+static unsigned dns_k_permutor_step(struct dns_k_permutor *p) {
+	unsigned n;
+
+	do {
+		n	= dns_k_permutor_E(p, p->stepi++);
+	} while (n >= p->length);
+
+	return n + (p->limit + 1 - p->length);
+} /* dns_k_permutor_step() */
 
 
 /*
@@ -2516,12 +2687,30 @@ static int search_list(int argc, char *argv[]) {
 } /* search_list() */
 
 
+int permute(int argc, char *argv[]) {
+	unsigned lo, hi, i;
+	struct dns_k_permutor p;
+
+	hi	= (--argc)? atoi(argv[argc]) : 8;
+	lo	= (--argc)? atoi(argv[argc]) : 0;
+
+	dns_k_permutor_init(&p, lo, hi);
+
+	for (i = lo; i <= hi; i++)
+		printf("%u\n", dns_k_permutor_step(&p));
+//		printf("%u -> %u -> %u\n", i, dns_k_permutor_E(&p, i), dns_k_permutor_D(&p, dns_k_permutor_E(&p, i)));
+
+	return 0;
+} /* permute() */
+
+
 int main(int argc, char **argv) {
 	static const struct { const char *cmd; int (*run)(); } cmds[]
 		= {{ "parse-packet",	&parse_packet	},
 		   { "parse-domain",	&parse_domain	},
 		   { "parse-resconf",	&parse_resconf	},
-		   { "search-list",	&search_list	}};
+		   { "search-list",	&search_list	},
+		   { "permute",		&permute	}};
 	extern int optind;
 	extern char *optarg;
 	int ch, i;
