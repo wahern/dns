@@ -116,6 +116,22 @@ const char *dns_strtype(enum dns_type, void *, size_t);
 
 
 /*
+ * A T O M I C  I N T E R F A C E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+typedef unsigned long dns_atomic_t;
+
+
+/*
+ * C R Y P T O  I N T E R F A C E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+extern unsigned (*dns_random)(void);
+
+
+/*
  * P A C K E T  I N T E R F A C E
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -400,7 +416,7 @@ struct dns_resolv_conf {
 	struct sockaddr_storage interface;
 
 	struct { /* PRIVATE */
-		unsigned refcount;
+		dns_atomic_t refcount;
 	} _;
 }; /* struct dns_resolv_conf */
 

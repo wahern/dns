@@ -24,7 +24,7 @@
  * ==========================================================================
  */
 #include <stddef.h>	/* offsetof() */
-#include <stdlib.h>	/* malloc(3) free(3) random(3) arc4random(3) */
+#include <stdlib.h>	/* malloc(3) free(3) rand(3) random(3) arc4random(3) */
 #include <stdio.h>	/* FILE fopen(3) fclose(3) getc(3) rewind(3) */
 
 #include <string.h>	/* memcpy(3) strlen(3) memmove(3) memchr(3) memcmp(3) strchr(3) */
@@ -41,7 +41,7 @@
 #include <assert.h>	/* assert(3) */
 
 #include <sys/types.h>	/* socklen_t htons(3) ntohs(3) */
-#include <sys/socket.h>	/* struct sockaddr struct sockaddr_in struct sockaddr_in6 socket(2) */
+#include <sys/socket.h>	/* AF_INET AF_INET6 AF_UNIX struct sockaddr struct sockaddr_in struct sockaddr_in6 socket(2) */
 
 #if defined(AF_UNIX)
 #include <sys/un.h>	/* struct sockaddr_un */
@@ -57,11 +57,6 @@
 
 
 #include "dns.h"
-
-
-#ifndef DNS_RANDOM
-#define DNS_RANDOM	random	/* arc4random */
-#endif
 
 
 /*
@@ -88,25 +83,97 @@
 
 
 /*
+ * A T O M I C  R O U T I N E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+static void dns_atomic_fence(void) {
+	return;
+} /* dns_atomic_fence() */
+
+
+static unsigned dns_atomic_inc(dns_atomic_t *i) {
+	return (*i)++;
+} /* dns_atomic_inc() */
+
+
+static unsigned dns_atomic_dec(dns_atomic_t *i) {
+	return (*i)--;
+} /* dns_atomic_dec() */
+
+
+static unsigned dns_atomic_load(dns_atomic_t *i) {
+	return *i;
+} /* dns_atomic_load() */
+
+
+static unsigned dns_atomic_store(dns_atomic_t *i, unsigned n) {
+	unsigned o;
+
+	o	= dns_atomic_load(i);
+	*i	= n;
+	return o;
+} /* dns_atomic_store() */
+
+
+/*
+ * C R Y P T O  R O U T I N E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+#ifndef DNS_RANDOM
+#if defined(HAVE_ARC4RANDOM)	\
+ || defined(__OpenBSD__)	\
+ || defined(__FreeBSD__)	\
+ || defined(__NetBSD__)		\
+ || defined(__APPLE__)
+#define DNS_RANDOM	arc4random
+#elif __linux
+#define DNS_RANDOM	random
+#else
+#define DNS_RANDOM	rand
+#endif
+#endif
+
+static unsigned dns__random(void) {
+	return DNS_RANDOM();
+} /* dns__random() */
+
+unsigned (*dns_random)(void)	= &dns__random;
+
+
+/*
  * U T I L I T Y  R O U T I N E S
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-/* Monotonic clock. */
+/*
+ * Monotonic Clock
+ *
+ * WARNING: Strictly speaking, it's not guaranteed to be monotonic. But
+ * outside of wierd situations where one thread freezes (say, because a
+ * laptop is put to sleep) between setting tmp_tick and assigning tmp_tick
+ * to tick, it should never jump back more than a few seconds--basically,
+ * the maximum time a process can be involuntarily put to sleep.
+ * 
+ * The goal is to prevent a system clock reset from putting timer
+ * expirations unrevocably/unrecoverably far into the future (like minutes
+ * or months).
+ */
 static time_t dns_now(void) {
 	/* XXX: Assumes sizeof (time_t) <= sizeof (sig_atomic_t) */
 	static volatile sig_atomic_t last, tick;
+	volatile sig_atomic_t tmp_last, tmp_tick;
 	time_t now;
 
 	time(&now);
 
-	if (now > last) {
-		sig_atomic_t tmp;
+	tmp_last	= last;
 
-		tmp	= tick;
-		tmp	+= now - last;
-		tick	= tmp;
-		
+	if (now > tmp_last) {
+		tmp_tick	= tick;
+		tmp_tick	+= now - tmp_last;
+		tick		= tmp_tick;
 	}
 
 	last	= now;
@@ -115,24 +182,19 @@ static time_t dns_now(void) {
 } /* dns_now() */
 
 
-static unsigned dns_random() {
-	return DNS_RANDOM();
-} /* dns_random() */
-
-
+static size_t dns_af_len(int af) {
+	static const size_t table[32]	= {
+		[AF_INET6]	= sizeof (struct sockaddr_in6),
+		[AF_INET]	= sizeof (struct sockaddr_in),
 #if defined(AF_UNIX)
-#define dns_sa_len(sa)							\
-	((((struct sockaddr *)(sa))->sa_family == AF_INET6)		\
-		? (sizeof (struct sockaddr_in6))			\
-		: (((struct sockaddr *)(sa))->sa_family == AF_UNIX)	\
-			? (sizeof (struct sockaddr_un))			\
-			: (sizeof (struct sockaddr_in)))
-#else
-#define dns_sa_len(sa)							\
-	((((struct sockaddr *)(sa))->sa_family == AF_INET6)		\
-		? (sizeof (struct sockaddr_in6))			\
-		: (sizeof (struct sockaddr_in)))
+		[AF_UNIX]	= sizeof (struct sockaddr_un),
 #endif
+	};
+
+	return table[MIN(af, lengthof(table) - 1)];
+} /* dns_af_len() */
+
+#define dns_sa_len(sa)	dns_af_len(((struct sockaddr *)(sa))->sa_family)
 
 
 #define DNS_SA_NOPORT	&dns_sa_noport;
@@ -1544,12 +1606,12 @@ void dns_resconf_close(struct dns_resolv_conf *resconf) {
 
 
 unsigned dns_resconf_acquire(struct dns_resolv_conf *resconf) {
-	return resconf->_.refcount++;
+	return dns_atomic_inc(&resconf->_.refcount);
 } /* dns_resconf_acquire() */
 
 
 unsigned dns_resconf_release(struct dns_resolv_conf *resconf) {
-	return resconf->_.refcount--;
+	return dns_atomic_dec(&resconf->_.refcount);
 } /* dns_resconf_release() */
 
 
@@ -1883,11 +1945,10 @@ struct dns_hints_soa {
 		struct sockaddr_storage ss;
 
 		struct {
-			unsigned saved, effective;
-			time_t ttl;
+			dns_atomic_t saved, effective, ttl;
 		} pri;
 
-		unsigned nlost;
+		dns_atomic_t nlost;
 	} addrs[16];
 
 	unsigned count;
@@ -1897,7 +1958,7 @@ struct dns_hints_soa {
 
 
 struct dns_hints {
-	unsigned refcount;
+	dns_atomic_t refcount;
 
 	struct dns_hints_soa *head;
 }; /* struct dns_hints */
@@ -1943,12 +2004,12 @@ void dns_hints_close(struct dns_hints *H) {
 
 
 unsigned dns_hints_acquire(struct dns_hints *H) {
-	return H->refcount++;	/* FIXME: Need true atomic operation. */
+	return dns_atomic_inc(&H->refcount);
 } /* dns_hints_acquire() */
 
 
 unsigned dns_hints_release(struct dns_hints *H) {
-	return H->refcount--;	/* FIXME: Need true atomic operation. */
+	return dns_atomic_dec(&H->refcount);
 } /* dns_hints_release() */
 
 
@@ -1985,8 +2046,8 @@ int dns_hints_insert(struct dns_hints *H, const char *zone, const struct sockadd
 
 	memcpy(&soa->addrs[i].ss, sa, dns_sa_len(sa));
 
-	soa->addrs[i].pri.effective	= soa->addrs[i].pri.saved
-					= MAX(1, priority);
+	dns_atomic_store(&soa->addrs[i].pri.effective, MAX(1, priority));
+	dns_atomic_store(&soa->addrs[i].pri.saved, MAX(1, priority));
 
 	if (soa->count < lengthof(soa->addrs))
 		soa->count++;
@@ -2009,9 +2070,20 @@ unsigned dns_hints_insert_resconf(struct dns_hints *H, const struct dns_resolv_c
 } /* dns_hints_insert_resconf() */
 
 
+/*
+ * FIXME: This code (might need to / should) be refactored to ensure that
+ * it can never lead to something undesirable, like an infinite loop in
+ * dns_hints_i_grep() or dns_hints_i_ffwd().
+ *
+ * The hints structure might be the single most important (perhaps only)
+ * critical section. It is highly desirable to keep a shared state regarding
+ * unreachable servers (i.e. the effective priority), especially of caching
+ * servers if we're not recursive. All other shared data can be considered
+ * immutable after internal and applied initialization.
+ */
 void dns_hints_update(struct dns_hints *H, const char *zone, const struct sockaddr *sa, int nice) {
 	struct dns_hints_soa *soa;
-	unsigned i;
+	unsigned long i, nlost, ttl;
 	time_t now	= dns_now();
 
 	if (!(soa = dns_hints_fetch(H, zone)))
@@ -2020,19 +2092,23 @@ void dns_hints_update(struct dns_hints *H, const char *zone, const struct sockad
 	for (i = 0; i < soa->count; i++) {
 		if (sa->sa_family == soa->addrs[i].ss.ss_family && 0 == memcmp(&soa->addrs[i].ss, sa, dns_sa_len(sa))) {
 			if (nice < 0) {
-				soa->addrs[i].nlost++;
-				soa->addrs[i].pri.effective	= 0;
-				soa->addrs[i].pri.ttl		= now + MIN(60, 3 * soa->addrs[i].nlost);
+				nlost	= 1 + dns_atomic_inc(&soa->addrs[i].nlost);
+
+				dns_atomic_store(&soa->addrs[i].pri.effective, 0);
+
+				dns_atomic_store(&soa->addrs[i].pri.ttl, now + MIN(60, 3 * nlost));
 			} else if (nice > 0) {
 				goto reset;
 			}
-		} else if (soa->addrs[i].pri.ttl > 0 && soa->addrs[i].pri.ttl < now) {
-reset:
-			soa->addrs[i].pri.effective
-				= soa->addrs[i].pri.saved;
+		} else {
+			ttl	= dns_atomic_load(&soa->addrs[i].pri.ttl);
 
-			soa->addrs[i].pri.ttl	= 0;
-			soa->addrs[i].nlost	= 0;
+			if (ttl > 0 && ttl < now) {
+reset:
+				dns_atomic_store(&soa->addrs[i].pri.effective, dns_atomic_load(&soa->addrs[i].pri.saved));
+				dns_atomic_store(&soa->addrs[i].pri.ttl, 0);
+				dns_atomic_store(&soa->addrs[i].nlost, 0);
+			}
 		}
 	}
 
@@ -2057,7 +2133,7 @@ static int dns_hints_i_ffwd(struct dns_hints_i *i, struct dns_hints_soa *soa) {
 		while (i->state.p < i->state.end) {
 			j = i->state.p++ % soa->count;
 
-			if (soa->addrs[j].pri.effective == i->state.priority)
+			if (dns_atomic_load(&soa->addrs[j].pri.effective) == i->state.priority)
 				return j;
 		}
 
@@ -2067,9 +2143,11 @@ static int dns_hints_i_ffwd(struct dns_hints_i *i, struct dns_hints_soa *soa) {
 		found	= 0;
 
 		for (j = 0; j < soa->count; j++) {
-			if (soa->addrs[j].pri.effective >= min && soa->addrs[j].pri.effective <= max) {
-				i->state.priority	= soa->addrs[j].pri.effective;
-				max			= soa->addrs[j].pri.effective;
+			unsigned pri	= dns_atomic_load(&soa->addrs[j].pri.effective);
+
+			if (pri >= min && pri <= max) {
+				i->state.priority	= pri;
+				max			= pri;
 				found			= 1;
 			}
 		}
@@ -2116,7 +2194,7 @@ struct dns_resolver {
 	struct dns_resolv_conf *resconf;
 	struct dns_hints *hints;
 
-	unsigned refcount;
+	dns_atomic_t refcount;
 
 	unsigned char qname[DNS_D_MAXNAME];
 }; /* struct dns_resolver */
@@ -2165,12 +2243,12 @@ void dns_r_close(struct dns_resolver *R) {
 
 
 unsigned dns_r_acquire(struct dns_resolver *R) {
-	return R->refcount++;
+	return dns_atomic_inc(&R->refcount);
 } /* dns_r_acquire() */
 
 
 unsigned dns_r_release(struct dns_resolver *R) {
-	return R->refcount--;
+	return dns_atomic_dec(&R->refcount);
 } /* dns_r_release() */
 
 
