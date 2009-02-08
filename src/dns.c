@@ -1705,6 +1705,264 @@ size_t dns_any_print(void *dst_, size_t lim, union dns_any *any, enum dns_type t
 
 
 /*
+ * H O S T S  R O U T I N E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+struct dns_hosts {
+	struct dns_hosts_entry {
+		unsigned char host[DNS_D_MAXNAME + 1];
+
+		int af;
+
+		union {
+			struct in_addr a4;
+			struct in6_addr a6;
+		} addr;
+
+		struct dns_hosts_entry *next;
+	} *head, **tail;
+
+	dns_atomic_t refcount;
+}; /* struct dns_hosts */
+
+
+struct dns_hosts *dns_hosts_open(int *error) {
+	static const struct dns_hosts hosts_initializer	= { .refcount = 1 };
+	struct dns_hosts *hosts;
+
+	if (!(hosts = malloc(sizeof *hosts)))
+		goto syerr;
+
+	*hosts	= hosts_initializer;
+
+	hosts->tail	= &hosts->head;
+
+	return hosts;
+syerr:
+	*error	= errno;
+
+	free(hosts);
+
+	return 0;
+} /* dns_hosts_open() */
+
+
+void dns_hosts_close(struct dns_hosts *hosts) {
+	struct dns_hosts_entry *ent, *xnt;
+
+	if (!hosts || 1 != dns_hosts_release(hosts))
+		return;
+
+	for (ent = hosts->head; ent; ent = xnt) {
+		xnt	= ent->next;
+
+		free(ent);
+	}
+
+	free(hosts);
+
+	return;
+} /* dns_hosts_close() */
+
+
+unsigned dns_hosts_acquire(struct dns_hosts *hosts) {
+	return dns_atomic_inc(&hosts->refcount);
+} /* dns_hosts_acquire() */
+
+
+unsigned dns_hosts_release(struct dns_hosts *hosts) {
+	return dns_atomic_dec(&hosts->refcount);
+} /* dns_hosts_release() */
+
+
+#define dns_hosts_issep(ch)	(isspace(ch))
+#define dns_hosts_iscom(ch)	((ch) == '#' || (ch) == ';')
+
+int dns_hosts_loadfile(struct dns_hosts *hosts, FILE *fp) {
+	struct dns_hosts_entry ent;
+	char word[MAX(INET6_ADDRSTRLEN, DNS_D_MAXNAME) + 1];
+	unsigned wp, wc, skip;
+	int ch, error;
+
+	rewind(fp);
+
+	do {
+		memset(&ent, '\0', sizeof ent);
+		wc	= 0;
+		skip	= 0;
+
+		do {
+			memset(word, '\0', sizeof word);
+			wp	= 0;
+
+			while (EOF != (ch = fgetc(fp)) && ch != '\n') {
+				skip	|= !!dns_hosts_iscom(ch);
+
+				if (skip)
+					continue;
+
+				if (dns_hosts_issep(ch))
+					break;
+
+				if (wp < sizeof word - 1)
+					word[wp]	= ch;
+				wp++;
+			}
+
+			if (!wp)
+				continue;
+
+			wc++;
+
+			switch (wc) {
+			case 0:
+				break;
+			case 1:
+				ent.af	= (strchr(word, ':'))? AF_INET6 : AF_INET;
+				skip	= (1 != dns_inet_pton(ent.af, word, &ent.addr));
+
+				break;
+			default:
+				if (!wp)
+					break;
+
+				dns_d_anchor(ent.host, sizeof ent.host, word, strlen(word));
+
+				if ((error = dns_hosts_insert(hosts, ent.af, &ent.addr, ent.host)))
+					return error;
+
+				break;
+			} /* switch() */
+		} while (ch != EOF && ch != '\n');
+	} while (ch != EOF);
+
+	return 0;
+} /* dns_hosts_loadfile() */
+
+
+int dns_hosts_loadpath(struct dns_hosts *hosts, const char *path) {
+	FILE *fp;
+	int error;
+
+	if (!(fp = fopen(path, "r")))
+		return errno;
+
+	error	= dns_hosts_loadfile(hosts, fp);
+
+	fclose(fp);
+
+	return error;
+} /* dns_hosts_loadpath() */
+
+
+int dns_hosts_dump(struct dns_hosts *hosts, FILE *fp) {
+	struct dns_hosts_entry *ent, *xnt;
+	char addr[INET6_ADDRSTRLEN + 1];
+	unsigned i;
+
+	for (ent = hosts->head; ent; ent = xnt) {
+		xnt	= ent->next;
+
+		dns_inet_ntop(ent->af, &ent->addr, addr, sizeof addr);
+
+		fputs(addr, fp);
+
+		for (i = strlen(addr); i < INET_ADDRSTRLEN; i++)
+			fputc(' ', fp);
+
+		fputc(' ', fp);
+
+		fputs((char *)ent->host, fp);
+		fputc('\n', fp);
+	}
+
+	return 0;
+} /* dns_hosts_dump() */
+
+
+int dns_hosts_insert(struct dns_hosts *hosts, int af, const void *addr, const void *host) {
+	struct dns_hosts_entry *ent;
+	int error;
+
+	if (!(ent = malloc(sizeof *ent)))
+		goto syerr;
+
+	dns_d_anchor(ent->host, sizeof ent->host, host, strlen(host));
+
+	switch ((ent->af = af)) {
+	case AF_INET6:
+		memcpy(&ent->addr.a6, addr, sizeof ent->addr.a6);
+
+		break;
+	case AF_INET:
+		memcpy(&ent->addr.a4, addr, sizeof ent->addr.a4);
+
+		break;
+	default:
+		error	= EINVAL;
+
+		goto error;
+	} /* switch() */
+
+	ent->next	= 0;
+	*hosts->tail	= ent;
+	hosts->tail	= &ent->next;
+
+	return 0;
+syerr:
+	error	= errno;
+error:
+	free(ent);
+
+	return error;
+} /* dns_hosts_insert() */
+
+
+unsigned dns_hosts_search(void *addr_, unsigned lim, int af, const void *host_, struct dns_hosts *hosts, dns_hosts_i_t *i) {
+	static struct dns_hosts_entry last;
+	struct dns_hosts_entry *ent;
+	char host[DNS_D_MAXNAME + 1];
+	unsigned count;
+	union { struct in_addr *a4; struct in6_addr *a6; } addr	= { addr_ };
+
+	dns_d_anchor(host, sizeof host, host_, strlen(host_));
+
+	ent	= (*i)? *i : hosts->head;
+	count	= 0;
+
+	while (ent != 0 && ent != &last && count < lim) {
+		if (ent->af == af && 0 == strcasecmp((char *)ent->host, host)) {
+			switch (af) {
+			case AF_INET6:
+				memcpy(addr.a6, &ent->addr.a6, sizeof *addr.a6);
+
+				addr.a6++;
+
+				count++;
+
+				break;
+			case AF_INET:
+				memcpy(addr.a4, &ent->addr.a4, sizeof *addr.a4);
+
+				addr.a4++;
+
+				count++;
+
+				break;
+			} /* switch() */
+		}
+
+		ent	= ent->next;
+	} /* while() */
+
+	*i	= (ent)? ent : &last;
+
+	return count;
+} /* dns_hosts_search() */
+
+
+/*
  * R E S O L V . C O N F  R O U T I N E S
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -2022,7 +2280,7 @@ size_t dns_resconf_search(void *dst, size_t lim, const void *qname, size_t qlen,
 } /* dns_resconf_search() */
 
 
-static void dns_resconf_dump(struct dns_resolv_conf *resconf, FILE *fp) {
+int dns_resconf_dump(struct dns_resolv_conf *resconf, FILE *fp) {
 	unsigned i;
 	int af;
 
@@ -2075,7 +2333,7 @@ static void dns_resconf_dump(struct dns_resolv_conf *resconf, FILE *fp) {
 		fprintf(fp, "interface %s %hu\n", addr, ntohs(*dns_sa_port(af, &resconf->interface)));
 	}
 
-	return /* void */;
+	return 0;
 } /* dns_resconf_dump() */
 
 
@@ -3023,6 +3281,11 @@ struct {
 		unsigned count;
 	} resconf;
 
+	struct {
+		const char *path[8];
+		unsigned count;
+	} hosts;
+
 	const char *qname;
 	enum dns_type qtype;
 
@@ -3103,6 +3366,37 @@ static struct dns_resolv_conf *resconf(void) {
 
 	return resconf;
 } /* resconf() */
+
+
+static struct dns_hosts *hosts(void) {
+	static struct dns_hosts *hosts;
+	const char *path;
+	unsigned i;
+	int error;
+
+	if (hosts)
+		return hosts;
+
+	if (!(hosts = dns_hosts_open(&error)))
+		panic("dns_hosts_open: %s", strerror(error));
+
+	if (!MAIN.hosts.count)
+		MAIN.hosts.path[MAIN.hosts.count++]	= "/etc/hosts";
+
+	for (i = 0; i < MAIN.hosts.count; i++) {
+		path	= MAIN.hosts.path[i];
+
+		if (0 == strcmp(path, "-"))
+			error	= dns_hosts_loadfile(hosts, stdin);
+		else
+			error	= dns_hosts_loadpath(hosts, path);
+		
+		if (error)
+			panic("%s: %s", path, strerror(error));
+	}
+
+	return hosts;
+} /* hosts() */
 
 
 static void print_packet(struct dns_packet *P) {
@@ -3244,6 +3538,24 @@ static int show_resconf(int argc, char *argv[]) {
 } /* show_resconf() */
 
 
+static int show_hosts(int argc, char *argv[]) {
+	unsigned i;
+
+	hosts();
+
+	fputs("# SOURCES\n", stdout);
+
+	for (i = 0; i < MAIN.hosts.count; i++)
+		fprintf(stdout, "#   %s\n", MAIN.hosts.path[i]);
+
+	fputs("#\n", stdout);
+
+	dns_hosts_dump(hosts(), stdout);
+
+	return 0;
+} /* show_hosts() */
+
+
 static int search_list(int argc, char *argv[]) {
 	const char *qname	= (argc > 1)? argv[1] : "f.l.google.com";
 	unsigned long i		= 0;
@@ -3380,6 +3692,7 @@ static const struct { const char *cmd; int (*run)(); const char *help; } cmds[] 
 	{ "parse-packet",	&parse_packet,	"parse raw packet from stdin" },
 	{ "parse-domain",	&parse_domain,	"anchor and iteratively cleave domain" },
 	{ "show-resconf",	&show_resconf,	"show resolv.conf data" },
+	{ "show-hosts",		&show_hosts,	"show hosts data" },
 	{ "search-list",	&search_list,	"generate query search list from domain" },
 	{ "permute-set",	&permute_set,	"generate random permutation -> (0 .. N or N .. M)" },
 	{ "dump-random",	&dump_random,	"generate random bytes" },
@@ -3393,6 +3706,7 @@ static void print_usage(const char *progname, FILE *fp) {
 	static const char *usage	= 
 		" [OPTIONS] COMMAND [ARGS]\n"
 		"  -c PATH   Path to resolv.conf\n"
+		"  -l PATH   Path to local hosts\n"
 		"  -q QNAME  Query name\n"
 		"  -t QTYPE  Query type\n"
 		"  -v        Be more verbose\n"
@@ -3427,12 +3741,18 @@ int main(int argc, char **argv) {
 	const char *progname	= argv[0];
 	int ch, i;
 
-	while (-1 != (ch = getopt(argc, argv, "q:t:c:vh"))) {
+	while (-1 != (ch = getopt(argc, argv, "q:t:c:l:vh"))) {
 		switch (ch) {
 		case 'c':
 			assert(MAIN.resconf.count < lengthof(MAIN.resconf.path));
 
 			MAIN.resconf.path[MAIN.resconf.count++]	= optarg;
+
+			break;
+		case 'l':
+			assert(MAIN.hosts.count < lengthof(MAIN.hosts.path));
+
+			MAIN.hosts.path[MAIN.hosts.count++]	= optarg;
 
 			break;
 		case 'q':

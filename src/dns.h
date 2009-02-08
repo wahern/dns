@@ -401,6 +401,34 @@ size_t dns_any_print(void *, size_t, union dns_any *, enum dns_type);
 
 
 /*
+ * H O S T S  I N T E R F A C E
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+struct dns_hosts;
+
+struct dns_hosts *dns_hosts_open(int *);
+
+void dns_hosts_close(struct dns_hosts *);
+
+unsigned dns_hosts_acquire(struct dns_hosts *);
+
+unsigned dns_hosts_release(struct dns_hosts *);
+
+int dns_hosts_loadfile(struct dns_hosts *, FILE *);
+
+int dns_hosts_loadpath(struct dns_hosts *, const char *);
+
+int dns_hosts_dump(struct dns_hosts *, FILE *);
+
+int dns_hosts_insert(struct dns_hosts *, int, const void *, const void *);
+
+typedef void *dns_hosts_i_t;
+
+unsigned dns_hosts_search(void *, unsigned, int, const void *, struct dns_hosts *, dns_hosts_i_t *);
+
+
+/*
  * R E S O L V . C O N F  I N T E R F A C E
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -438,6 +466,8 @@ unsigned dns_resconf_release(struct dns_resolv_conf *);
 int dns_resconf_loadfile(struct dns_resolv_conf *, FILE *);
 
 int dns_resconf_loadpath(struct dns_resolv_conf *, const char *);
+
+int dns_resconf_dump(struct dns_resolv_conf *, FILE *);
 
 int dns_resconf_setiface(struct dns_resolv_conf *, const char *, unsigned short);
 
