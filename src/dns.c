@@ -1165,6 +1165,13 @@ static size_t dns__print10(void *dst, size_t lim, size_t off, unsigned n) {
 	unsigned d	= 1000000;
 	unsigned ch;
 
+	if (n == 0) {
+		if (cp < lim)
+			((unsigned char *)dst)[cp]	= '0';
+
+		return 1;
+	}
+
 	while (d) {
 		if ((ch = n / d) || cp > off) {
 			n	-= ch * d;
