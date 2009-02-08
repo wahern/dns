@@ -2362,6 +2362,9 @@ static int dns_socket(struct sockaddr *local, int type, int *error) {
 	if (local->sa_family != AF_INET && local->sa_family != AF_INET6)
 		return fd;
 
+	if (type != SOCK_DGRAM)
+		return fd;
+
 	if (*dns_sa_port(local->sa_family, local) == 0) {
 		struct sockaddr_storage tmp;
 		unsigned i, port;
@@ -2393,11 +2396,13 @@ syerr:
 
 enum {
 	DNS_SO_UDP_INIT	= 1,
+	DNS_SO_UDP_CONN,
 	DNS_SO_UDP_SEND,
 	DNS_SO_UDP_RECV,
 	DNS_SO_UDP_DONE,
 
 	DNS_SO_TCP_INIT,
+	DNS_SO_TCP_CONN,
 	DNS_SO_TCP_SEND,
 	DNS_SO_TCP_RECV,
 	DNS_SO_TCP_DONE,
@@ -2406,6 +2411,8 @@ enum {
 struct dns_socket {
 	int udp;
 	int tcp;
+
+	int type;
 
 	struct sockaddr_storage local, remote;
 
@@ -2428,18 +2435,21 @@ struct dns_socket {
 	time_t began;
 
 	struct dns_packet *answer;
-	size_t anslen, ansin;
+	size_t alen, apos;
 }; /* struct dns_socket() */
 
 
 static void dns_so_destroy(struct dns_socket *);
 
-static struct dns_socket *dns_so_init(struct dns_socket *so, struct sockaddr *local, int *error) {
+static struct dns_socket *dns_so_init(struct dns_socket *so, struct sockaddr *local, int type, int *error) {
 	static const struct dns_socket so_initializer	= { -1, -1, };
 
-	*so	= so_initializer;
+	*so		= so_initializer;
+	so->type	= type;
 
-	if (-1 == (so->udp = dns_socket(local, SOCK_DGRAM, error)))
+	memcpy(&so->local, local, dns_sa_len(local));
+
+	if (-1 == (so->udp = dns_socket((struct sockaddr *)&so->local, SOCK_DGRAM, error)))
 		goto error;
 
 	dns_k_permutor_init(&so->qids, 1, 65535);
@@ -2452,13 +2462,13 @@ error:
 } /* dns_so_init() */
 
 
-struct dns_socket *dns_so_open(struct sockaddr *local, int *error) {
+struct dns_socket *dns_so_open(struct sockaddr *local, int type, int *error) {
 	struct dns_socket *so;
 
 	if (!(so = malloc(sizeof *so)))
 		goto syerr;
 
-	if (!dns_so_init(so, local, error))
+	if (!dns_so_init(so, local, type, error))
 		goto error;
 
 	return so;
@@ -2544,7 +2554,7 @@ int dns_so_submit(struct dns_socket *so, struct dns_packet *Q, struct sockaddr *
 		dns_header(so->query)->qid	= dns_so_mkqid(so);
 
 	so->qid		= dns_header(so->query)->qid;
-	so->state	= DNS_SO_UDP_INIT;
+	so->state	= (so->type == SOCK_STREAM)? DNS_SO_TCP_INIT : DNS_SO_UDP_INIT;
 
 	return 0;
 syerr:
@@ -2562,13 +2572,13 @@ static int dns_so_verify(struct dns_socket *so, struct dns_packet *P) {
 	struct dns_rr rr;
 	int error	= -1;
 
-	if (so->qid != dns_header(so->answer)->qid);
+	if (so->qid != dns_header(so->answer)->qid)
 		return -1;
 
 	if (0 != dns_rr_parse(&rr, 12, so->answer))
 		return -1;
 
-	if (rr.type != so->qtype || rr.class != so->qclass);
+	if (rr.type != so->qtype || rr.class != so->qclass)
 		return -1;
 
 	if (0 == (qlen = dns_d_expand(qname, sizeof qname, rr.dn.p, P, &error)))
@@ -2584,6 +2594,64 @@ static int dns_so_verify(struct dns_socket *so, struct dns_packet *P) {
 } /* dns_so_verify() */
 
 
+static int dns_so_tcp_send(struct dns_socket *so) {
+	unsigned char *qsrc;
+	size_t qend;
+	long n;
+
+	so->query->data[-2]	= 0xff & (so->query->end >> 8);
+	so->query->data[-1]	= 0xff & (so->query->end >> 0);
+
+	qsrc	= &so->query->data[-2] + so->qout;
+	qend	= so->query->end + 2;
+
+	while (so->qout < qend) {
+		if (0 > (n = send(so->tcp, &qsrc[so->qout], qend - so->qout, 0)))
+			return errno;
+
+		so->qout	+= n;
+	}
+
+	return 0;
+} /* dns_so_tcp_send() */
+
+
+static int dns_so_tcp_recv(struct dns_socket *so) {
+	unsigned char *asrc;
+	size_t aend, alen;
+	int error;
+	long n;
+
+	aend	= so->alen + 2;
+
+	while (so->apos < aend) {
+		asrc	= &so->answer->data[-2];
+
+		if (0 > (n = recv(so->tcp, &asrc[so->apos], aend - so->apos, 0)))
+			return errno;
+		else if (n == 0)
+			return -1;	/* FIXME */
+
+		so->apos	+= n;
+	
+		if (so->alen == 0 && so->apos >= 2) {
+			alen	= ((0xff & so->answer->data[-2]) << 8)
+				| ((0xff & so->answer->data[-1]) << 0);
+
+			if ((error = dns_so_newanswer(so, alen)))
+				return error;
+
+			so->alen	= alen;
+			aend		= alen + 2;
+		}
+	}
+
+	so->answer->end	= so->alen;
+
+	return 0;
+} /* dns_so_tcp_recv() */
+
+
 int dns_so_check(struct dns_socket *so) {
 	int error;
 	long n;
@@ -2591,6 +2659,8 @@ int dns_so_check(struct dns_socket *so) {
 retry:
 	switch (so->state) {
 	case DNS_SO_UDP_INIT:
+		so->state++;
+	case DNS_SO_UDP_CONN:
 		if (0 != connect(so->udp, (struct sockaddr *)&so->remote, dns_sa_len(&so->remote)))
 			goto syerr;
 
@@ -2612,17 +2682,43 @@ retry:
 
 		so->state++;
 	case DNS_SO_UDP_DONE:
-		if (!dns_header(so->answer)->tc)
+		if (!dns_header(so->answer)->tc || so->type == SOCK_DGRAM)
 			return 0;
 
 		so->state++;
 	case DNS_SO_TCP_INIT:
+		dns_shutdown(&so->tcp);
+
+		if (-1 == (so->tcp = dns_socket((struct sockaddr *)&so->local, SOCK_STREAM, &error)))
+			goto error;
+
+		so->state++;
+	case DNS_SO_TCP_CONN:
+		if (0 != connect(so->tcp, (struct sockaddr *)&so->remote, dns_sa_len(&so->remote))) {
+			if (errno != EISCONN)
+				goto syerr;
+		}
+
 		so->state++;
 	case DNS_SO_TCP_SEND:
+		if ((error = dns_so_tcp_send(so)))
+			goto error;
+
 		so->state++;
 	case DNS_SO_TCP_RECV:
+		if ((error = dns_so_tcp_recv(so)))
+			goto error;
+
 		so->state++;
 	case DNS_SO_TCP_DONE:
+		dns_shutdown(&so->tcp);
+
+		if (so->answer->end < 12)
+			return -1;
+
+		if ((error = dns_so_verify(so, so->answer)))
+			goto error;
+
 		return 0;
 	default:
 		error	= -1;
@@ -2633,11 +2729,19 @@ retry:
 trash:
 	goto retry;
 syerr:
-	if (errno == EINTR)
-		goto retry;
-
 	error	= errno;
 error:
+	switch (error) {
+	case EINTR:
+		goto retry;
+	case EINPROGRESS:
+		/* FALL THROUGH */
+	case EALREADY:
+		error	= EAGAIN;
+
+		break;
+	} /* switch() */
+
 	return error;
 } /* dns_so_check() */
 
@@ -2699,10 +2803,10 @@ int dns_so_pollin(struct dns_socket *so) {
 
 int dns_so_pollout(struct dns_socket *so) {
 	switch (so->state) {
-	case DNS_SO_UDP_INIT:
+	case DNS_SO_UDP_CONN:
 	case DNS_SO_UDP_SEND:
 		return so->udp;
-	case DNS_SO_TCP_INIT:
+	case DNS_SO_TCP_CONN:
 	case DNS_SO_TCP_SEND:
 		return so->tcp;
 	default:
@@ -2738,7 +2842,7 @@ struct dns_resolver *dns_r_open(struct dns_resolv_conf *resconf, struct dns_hint
 
 	*R	= R_initializer;
 
-	if (!dns_so_init(&R->so, (struct sockaddr *)&resconf->interface, error))
+	if (!dns_so_init(&R->so, (struct sockaddr *)&resconf->interface, 0, error))
 		goto error;
 
 	dns_resconf_acquire(resconf);
@@ -2990,6 +3094,37 @@ static struct dns_resolv_conf *resconf(void) {
 } /* resconf() */
 
 
+static void print_packet(struct dns_packet *P) {
+	enum dns_section section;
+	struct dns_rr rr;
+	int error;
+	union dns_any any;
+	char pretty[sizeof any * 2];
+	size_t len;
+
+	fputs(";; [HEADER]\n", stdout);
+	fprintf(stdout, ";;     qr : %s(%d)\n", (dns_header(P)->qr)? "QUERY" : "RESPONSE", dns_header(P)->qr);
+	fprintf(stdout, ";; opcode : %s(%d)\n", dns_stropcode(dns_header(P)->opcode), dns_header(P)->opcode);
+	fprintf(stdout, ";;     aa : %s(%d)\n", (dns_header(P)->aa)? "AUTHORITATIVE" : "NON-AUTHORITATIVE", dns_header(P)->aa);
+	fprintf(stdout, ";;     tc : %s(%d)\n", (dns_header(P)->tc)? "TRUNCATED" : "NOT-TRUNCATED", dns_header(P)->tc);
+	fprintf(stdout, ";;     rd : %s(%d)\n", (dns_header(P)->rd)? "RECURSION-DESIRED" : "RECURSION-NOT-DESIRED", dns_header(P)->rd);
+	fprintf(stdout, ";;     ra : %s(%d)\n", (dns_header(P)->ra)? "RECURSION-ALLOWED" : "RECURSION-NOT-ALLOWED", dns_header(P)->ra);
+	fprintf(stdout, ";;  rcode : %s(%d)\n", dns_strrcode(dns_header(P)->rcode), dns_header(P)->rcode);
+
+	section	= 0;
+
+	dns_rr_foreach(&rr, P) {
+		if (section != rr.section)
+			fprintf(stdout, "\n;; [%s:%d]\n", dns_strsection(rr.section), dns_p_count(P, rr.section));
+
+		if ((len = dns_rr_print(pretty, sizeof pretty, &rr, P, &error)))
+			fprintf(stdout, "%s\n", pretty);
+
+		section	= rr.section;
+	}
+} /* print_packet() */
+
+
 static int parse_packet(int argc, char *argv[]) {
 	struct dns_packet *P	= dns_p_new(512);
 	struct dns_packet *Q	= dns_p_new(512);
@@ -3160,7 +3295,7 @@ static int send_query(int argc, char *argv[]) {
 	char host[INET6_ADDRSTRLEN + 1];
 	struct sockaddr_storage ss;
 	struct dns_socket *so;
-	int error;
+	int error, type;
 
 	if (argc > 1) {
 		ss.ss_family	= (strchr(argv[1], ':'))? AF_INET6 : AF_INET;
@@ -3180,15 +3315,21 @@ static int send_query(int argc, char *argv[]) {
 	if (!MAIN.qtype)
 		MAIN.qtype	= DNS_T_AAAA;
 
-	fprintf(stderr, "querying %s for %s IN %s\n", host, MAIN.qname, dns_strtype(MAIN.qtype));
-
-
 	if ((error = dns_p_push(Q, DNS_S_QD, MAIN.qname, strlen(MAIN.qname), MAIN.qtype, DNS_C_IN, 0, 0)))
 		panic("dns_p_push: %s", strerror(error));
 
 	dns_header(Q)->rd	= 1;
 
-	if (!(so = dns_so_open((struct sockaddr *)&resconf()->interface, &error)))
+	if (strstr(argv[0], "udp"))
+		type	= SOCK_DGRAM;
+	else if (strstr(argv[0], "tcp"))
+		type	= SOCK_STREAM;
+	else
+		type	= 0;
+
+	fprintf(stderr, "querying %s for %s IN %s\n", host, MAIN.qname, dns_strtype(MAIN.qtype));
+
+	if (!(so = dns_so_open((struct sockaddr *)&resconf()->interface, type, &error)))
 		panic("dns_so_open: %s", strerror(error));
 
 	while (!(A = dns_so_query(so, Q, (struct sockaddr *)&ss, &error))) {
@@ -3197,6 +3338,8 @@ static int send_query(int argc, char *argv[]) {
 
 		sleep(1);
 	}
+
+	print_packet(A);
 
 	dns_so_close(so);
 
@@ -3212,6 +3355,8 @@ static const struct { const char *cmd; int (*run)(); const char *help; } cmds[] 
 	{ "permute-set",	&permute_set,	"generate random permutation -> (0 .. N or N .. M)" },
 	{ "dump-random",	&dump_random,	"generate random bytes" },
 	{ "send-query",		&send_query,	"send query to host" },
+	{ "send-query-udp",	&send_query,	"send udp query to host" },
+	{ "send-query-tcp",	&send_query,	"send tcp query to host" },
 };
 
 

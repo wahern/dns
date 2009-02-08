@@ -185,6 +185,8 @@ struct dns_packet {
 	struct { struct dns_packet *cqe_next, *cqe_prev; } cqe;
 
 	size_t size, end;
+
+	unsigned char tcpb[2];
 	unsigned char data[1];
 }; /* struct dns_packet */
 
@@ -485,7 +487,7 @@ unsigned dns_hints_grep(struct sockaddr **, socklen_t *, unsigned, struct dns_hi
 
 struct dns_socket;
 
-struct dns_socket *dns_so_open(struct sockaddr *, int *error);
+struct dns_socket *dns_so_open(struct sockaddr *, int type, int *error);
 
 void dns_so_close(struct dns_socket *);
 
