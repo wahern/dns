@@ -1,6 +1,8 @@
 CFLAGS	+= -std=c99 -Wall -Werror -Wno-unused-function -O2 -g
 
 
+all: dns
+
 #packet.c: packet.h
 
 

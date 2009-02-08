@@ -28,6 +28,8 @@
 
 #include <string.h>	/* strlen(3) */
 
+#include <time.h>	/* time_t */
+
 #include <sys/types.h>	/* socklen_t */
 #include <sys/socket.h>	/* struct socket */
 
@@ -87,7 +89,6 @@ enum dns_rcode {
 	DNS_RC_NXRRSET	= 8,
 	DNS_RC_NOTAUTH	= 9,
 	DNS_RC_NOTZONE	= 10,
-	DNS_RC_BADVERS	= 16,
 }; /* dns_rcode */
 
 
@@ -113,6 +114,10 @@ const char *dns_strtype(enum dns_type, void *, size_t);
 #define dns_strtype3(a, b, c)	dns_strtype((a), (b), (c))
 #define dns_strtype1(a)		dns_strtype((a), (char [DNS_STRMINLEN + 1]){ 0 }, DNS_STRMINLEN + 1)
 #define dns_strtype(...)	DNS_PP_CALL(DNS_PP_XPASTE(dns_strtype, DNS_PP_NARG(__VA_ARGS__)), __VA_ARGS__)
+
+const char *dns_stropcode(enum dns_opcode);
+
+const char *dns_strrcode(enum dns_rcode);
 
 
 /*
@@ -471,6 +476,36 @@ struct dns_hints_i {
 #define dns_hints_i_new(...)	(&(struct dns_hints_i){ __VA_ARGS__ })
 
 unsigned dns_hints_grep(struct sockaddr **, socklen_t *, unsigned, struct dns_hints_i *, struct dns_hints *);
+
+
+/*
+ * S O C K E T  R O U T I N E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+struct dns_socket;
+
+struct dns_socket *dns_so_open(struct sockaddr *, int *error);
+
+void dns_so_close(struct dns_socket *);
+
+void dns_so_reset(struct dns_socket *);
+
+unsigned short dns_so_mkqid(struct dns_socket *so);
+
+struct dns_packet *dns_so_query(struct dns_socket *, struct dns_packet *, struct sockaddr *, int *);
+
+int dns_so_submit(struct dns_socket *, struct dns_packet *, struct sockaddr *);
+
+int dns_so_check(struct dns_socket *);
+
+struct dns_packet *dns_so_fetch(struct dns_socket *, int *);
+
+time_t dns_so_elapsed(struct dns_socket *);
+
+int dns_so_pollin(struct dns_socket *);
+
+int dns_so_pollout(struct dns_socket *);
 
 
 /*
