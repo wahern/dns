@@ -695,7 +695,7 @@ size_t dns_d_cleave(void *dst, size_t lim, const void *src, size_t len) {
 
 size_t dns_d_comp(void *dst_, size_t lim, const void *src_, size_t len, struct dns_packet *P, int *error) {
 	struct { unsigned char *b; size_t p, x; } dst, src;
-	unsigned char ch;
+	unsigned char ch	= '.';
 
 	dst.b	= dst_;
 	dst.p	= 0;
@@ -730,10 +730,12 @@ size_t dns_d_comp(void *dst_, size_t lim, const void *src_, size_t len, struct d
 		dst.p	= dst.x;
 	}
 
-	if (dst.p < lim)
-		dst.b[dst.p]	= 0x00;
+	if (dst.p > 1) {
+		if (dst.p < lim)
+			dst.b[dst.p]	= 0x00;
 
-	dst.p++;
+		dst.p++;
+	}
 
 #if 1
 	if (dst.p < lim) {
@@ -3010,6 +3012,8 @@ const char *dns_strrcode(enum dns_rcode rcode) {
 
 #include <ctype.h>
 
+#include <sys/select.h>
+
 #include <err.h>
 
 
@@ -3129,6 +3133,9 @@ static void print_packet(struct dns_packet *P) {
 
 		section	= rr.section;
 	}
+
+	if (MAIN.verbose)
+		dump(P->data, P->end, stderr);
 } /* print_packet() */
 
 
@@ -3325,7 +3332,8 @@ static int send_query(int argc, char *argv[]) {
 	if ((error = dns_p_push(Q, DNS_S_QD, MAIN.qname, strlen(MAIN.qname), MAIN.qtype, DNS_C_IN, 0, 0)))
 		panic("dns_p_push: %s", strerror(error));
 
-	dns_header(Q)->rd	= 1;
+print_packet(Q);
+//	dns_header(Q)->rd	= 1;
 
 	if (strstr(argv[0], "udp"))
 		type	= SOCK_DGRAM;
@@ -3340,10 +3348,24 @@ static int send_query(int argc, char *argv[]) {
 		panic("dns_so_open: %s", strerror(error));
 
 	while (!(A = dns_so_query(so, Q, (struct sockaddr *)&ss, &error))) {
+		fd_set rfds, wfds;
+		int rfd, wfd;
+
 		if (error != EAGAIN)
 			panic("dns_so_query: %s(%d)", strerror(error), error);
+		if (dns_so_elapsed(so) > 10)
+			panic("query timed-out");
 
-		sleep(1);
+		FD_ZERO(&rfds);
+		FD_ZERO(&wfds);
+
+		if (-1 != (rfd = dns_so_pollin(so)))
+			FD_SET(rfd, &rfds);
+
+		if (-1 != (wfd = dns_so_pollout(so)))
+			FD_SET(wfd, &wfds);
+
+		select(MAX(rfd, wfd) + 1, &rfds, &wfds, 0, &(struct timeval){ 1, 0 });
 	}
 
 	print_packet(A);
