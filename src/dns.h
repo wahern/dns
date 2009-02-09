@@ -429,6 +429,8 @@ unsigned dns_hosts_acquire(struct dns_hosts *);
 
 unsigned dns_hosts_release(struct dns_hosts *);
 
+struct dns_hosts *dns_hosts_local(int *);
+
 int dns_hosts_loadfile(struct dns_hosts *, FILE *);
 
 int dns_hosts_loadpath(struct dns_hosts *, const char *);
@@ -475,6 +477,10 @@ unsigned dns_resconf_acquire(struct dns_resolv_conf *);
 
 unsigned dns_resconf_release(struct dns_resolv_conf *);
 
+struct dns_resolv_conf *dns_resconf_local(int *);
+
+struct dns_resolv_conf *dns_resconf_root(int *);
+
 int dns_resconf_loadfile(struct dns_resolv_conf *, FILE *);
 
 int dns_resconf_loadpath(struct dns_resolv_conf *, const char *);
@@ -505,9 +511,13 @@ unsigned dns_hints_release(struct dns_hints *);
 
 int dns_hints_insert(struct dns_hints *, const char *, const struct sockaddr *, unsigned);
 
-unsigned dns_hints_insert_resconf(struct dns_hints *, const struct dns_resolv_conf *, int *);
+unsigned dns_hints_insert_resconf(struct dns_hints *, const char *, const struct dns_resolv_conf *, int *);
 
 void dns_hints_update(struct dns_hints *, const char *, const struct sockaddr *, int);
+
+struct dns_hints *dns_hints_local(int *);
+
+struct dns_hints *dns_hints_root(int *);
 
 
 struct dns_hints_i {

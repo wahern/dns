@@ -1162,35 +1162,6 @@ nextrr:
 #endif
 
 
-static size_t dns__print10(void *dst, size_t lim, size_t off, unsigned n) {
-	unsigned cp	= off;
-	unsigned d	= 1000000;
-	unsigned ch;
-
-	if (n == 0) {
-		if (cp < lim)
-			((unsigned char *)dst)[cp]	= '0';
-
-		return 1;
-	}
-
-	while (d) {
-		if ((ch = n / d) || cp > off) {
-			n	-= ch * d;
-
-			if (cp < lim)
-				((unsigned char *)dst)[cp]	= '0' + ch;
-
-			cp++;
-		}
-
-		d	/= 10;
-	}
-
-	return cp - off;
-} /* dns__print10() */
-
-
 static size_t dns__printchar(void *dst, size_t lim, size_t cp, unsigned char ch) {
 	if (cp < lim)
 		((unsigned char *)dst)[cp]	= ch;
@@ -1217,6 +1188,38 @@ static void dns__printnul(void *dst, size_t lim, size_t off) {
 } /* dns__printnul() */
 
 
+static size_t dns__print10(void *dst, size_t lim, size_t off, unsigned n, unsigned pad) {
+	unsigned char tmp[32];
+	unsigned dp	= off;
+	unsigned cp	= 0;
+	unsigned d	= 1000000;
+	unsigned ch;
+
+	pad	= MAX(1, pad);
+	
+	while (d) {
+		if ((ch = n / d) || cp > 0) {
+			n	-= ch * d;
+
+			tmp[cp]	= '0' + ch;
+
+			cp++;
+		}
+
+		d	/= 10;
+	}
+
+	while (cp < pad) {
+		dp	+= dns__printchar(dst, lim, dp, '0');
+		pad--;
+	}
+
+	dp	+= dns__printstring(dst, lim, dp, tmp, cp);
+
+	return dp - off;
+} /* dns__print10() */
+
+
 size_t dns_rr_print(void *dst, size_t lim, struct dns_rr *rr, struct dns_packet *P, int *error_) {
 	union dns_any any;
 	size_t cp, n, rdlen;
@@ -1235,7 +1238,7 @@ size_t dns_rr_print(void *dst, size_t lim, struct dns_rr *rr, struct dns_packet 
 
 	if (rr->section != DNS_S_QD) {
 		cp	+= dns__printchar(dst, lim, cp, ' ');
-		cp	+= dns__print10(dst, lim, cp, rr->ttl);
+		cp	+= dns__print10(dst, lim, cp, rr->ttl, 0);
 	}
 
 	cp	+= dns__printchar(dst, lim, cp, ' ');
@@ -1315,7 +1318,7 @@ size_t dns_a_arpa(void *dst, size_t lim, const struct dns_a *a) {
 	unsigned i;
 
 	for (i = 4; i > 0; i--) {
-		cp	+= dns__print10(dst, lim, cp, (0xff & a4));
+		cp	+= dns__print10(dst, lim, cp, (0xff & a4), 0);
 		cp	+= dns__printchar(dst, lim, cp, '.');
 		a4	>>= 8;
 	}
@@ -1454,7 +1457,7 @@ error:
 size_t dns_mx_print(void *dst, size_t lim, struct dns_mx *mx) {
 	size_t cp	= 0;
 
-	cp	+= dns__print10(dst, lim, cp, mx->preference);
+	cp	+= dns__print10(dst, lim, cp, mx->preference, 0);
 	cp	+= dns__printchar(dst, lim, cp, ' ');
 	cp	+= dns__printstring(dst, lim, cp, mx->host, strlen(mx->host));
 
@@ -1665,7 +1668,7 @@ size_t dns_txt_print(void *dst_, size_t lim, struct dns_txt *txt) {
 
 		if (ch < 32 || ch > 126 || ch == '"' || ch == '\\') {
 			dst.p	+= dns__printchar(dst.b, dst.end, dst.p, '\\');
-			dst.p	+= dns__print10(dst.b, dst.end, dst.p, ch);
+			dst.p	+= dns__print10(dst.b, dst.end, dst.p, ch, 3);
 		} else {
 			dst.p	+= dns__printchar(dst.b, dst.end, dst.p, ch);
 		}
@@ -1763,7 +1766,7 @@ size_t dns_any_print(void *dst_, size_t lim, union dns_any *any, enum dns_type t
 		ch	= src.b[src.p++];
 
 		dst.p	+= dns__printchar(dst.b, dst.end, dst.p, '\\');
-		dst.p	+= dns__print10(dst.b, dst.end, dst.p, ch);
+		dst.p	+= dns__print10(dst.b, dst.end, dst.p, ch, 3);
 	}
 
 	dst.p	+= dns__printchar(dst.b, dst.end, dst.p, '"');
@@ -1847,6 +1850,26 @@ unsigned dns_hosts_acquire(struct dns_hosts *hosts) {
 unsigned dns_hosts_release(struct dns_hosts *hosts) {
 	return dns_atomic_dec(&hosts->refcount);
 } /* dns_hosts_release() */
+
+
+struct dns_hosts *dns_hosts_local(int *error_) {
+	struct dns_hosts *hosts;
+	int error;
+
+	if (!(hosts = dns_hosts_open(&error)))
+		goto error;
+		
+	if ((error = dns_hosts_loadpath(hosts, "/etc/hosts")))
+		goto error;
+
+	return hosts;
+error:
+	*error_	= error;
+
+	dns_hosts_close(hosts);
+
+	return 0;
+} /* dns_hosts_local() */
 
 
 #define dns_hosts_issep(ch)	(isspace(ch))
@@ -2127,6 +2150,56 @@ unsigned dns_resconf_acquire(struct dns_resolv_conf *resconf) {
 unsigned dns_resconf_release(struct dns_resolv_conf *resconf) {
 	return dns_atomic_dec(&resconf->_.refcount);
 } /* dns_resconf_release() */
+
+
+struct dns_resolv_conf *dns_resconf_mortal(struct dns_resolv_conf *resconf) {
+	if (resconf)
+		dns_resconf_release(resconf);
+
+	return resconf;
+} /* dns_resconf_mortal() */
+
+
+struct dns_resolv_conf *dns_resconf_local(int *error_) {
+	struct dns_resolv_conf *resconf;
+	int error;
+
+	if (!(resconf = dns_resconf_open(&error)))
+		goto error;
+
+	if ((error = dns_resconf_loadpath(resconf, "/etc/resolv.conf")))
+		goto error;
+
+	return resconf;
+error:
+	*error_	= error;
+
+	dns_resconf_close(resconf);
+
+	return 0;
+} /* dns_resconf_local() */
+
+
+struct dns_resolv_conf *dns_resconf_root(int *error_) {
+	struct dns_resolv_conf *resconf;
+	int error;
+
+	if (!(resconf = dns_resconf_open(&error)))
+		goto error;
+
+	if ((error = dns_resconf_loadpath(resconf, "/etc/resolv.conf")))
+		goto error;
+
+	resconf->options.recursive	= 1;
+
+	return resconf;
+error:
+	*error_	= error;
+
+	dns_resconf_close(resconf);
+
+	return 0;
+} /* dns_resconf_root() */
 
 
 enum dns_resconf_keyword {
@@ -2527,6 +2600,95 @@ unsigned dns_hints_release(struct dns_hints *H) {
 } /* dns_hints_release() */
 
 
+struct dns_hints *dns_hints_mortal(struct dns_hints *hints) {
+	if (hints)
+		dns_hints_release(hints);
+
+	return hints;
+} /* dns_hints_mortal() */
+
+
+struct dns_hints *dns_hints_local(int *error_) {
+	struct dns_resolv_conf *resconf	= 0;
+	struct dns_hints *hints		= 0;
+	int error;
+
+	if (!(hints = dns_hints_open(&error)))
+		goto error;
+
+	if (!(resconf = dns_resconf_local(&error)))
+		goto error;
+
+	error	= 0;
+
+	if (0 == dns_hints_insert_resconf(hints, ".", resconf, &error) && error)
+		goto error;
+
+	dns_resconf_close(resconf);
+
+	return hints;
+error:
+	*error_	= error;
+
+	dns_resconf_close(resconf);
+	dns_hints_close(hints);
+
+	return 0;
+} /* dns_hints_local() */
+
+
+struct dns_hints *dns_hints_root(int *error_) {
+	static const struct {
+		int af;
+		char addr[INET6_ADDRSTRLEN];
+	} root_hints[] = {
+		{ AF_INET,	"198.41.0.4"		},	/* A.ROOT-SERVERS.NET. */
+		{ AF_INET6,	"2001:503:ba3e::2:30"	},
+		{ AF_INET,	"192.228.79.201"	},	/* B.ROOT-SERVERS.NET. */
+		{ AF_INET,	"192.33.4.12"		},	/* C.ROOT-SERVERS.NET. */
+		{ AF_INET,	"128.8.10.90"		},	/* D.ROOT-SERVERS.NET. */
+		{ AF_INET,	"192.203.230.10"	},	/* E.ROOT-SERVERS.NET. */
+		{ AF_INET,	"192.5.5.241"		},	/* F.ROOT-SERVERS.NET. */
+		{ AF_INET6,	"2001:500:2f::f"	},	/* F.ROOT-SERVERS.NET. */
+		{ AF_INET,	"192.112.36.4"		},	/* G.ROOT-SERVERS.NET. */
+		{ AF_INET,	"128.63.2.53"		},	/* H.ROOT-SERVERS.NET. */
+		{ AF_INET6,	"2001:500:1::803f:235"	},	/* H.ROOT-SERVERS.NET. */
+		{ AF_INET,	"192.36.148.17"		},	/* I.ROOT-SERVERS.NET. */
+		{ AF_INET,	"192.58.128.30"		},	/* J.ROOT-SERVERS.NET. */
+		{ AF_INET6,	"2001:503:c27::2:30"	},	/* J.ROOT-SERVERS.NET. */
+	};
+	struct dns_hints *hints		= 0;
+	struct sockaddr_storage ss;
+	int error, i, af;
+
+	if (!(hints = dns_hints_open(&error)))
+		goto error;
+
+	for (i = 0; i < lengthof(root_hints); i++) {
+		af	= root_hints[i].af;
+
+		if (1 != dns_inet_pton(af, root_hints[i].addr, dns_sa_addr(af, &ss)))
+			goto syerr;
+
+		*dns_sa_port(af, &ss)	= htons(53);
+		ss.ss_family		= af;
+
+		if ((error = dns_hints_insert(hints, ".", (struct sockaddr *)&ss, 1)))
+			goto error;
+	}
+
+	return hints;
+syerr:
+	error	= errno;
+error:
+	*error_	= error;
+
+	dns_hints_close(hints);
+
+	return 0;
+} /* dns_hints_root() */
+
+
 static struct dns_hints_soa *dns_hints_fetch(struct dns_hints *H, const char *zone) {
 	struct dns_hints_soa *soa;
 
@@ -2553,7 +2715,7 @@ int dns_hints_insert(struct dns_hints *H, const char *zone, const struct sockadd
 		dns__printstring(soa->zone, sizeof soa->zone, 0, zone);
 
 		soa->next	= H->head;
-		H->head		= soa->next;
+		H->head		= soa;
 	}
 
 	i	= soa->count % lengthof(soa->addrs);
@@ -2570,12 +2732,12 @@ int dns_hints_insert(struct dns_hints *H, const char *zone, const struct sockadd
 } /* dns_hints_insert() */
 
 
-unsigned dns_hints_insert_resconf(struct dns_hints *H, const struct dns_resolv_conf *resconf, int *error_) {
+unsigned dns_hints_insert_resconf(struct dns_hints *H, const char *zone, const struct dns_resolv_conf *resconf, int *error_) {
 	unsigned i, n;
 	int error;
 
 	for (i = 0, n = 0; i < lengthof(resconf->nameserver) && resconf->nameserver[i].ss_family != AF_UNSPEC; i++) {
-		if ((error = dns_hints_insert(H, ".", (struct sockaddr *)&resconf->nameserver[i], n + 1)))
+		if ((error = dns_hints_insert(H, zone, (struct sockaddr *)&resconf->nameserver[i], n + 1)))
 			goto error;
 
 		n++;
@@ -2700,6 +2862,27 @@ unsigned dns_hints_grep(struct sockaddr **sa, socklen_t *sa_len, unsigned lim, s
 
 	return n;
 } /* dns_hints_grep() */
+
+
+int dns_hints_dump(struct dns_hints *hints, FILE *fp) {
+	struct dns_hints_soa *soa;
+	char addr[INET6_ADDRSTRLEN];
+	int af, i;
+
+	for (soa = hints->head; soa; soa = soa->next) {
+		fprintf(fp, "ZONE \"%s\"\n", soa->zone);
+
+		for (i = 0; i < soa->count; i++) {
+			af	= soa->addrs[i].ss.ss_family;
+			if (!dns_inet_ntop(af, dns_sa_addr(af, &soa->addrs[i].ss), addr, sizeof addr))
+				return errno;
+
+			fprintf(fp, "\t[%s]:%hu\n", addr, ntohs(*dns_sa_port(af, &soa->addrs[i].ss)));
+		}
+	}
+
+	return 0;
+} /* dns_hints_dump() */
 
 
 /*
@@ -3285,7 +3468,7 @@ const char *(dns_strsection)(enum dns_section section, void *dst, size_t lim) {
 
 		break;
 	default:
-		dns__printnul(dst, lim, dns__print10(dst, lim, 0, 0xffff & section));
+		dns__printnul(dst, lim, dns__print10(dst, lim, 0, (0xffff & section), 0));
 
 		break;
 	} /* switch (class) */
@@ -3301,7 +3484,7 @@ const char *(dns_strclass)(enum dns_class class, void *dst, size_t lim) {
 
 		break;
 	default:
-		dns__printnul(dst, lim, dns__print10(dst, lim, 0, 0xffff & class));
+		dns__printnul(dst, lim, dns__print10(dst, lim, 0, (0xffff & class), 0));
 
 		break;
 	} /* switch (class) */
@@ -3321,7 +3504,7 @@ const char *(dns_strtype)(enum dns_type type, void *dst, size_t lim) {
 		}
 	}
 
-	dns__printnul(dst, lim, dns__print10(dst, lim, 0, 0xffff & type));
+	dns__printnul(dst, lim, dns__print10(dst, lim, 0, (0xffff & type), 0));
 
 	return dst;
 } /* dns_strtype() */
@@ -3339,7 +3522,7 @@ const char *dns_stropcode(enum dns_opcode opcode) {
 	opcode	&= 0xf;
 
 	if ('\0' == table[opcode][0])
-		dns__printnul(table[opcode], sizeof table[opcode], dns__print10(table[opcode], sizeof table[opcode], 0, opcode));
+		dns__printnul(table[opcode], sizeof table[opcode], dns__print10(table[opcode], sizeof table[opcode], 0, opcode, 0));
 
 	return table[opcode];
 } /* dns_stropcode() */
@@ -3363,7 +3546,7 @@ const char *dns_strrcode(enum dns_rcode rcode) {
 	rcode	&= 0xf;
 
 	if ('\0' == table[rcode][0])
-		dns__printnul(table[rcode], sizeof table[rcode], dns__print10(table[rcode], sizeof table[rcode], 0, rcode));
+		dns__printnul(table[rcode], sizeof table[rcode], dns__print10(table[rcode], sizeof table[rcode], 0, rcode, 0));
 
 	return table[rcode];
 } /* dns_strrcode() */
@@ -3490,8 +3673,13 @@ static struct dns_hosts *hosts(void) {
 	if (!(hosts = dns_hosts_open(&error)))
 		panic("dns_hosts_open: %s", strerror(error));
 
-	if (!MAIN.hosts.count)
+	if (!MAIN.hosts.count) {
 		MAIN.hosts.path[MAIN.hosts.count++]	= "/etc/hosts";
+
+		/* Explicitly test dns_hosts_local() */
+		if (!(hosts = dns_hosts_local(&error)))
+			panic("%s: %s", "/etc/hosts", strerror(error));
+	}
 
 	for (i = 0; i < MAIN.hosts.count; i++) {
 		path	= MAIN.hosts.path[i];
@@ -3852,6 +4040,21 @@ static int print_arpa(int argc, char *argv[]) {
 } /* print_arpa() */
 
 
+static int show_hints(int argc, char *argv[]) {
+	struct dns_hints *hints;
+	int error;
+	
+	if (!(hints = ((strstr(argv[0], "local"))? dns_hints_local(&error) : dns_hints_root(&error))))
+		panic("%s: %s", argv[0], strerror(error));
+
+	dns_hints_dump(hints, stdout);
+
+	dns_hints_close(hints);
+
+	return 0;
+} /* show_hints() */
+
+
 static const struct { const char *cmd; int (*run)(); const char *help; } cmds[] = {
 	{ "parse-packet",	&parse_packet,	"parse raw packet from stdin" },
 	{ "parse-domain",	&parse_domain,	"anchor and iteratively cleave domain" },
@@ -3865,6 +4068,8 @@ static const struct { const char *cmd; int (*run)(); const char *help; } cmds[] 
 	{ "send-query-udp",	&send_query,	"send udp query to host" },
 	{ "send-query-tcp",	&send_query,	"send tcp query to host" },
 	{ "print-arpa",		&print_arpa,	"print arpa. zone name of address" },
+	{ "show-hints-local",	&show_hints,	"print local hints" },
+	{ "show-hints-root",	&show_hints,	"print root hints" },
 };
 
 
