@@ -175,6 +175,8 @@ struct dns_header {
 #define dns_header(p)	((struct dns_header *)&(p)->data[0])
 
 
+#define DNS_P_MEMSIZE(n)	(offsetof(struct dns_packet, data) + (n))
+
 #ifndef DNS_P_DICTSIZE
 #define DNS_P_DICTSIZE	8
 #endif
@@ -190,14 +192,13 @@ struct dns_packet {
 	unsigned char data[1];
 }; /* struct dns_packet */
 
-
-#define dns_p_new(n)	(dns_p_init((struct dns_packet *)&(union { unsigned char b[offsetof(struct dns_packet, data) + (n)]; struct dns_packet p; }){ { 0 } }, offsetof(struct dns_packet, data) + (n)))
+#define dns_p_new(n)		(dns_p_init((struct dns_packet *)&(union { unsigned char b[DNS_P_MEMSIZE((n))]; struct dns_packet p; }){ { 0 } }, DNS_P_MEMSIZE((n))))
 
 struct dns_packet *dns_p_init(struct dns_packet *, size_t);
 
-#define dns_p_opcode(P)	(dns_header(P)->opcode)
+#define dns_p_opcode(P)		(dns_header(P)->opcode)
 
-#define dns_p_rcode(P)	(dns_header(P)->rcode)
+#define dns_p_rcode(P)		(dns_header(P)->rcode)
 
 unsigned dns_p_count(struct dns_packet *, enum dns_section);
 
@@ -362,6 +363,19 @@ size_t dns_cname_print(void *, size_t, struct dns_cname *);
 
 
 /*
+ * PTR  R E S O U R C E  R E C O R D
+ */
+
+struct dns_ptr {
+	char host[256];
+}; /* struct dns_ptr */
+
+int dns_ptr_parse(struct dns_ptr *, struct dns_rr *, struct dns_packet *);
+int dns_ptr_push(struct dns_packet *, struct dns_ptr *);
+size_t dns_ptr_print(void *, size_t, struct dns_ptr *);
+
+
+/*
  * TXT  R E S O U R C E  R E C O R D
  */
 
@@ -421,11 +435,9 @@ int dns_hosts_loadpath(struct dns_hosts *, const char *);
 
 int dns_hosts_dump(struct dns_hosts *, FILE *);
 
-int dns_hosts_insert(struct dns_hosts *, int, const void *, const void *);
+int dns_hosts_insert(struct dns_hosts *, int, const void *, const void *, _Bool);
 
-typedef void *dns_hosts_i_t;
-
-unsigned dns_hosts_search(void *, unsigned, int, const void *, struct dns_hosts *, dns_hosts_i_t *);
+struct dns_packet *dns_hosts_query(struct dns_hosts *, struct dns_packet *, int *);
 
 
 /*
@@ -471,7 +483,9 @@ int dns_resconf_dump(struct dns_resolv_conf *, FILE *);
 
 int dns_resconf_setiface(struct dns_resolv_conf *, const char *, unsigned short);
 
-size_t dns_resconf_search(void *, size_t, const void *, size_t, struct dns_resolv_conf *, unsigned long *);
+typedef unsigned long dns_resconf_i_t;
+
+size_t dns_resconf_search(void *, size_t, const void *, size_t, struct dns_resolv_conf *, dns_resconf_i_t *);
 
 
 /*

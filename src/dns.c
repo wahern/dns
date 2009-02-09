@@ -1309,6 +1309,25 @@ int dns_a_push(struct dns_packet *P, struct dns_a *a) {
 } /* dns_a_push() */
 
 
+size_t dns_a_arpa(void *dst, size_t lim, const struct dns_a *a) {
+	unsigned long a4	= ntohl(a->addr.s_addr);
+	size_t cp		= 0;
+	unsigned i;
+
+	for (i = 4; i > 0; i--) {
+		cp	+= dns__print10(dst, lim, cp, (0xff & a4));
+		cp	+= dns__printchar(dst, lim, cp, '.');
+		a4	>>= 8;
+	}
+
+	cp	+= dns__printstring(dst, lim, cp, "in-addr.arpa.");
+
+	dns__printnul(dst, lim, cp);
+
+	return cp;
+} /* dns_a_arpa() */
+
+
 size_t dns_a_print(void *dst, size_t lim, struct dns_a *a) {
 	char addr[INET_ADDRSTRLEN + 1]	= "0.0.0.0";
 	size_t len;
@@ -1344,6 +1363,30 @@ int dns_aaaa_push(struct dns_packet *P, struct dns_aaaa *aaaa) {
 
 	return 0;
 } /* dns_aaaa_push() */
+
+
+size_t dns_aaaa_arpa(void *dst, size_t lim, const struct dns_aaaa *aaaa) {
+	static const unsigned char hex[16]	= "0123456789abcdef";
+	size_t cp		= 0;
+	unsigned nyble;
+	int i, j;
+
+	for (i = sizeof aaaa->addr.s6_addr - 1; i >= 0; i--) {
+		nyble	= aaaa->addr.s6_addr[i];
+
+		for (j = 0; j < 2; j++) {
+			cp	+= dns__printchar(dst, lim, cp, hex[0x0f & nyble]);
+			cp	+= dns__printchar(dst, lim, cp, '.');
+			nyble	>>= 4;
+		}
+	}
+
+	cp	+= dns__printstring(dst, lim, cp, "ip6.arpa.");
+
+	dns__printnul(dst, lim, cp);
+
+	return cp;
+} /* dns_aaaa_arpa() */
 
 
 size_t dns_aaaa_print(void *dst, size_t lim, struct dns_aaaa *aaaa) {
@@ -1488,6 +1531,32 @@ size_t dns_cname_print(void *dst, size_t lim, struct dns_cname *cname) {
 } /* dns_cname_print() */
 
 
+int dns_ptr_parse(struct dns_ptr *ptr, struct dns_rr *rr, struct dns_packet *P) {
+	return dns_ns_parse((struct dns_ns *)ptr, rr, P);
+} /* dns_ptr_parse() */
+
+
+int dns_ptr_push(struct dns_packet *P, struct dns_ptr *ptr) {
+	return dns_ns_push(P, (struct dns_ns *)ptr);
+} /* dns_ptr_push() */
+
+
+size_t dns_ptr_qname(void *dst, size_t lim, int af, void *addr) {
+	unsigned len	= (af == AF_INET6)
+			? dns_aaaa_arpa(dst, lim, addr)
+			: dns_a_arpa(dst, lim, addr);
+
+	dns__printnul(dst, lim, len);
+
+	return len;
+} /* dns_ptr_qname() */
+
+
+size_t dns_ptr_print(void *dst, size_t lim, struct dns_ptr *ptr) {
+	return dns_ns_print(dst, lim, (struct dns_ns *)ptr);
+} /* dns_ptr_print() */
+
+
 struct dns_txt *dns_txt_init(struct dns_txt *txt, size_t size) {
 	assert(size > offsetof(struct dns_txt, data));
 
@@ -1622,6 +1691,7 @@ static const struct {
 	{ DNS_T_MX,    "MX",    &dns_mx_parse,    &dns_mx_push,    &dns_mx_print    },
 	{ DNS_T_NS,    "NS",    &dns_ns_parse,    &dns_ns_push,    &dns_ns_print    },
 	{ DNS_T_CNAME, "CNAME", &dns_cname_parse, &dns_cname_push, &dns_cname_print },
+	{ DNS_T_PTR,   "PTR",   &dns_ptr_parse,   &dns_ptr_push,   &dns_ptr_print   },
 	{ DNS_T_TXT,   "TXT",   &dns_txt_parse,   &dns_txt_push,   &dns_txt_print   },
 }; /* dns_rrtypes[] */
 
@@ -1711,7 +1781,8 @@ size_t dns_any_print(void *dst_, size_t lim, union dns_any *any, enum dns_type t
 
 struct dns_hosts {
 	struct dns_hosts_entry {
-		unsigned char host[DNS_D_MAXNAME + 1];
+		char host[DNS_D_MAXNAME + 1];
+		char arpa[73 + 1];
 
 		int af;
 
@@ -1719,6 +1790,8 @@ struct dns_hosts {
 			struct in_addr a4;
 			struct in6_addr a6;
 		} addr;
+
+		_Bool alias;
 
 		struct dns_hosts_entry *next;
 	} *head, **tail;
@@ -1829,7 +1902,7 @@ int dns_hosts_loadfile(struct dns_hosts *hosts, FILE *fp) {
 
 				dns_d_anchor(ent.host, sizeof ent.host, word, strlen(word));
 
-				if ((error = dns_hosts_insert(hosts, ent.af, &ent.addr, ent.host)))
+				if ((error = dns_hosts_insert(hosts, ent.af, &ent.addr, ent.host, (wc > 2))))
 					return error;
 
 				break;
@@ -1873,7 +1946,7 @@ int dns_hosts_dump(struct dns_hosts *hosts, FILE *fp) {
 
 		fputc(' ', fp);
 
-		fputs((char *)ent->host, fp);
+		fputs(ent->host, fp);
 		fputc('\n', fp);
 	}
 
@@ -1881,7 +1954,7 @@ int dns_hosts_dump(struct dns_hosts *hosts, FILE *fp) {
 } /* dns_hosts_dump() */
 
 
-int dns_hosts_insert(struct dns_hosts *hosts, int af, const void *addr, const void *host) {
+int dns_hosts_insert(struct dns_hosts *hosts, int af, const void *addr, const void *host, _Bool alias) {
 	struct dns_hosts_entry *ent;
 	int error;
 
@@ -1894,9 +1967,13 @@ int dns_hosts_insert(struct dns_hosts *hosts, int af, const void *addr, const vo
 	case AF_INET6:
 		memcpy(&ent->addr.a6, addr, sizeof ent->addr.a6);
 
+		dns_aaaa_arpa(ent->arpa, sizeof ent->arpa, addr);
+
 		break;
 	case AF_INET:
 		memcpy(&ent->addr.a4, addr, sizeof ent->addr.a4);
+
+		dns_a_arpa(ent->arpa, sizeof ent->arpa, addr);
 
 		break;
 	default:
@@ -1904,6 +1981,8 @@ int dns_hosts_insert(struct dns_hosts *hosts, int af, const void *addr, const vo
 
 		goto error;
 	} /* switch() */
+
+	ent->alias	= alias;
 
 	ent->next	= 0;
 	*hosts->tail	= ent;
@@ -1919,47 +1998,78 @@ error:
 } /* dns_hosts_insert() */
 
 
-unsigned dns_hosts_search(void *addr_, unsigned lim, int af, const void *host_, struct dns_hosts *hosts, dns_hosts_i_t *i) {
-	static struct dns_hosts_entry last;
+struct dns_packet *dns_hosts_query(struct dns_hosts *hosts, struct dns_packet *Q, int *error_) {
+	struct dns_packet *P	= dns_p_new(512);
+	struct dns_packet *A	= 0;
+	struct dns_rr rr;
 	struct dns_hosts_entry *ent;
-	char host[DNS_D_MAXNAME + 1];
-	unsigned count;
-	union { struct in_addr *a4; struct in6_addr *a6; } addr	= { addr_ };
+	int error, af;
+	char qname[DNS_D_MAXNAME + 1];
+	size_t qlen;
 
-	dns_d_anchor(host, sizeof host, host_, strlen(host_));
+	if ((error = dns_rr_parse(&rr, 12, Q)))
+		goto error;
 
-	ent	= (*i)? *i : hosts->head;
-	count	= 0;
+	if (0 == (qlen = dns_d_expand(qname, sizeof qname, rr.dn.p, Q, &error)))
+		goto error;
 
-	while (ent != 0 && ent != &last && count < lim) {
-		if (ent->af == af && 0 == strcasecmp((char *)ent->host, host)) {
-			switch (af) {
-			case AF_INET6:
-				memcpy(addr.a6, &ent->addr.a6, sizeof *addr.a6);
+	if (qlen >= sizeof qname)
+		{ error = EINVAL; goto error; }
 
-				addr.a6++;
+	if ((error = dns_p_push(P, DNS_S_QD, qname, qlen, rr.type, rr.class, 0, 0)))
+		goto error;
 
-				count++;
+	switch (rr.type) {
+	case DNS_T_PTR:
+		for (ent = hosts->head; ent; ent = ent->next) {
+			if (ent->alias || 0 != strcasecmp(qname, ent->arpa))
+				continue;
 
-				break;
-			case AF_INET:
-				memcpy(addr.a4, &ent->addr.a4, sizeof *addr.a4);
-
-				addr.a4++;
-
-				count++;
-
-				break;
-			} /* switch() */
+			if ((error = dns_p_push(P, DNS_S_AN, qname, qlen, rr.type, rr.class, 0, ent->host)))
+				goto error;
 		}
 
-		ent	= ent->next;
-	} /* while() */
+		break;
+	case DNS_T_AAAA:
+		af	= AF_INET6;
 
-	*i	= (ent)? ent : &last;
+		goto loop;
+	case DNS_T_A:
+		af	= AF_INET;
 
-	return count;
-} /* dns_hosts_search() */
+loop:		for (ent = hosts->head; ent; ent = ent->next) {
+			if (ent->af != af || 0 != strcasecmp(qname, ent->host))
+				continue;
+
+			if ((error = dns_p_push(P, DNS_S_AN, qname, qlen, rr.type, rr.class, 0, &ent->addr)))
+				goto error;
+		}
+
+		break;
+	default:
+		return 0;
+	} /* switch() */
+
+
+	if (!(A = malloc(DNS_P_MEMSIZE(P->size))))
+		goto syerr;
+
+	dns_p_init(A, DNS_P_MEMSIZE(P->size));
+
+	memcpy(A->data, P->data, A->size);
+
+	A->end	= P->end;
+
+	return A;
+syerr:
+	error	= errno;
+error:
+	*error_	= error;
+
+	free(A);
+
+	return 0;
+} /* dns_hosts_query() */
 
 
 /*
@@ -2217,7 +2327,7 @@ int dns_resconf_setiface(struct dns_resolv_conf *resconf, const char *addr, unsi
 } /* dns_resconf_setiface() */
 
 
-size_t dns_resconf_search(void *dst, size_t lim, const void *qname, size_t qlen, struct dns_resolv_conf *resconf, unsigned long *state) {
+size_t dns_resconf_search(void *dst, size_t lim, const void *qname, size_t qlen, struct dns_resolv_conf *resconf, dns_resconf_i_t *state) {
 	unsigned srchi		= 0xff & (*state >> 8);
 	unsigned ndots		= 0xff & (*state >> 16);
 	unsigned slen, len	= 0;
@@ -3556,6 +3666,45 @@ static int show_hosts(int argc, char *argv[]) {
 } /* show_hosts() */
 
 
+static int query_hosts(int argc, char *argv[]) {
+	struct dns_packet *Q	= dns_p_new(512);
+	struct dns_packet *A;
+	char qname[DNS_D_MAXNAME + 1];
+	size_t qlen;
+	int error;
+
+	if (!MAIN.qname)
+		MAIN.qname	= (argc > 1)? argv[1] : "localhost";
+	if (!MAIN.qtype)
+		MAIN.qtype	= DNS_T_A;
+
+	hosts();
+
+	if (MAIN.qtype == DNS_T_PTR && !strstr(MAIN.qname, "arpa")) {
+		union { struct in_addr a; struct in6_addr a6; } addr;
+		int af	= (strchr(MAIN.qname, ':'))? AF_INET6 : AF_INET;
+
+		if (1 != dns_inet_pton(af, MAIN.qname, &addr))
+			panic("%s: %s", MAIN.qname, strerror(error));
+
+		qlen	= dns_ptr_qname(qname, sizeof qname, af, &addr);
+	} else
+		qlen	= dns__printstring(qname, sizeof qname, 0, MAIN.qname);
+
+	if ((error = dns_p_push(Q, DNS_S_QD, qname, qlen, MAIN.qtype, DNS_C_IN, 0, 0)))
+		panic("%s: %s", qname, strerror(error));
+
+	if (!(A = dns_hosts_query(hosts(), Q, &error)))
+		panic("%s: %s", qname, strerror(error));
+
+	print_packet(A);
+
+	free(A);
+
+	return 0;
+} /* query_hosts() */
+
+
 static int search_list(int argc, char *argv[]) {
 	const char *qname	= (argc > 1)? argv[1] : "f.l.google.com";
 	unsigned long i		= 0;
@@ -3644,8 +3793,8 @@ static int send_query(int argc, char *argv[]) {
 	if ((error = dns_p_push(Q, DNS_S_QD, MAIN.qname, strlen(MAIN.qname), MAIN.qtype, DNS_C_IN, 0, 0)))
 		panic("dns_p_push: %s", strerror(error));
 
-print_packet(Q);
-//	dns_header(Q)->rd	= 1;
+//print_packet(Q);
+	dns_header(Q)->rd	= 1;
 
 	if (strstr(argv[0], "udp"))
 		type	= SOCK_DGRAM;
@@ -3688,17 +3837,34 @@ print_packet(Q);
 } /* send_query() */
 
 
+static int print_arpa(int argc, char *argv[]) {
+	const char *ip	= (argc > 1)? argv[1] : "::1";
+	int af		= (strchr(ip, ':'))? AF_INET6 : AF_INET;
+	union { struct in_addr a4; struct in6_addr a6; } addr;
+	char host[DNS_D_MAXNAME + 1];
+
+	if (1 != dns_inet_pton(af, ip, &addr) || 0 == dns_ptr_qname(host, sizeof host, af, &addr))
+		panic("%s: invalid address", ip);
+
+	fprintf(stdout, "%s\n", host);
+
+	return 0;
+} /* print_arpa() */
+
+
 static const struct { const char *cmd; int (*run)(); const char *help; } cmds[] = {
 	{ "parse-packet",	&parse_packet,	"parse raw packet from stdin" },
 	{ "parse-domain",	&parse_domain,	"anchor and iteratively cleave domain" },
 	{ "show-resconf",	&show_resconf,	"show resolv.conf data" },
 	{ "show-hosts",		&show_hosts,	"show hosts data" },
+	{ "query-hosts",	&query_hosts,	"query A, AAAA or PTR in hosts data" },
 	{ "search-list",	&search_list,	"generate query search list from domain" },
 	{ "permute-set",	&permute_set,	"generate random permutation -> (0 .. N or N .. M)" },
 	{ "dump-random",	&dump_random,	"generate random bytes" },
 	{ "send-query",		&send_query,	"send query to host" },
 	{ "send-query-udp",	&send_query,	"send udp query to host" },
 	{ "send-query-tcp",	&send_query,	"send tcp query to host" },
+	{ "print-arpa",		&print_arpa,	"print arpa. zone name of address" },
 };
 
 
