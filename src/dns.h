@@ -37,12 +37,19 @@
 
 
 enum dns_section {
-	DNS_S_QD	= 0x01,
-	DNS_S_AN	= 0x02,
-	DNS_S_NS	= 0x04,
-	DNS_S_AR	= 0x08,
+	DNS_S_QD		= 0x01,
+#define DNS_S_QUESTION		DNS_S_QD
 
-	DNS_S_ALL	= 0x0f
+	DNS_S_AN		= 0x02,
+#define DNS_S_ANSWER		DNS_S_AN
+
+	DNS_S_NS		= 0x04,
+#define DNS_S_AUTHORITY		DNS_S_NS
+
+	DNS_S_AR		= 0x08,
+#define DNS_S_ADDITIONAL	DNS_S_AR
+
+	DNS_S_ALL		= 0x0f
 }; /* enum dns_section */
 
 
@@ -175,8 +182,6 @@ struct dns_header {
 #define dns_header(p)	((struct dns_header *)&(p)->data[0])
 
 
-#define DNS_P_MEMSIZE(n)	(offsetof(struct dns_packet, data) + (n))
-
 #ifndef DNS_P_DICTSIZE
 #define DNS_P_DICTSIZE	8
 #endif
@@ -192,9 +197,13 @@ struct dns_packet {
 	unsigned char data[1];
 }; /* struct dns_packet */
 
-#define dns_p_new(n)		(dns_p_init((struct dns_packet *)&(union { unsigned char b[DNS_P_MEMSIZE((n))]; struct dns_packet p; }){ { 0 } }, DNS_P_MEMSIZE((n))))
+#define dns_p_sizeof(P)		(offsetof(struct dns_packet, data) + P->end)
+
+#define dns_p_new(n)		(dns_p_init((struct dns_packet *)&(union { unsigned char b[offsetof(struct dns_packet, data) + (n)]; struct dns_packet p; }){ { 0 } }, (offsetof(struct dns_packet, data) + (n))))
 
 struct dns_packet *dns_p_init(struct dns_packet *, size_t);
+
+struct dns_packet *dns_p_copy(struct dns_packet *, const struct dns_packet *);
 
 #define dns_p_opcode(P)		(dns_header(P)->opcode)
 
@@ -429,6 +438,8 @@ unsigned dns_hosts_acquire(struct dns_hosts *);
 
 unsigned dns_hosts_release(struct dns_hosts *);
 
+struct dns_hosts *dns_hosts_mortal(struct dns_hosts *);
+
 struct dns_hosts *dns_hosts_local(int *);
 
 int dns_hosts_loadfile(struct dns_hosts *, FILE *);
@@ -455,11 +466,13 @@ struct dns_resolv_conf {
 	char lookup[3];
 
 	struct {
-		int edns0;
+		_Bool edns0;
 
 		unsigned ndots;
 
-		int recursive;
+		_Bool recurse;
+
+		_Bool super_glue;
 	} options;
 
 	struct sockaddr_storage interface;
@@ -476,6 +489,8 @@ void dns_resconf_close(struct dns_resolv_conf *);
 unsigned dns_resconf_acquire(struct dns_resolv_conf *);
 
 unsigned dns_resconf_release(struct dns_resolv_conf *);
+
+struct dns_resolv_conf *dns_resconf_mortal(struct dns_resolv_conf *);
 
 struct dns_resolv_conf *dns_resconf_local(int *);
 
@@ -508,6 +523,8 @@ void dns_hints_close(struct dns_hints *);
 unsigned dns_hints_acquire(struct dns_hints *);
 
 unsigned dns_hints_release(struct dns_hints *);
+
+struct dns_hints *dns_hints_mortal(struct dns_hints *);
 
 int dns_hints_insert(struct dns_hints *, const char *, const struct sockaddr *, unsigned);
 
@@ -571,7 +588,9 @@ int dns_so_pollout(struct dns_socket *);
 
 struct dns_resolver;
 
-struct dns_resolver *dns_r_open(struct dns_resolv_conf *, struct dns_hints *, int *);
+struct dns_resolver *dns_r_open(struct dns_resolv_conf *, struct dns_hosts *hosts, struct dns_hints *, int *);
+
+void dns_r_reset(struct dns_resolver *);
 
 void dns_r_close(struct dns_resolver *);
 
@@ -590,4 +609,5 @@ unsigned dns_r_release(struct dns_resolver *);
 #define DNS_PP_CALL(F, ...)	F(__VA_ARGS__)
 #define DNS_PP_PASTE(x, y)	x##y
 #define DNS_PP_XPASTE(x, y)	DNS_PP_PASTE(x, y)
-
+#define DNS_PP_STRINGIFY_(s)	#s
+#define DNS_PP_STRINGIFY(s)	DNS_PP_STRINGIFY_(s)

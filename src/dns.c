@@ -492,6 +492,9 @@ unsigned dns_p_count(struct dns_packet *P, enum dns_section section) {
 struct dns_packet *dns_p_init(struct dns_packet *P, size_t size) {
 	static const struct dns_packet P_initializer;
 
+	if (!P)
+		return 0;
+
 	assert(size >= offsetof(struct dns_packet, data) + 12);
 
 	*P	= P_initializer;
@@ -502,6 +505,18 @@ struct dns_packet *dns_p_init(struct dns_packet *P, size_t size) {
 
 	return P;
 } /* dns_p_init() */
+
+
+struct dns_packet *dns_p_copy(struct dns_packet *P, const struct dns_packet *P0) {
+	if (!P)
+		return 0;
+
+	P->end	= MIN(P->size, P0->end);
+
+	memcpy(P->data, P0->data, P->end);
+
+	return P;
+} /* dns_p_copy() */
 
 
 void dns_p_dictadd(struct dns_packet *P, unsigned short dn) {
@@ -959,6 +974,8 @@ int dns_rr_parse(struct dns_rr *rr, unsigned short src, struct dns_packet *P) {
 	p	+= 4;
 
 	if (src == 12) {
+		rr->section	= DNS_S_QUESTION;
+
 		rr->ttl		= 0;
 		rr->rd.p	= 0;
 		rr->rd.len	= 0;
@@ -1852,6 +1869,14 @@ unsigned dns_hosts_release(struct dns_hosts *hosts) {
 } /* dns_hosts_release() */
 
 
+struct dns_hosts *dns_hosts_mortal(struct dns_hosts *hosts) {
+	if (hosts)
+		dns_hosts_release(hosts);
+
+	return hosts;
+} /* dns_hosts_mortal() */
+
+
 struct dns_hosts *dns_hosts_local(int *error_) {
 	struct dns_hosts *hosts;
 	int error;
@@ -2074,14 +2099,8 @@ loop:		for (ent = hosts->head; ent; ent = ent->next) {
 	} /* switch() */
 
 
-	if (!(A = malloc(DNS_P_MEMSIZE(P->size))))
+	if (!(A = dns_p_copy(dns_p_init(malloc(dns_p_sizeof(P)), dns_p_sizeof(P)), P)))
 		goto syerr;
-
-	dns_p_init(A, DNS_P_MEMSIZE(P->size));
-
-	memcpy(A->data, P->data, A->size);
-
-	A->end	= P->end;
 
 	return A;
 syerr:
@@ -2190,7 +2209,7 @@ struct dns_resolv_conf *dns_resconf_root(int *error_) {
 	if ((error = dns_resconf_loadpath(resconf, "/etc/resolv.conf")))
 		goto error;
 
-	resconf->options.recursive	= 1;
+	resconf->options.recurse	= 1;
 
 	return resconf;
 error:
@@ -2212,7 +2231,7 @@ enum dns_resconf_keyword {
 	DNS_RESCONF_OPTIONS,
 	DNS_RESCONF_EDNS0,
 	DNS_RESCONF_NDOTS,
-	DNS_RESCONF_RECURSIVE,
+	DNS_RESCONF_RECURSE,
 	DNS_RESCONF_INTERFACE,
 }; /* enum dns_resconf_keyword */ 
 
@@ -2226,7 +2245,7 @@ static enum dns_resconf_keyword dns_resconf_keyword(const char *word) {
 		[DNS_RESCONF_BIND]		= "bind",
 		[DNS_RESCONF_OPTIONS]		= "options",
 		[DNS_RESCONF_EDNS0]		= "edns0",
-		[DNS_RESCONF_RECURSIVE]		= "recursive",
+		[DNS_RESCONF_RECURSE]		= "recurse",
 		[DNS_RESCONF_INTERFACE]		= "interface",
 	};
 	unsigned i;
@@ -2344,8 +2363,8 @@ skip:
 					resconf->options.ndots	= n;
 
 					break;
-				case DNS_RESCONF_RECURSIVE:
-					resconf->options.recursive	= 1;
+				case DNS_RESCONF_RECURSE:
+					resconf->options.recurse	= 1;
 
 					break;
 				default:
@@ -2502,8 +2521,8 @@ int dns_resconf_dump(struct dns_resolv_conf *resconf, FILE *fp) {
 
 	if (resconf->options.edns0)
 		fprintf(fp, " edns0");
-	if (resconf->options.recursive)
-		fprintf(fp, " recursive");
+	if (resconf->options.recurse)
+		fprintf(fp, " recurse");
 	
 	fputc('\n', fp);
 
@@ -2862,6 +2881,58 @@ unsigned dns_hints_grep(struct sockaddr **sa, socklen_t *sa_len, unsigned lim, s
 
 	return n;
 } /* dns_hints_grep() */
+
+
+struct dns_packet *dns_hints_query(struct dns_hints *hints, struct dns_packet *Q, int *error_) {
+	struct dns_packet *A, *P;
+	struct dns_rr rr;
+	char zone[DNS_D_MAXNAME + 1];
+	size_t zlen;
+	struct dns_hints_i i;
+	struct sockaddr *sa;
+	socklen_t slen;
+	int error;
+
+	if (!dns_rr_grep(&rr, 1, dns_rr_i_new(.section = DNS_S_QUESTION), Q, &error))
+		goto error;
+
+	if (!(zlen = dns_d_expand(zone, sizeof zone, rr.dn.p, Q, &error)))
+		goto error;
+
+	P			= dns_p_new(512);
+	dns_header(P)->qr	= 1;
+
+	if ((error = dns_rr_copy(P, &rr, Q)))
+		goto error;
+
+	if ((error = dns_p_push(P, DNS_S_AUTHORITY, ".", strlen("."), DNS_T_NS, DNS_C_IN, 0, "hints.local.")))
+		goto error;
+
+	do {
+		i.zone	= zone;
+
+		dns_hints_i_init(&i);
+
+		while (dns_hints_grep(&sa, &slen, 1, &i, hints)) {
+			int af		= sa->sa_family;
+			int rtype	= (af == AF_INET6)? DNS_T_AAAA : DNS_T_A;
+
+			if ((error = dns_p_push(P, DNS_S_ADDITIONAL, "hints.local.", strlen("hints.local."), rtype, DNS_C_IN, 0, dns_sa_addr(af, sa))))
+				goto error;
+		}
+	} while ((zlen = dns_d_cleave(zone, sizeof zone, zone, zlen)));
+
+	if (!(A = dns_p_copy(dns_p_init(malloc(dns_p_sizeof(P)), dns_p_sizeof(P)), P)))
+		goto syerr;
+
+	return A;
+syerr:
+	error	= errno;
+error:
+	*error_	= error;
+
+	return 0;
+} /* dns_hints_query() */
 
 
 int dns_hints_dump(struct dns_hints *hints, FILE *fp) {
@@ -3380,54 +3451,122 @@ int dns_so_pollout(struct dns_socket *so) {
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+enum {
+	DNS_R_INIT,
+
+	DNS_R_HOSTS_EARLY,
+	DNS_R_HOSTS_LATE,
+
+	DNS_R_DONE,
+};
+
+
+#define DNS_R_MAXDEPTH	8
+
 struct dns_resolver {
 	struct dns_socket so;
 
 	struct dns_resolv_conf *resconf;
+	struct dns_hosts *hosts;
 	struct dns_hints *hints;
 
 	dns_atomic_t refcount;
 
-	unsigned char qname[DNS_D_MAXNAME];
+	/* Reset zeroes everything below here. */
+
+	char qname[DNS_D_MAXNAME + 1];
+	size_t qlen;
+
+	enum dns_type qtype;
+	enum dns_class qclass;
+
+	dns_resconf_i_t search;
+
+	struct dns_r_state {
+		int state;
+
+		struct dns_packet *query, *answer;
+	} stack[DNS_R_MAXDEPTH];
+
+	unsigned sp;
 }; /* struct dns_resolver */
 
 
-struct dns_resolver *dns_r_open(struct dns_resolv_conf *resconf, struct dns_hints *hints, int *error) {
+struct dns_resolver *dns_r_open(struct dns_resolv_conf *resconf, struct dns_hosts *hosts, struct dns_hints *hints, int *error_) {
 	static const struct dns_resolver R_initializer
 		= { .refcount = 1, };
-	struct dns_resolver *R;
+	struct dns_resolver *R	= 0;
+	int error;
+
+	/*
+	 * Grab ref count early because the caller may have passed us a mortal
+	 * reference, and we want to do the right thing if we return early
+	 * from an error.
+	 */ 
+	if (resconf)
+		dns_resconf_acquire(resconf);
+	if (hosts)
+		dns_hosts_acquire(hosts);
+	if (hints)
+		dns_hints_acquire(hints);
+
+	if (!resconf && !(resconf = dns_resconf_local(&error)))
+		goto error;
+	if (!hosts && !(hosts = dns_hosts_local(&error)))
+		goto error;
+	if (!hints && !(hints = dns_hints_local(&error)))
+		goto error;
 
 	if (!(R = malloc(sizeof *R)))
 		goto syerr;
 
 	*R	= R_initializer;
 
-	if (!dns_so_init(&R->so, (struct sockaddr *)&resconf->interface, 0, error))
+	if (!dns_so_init(&R->so, (struct sockaddr *)&resconf->interface, 0, &error))
 		goto error;
 
-	dns_resconf_acquire(resconf);
 	R->resconf	= resconf;
-
-	dns_hints_acquire(hints);
+	R->hosts	= hosts;
 	R->hints	= hints;
 
 	return R;
 syerr:
-	*error	= errno;
+	error	= errno;
 error:
+	*error_	= error;
+
 	dns_r_close(R);
+
+	dns_resconf_close(resconf);
+	dns_hosts_close(hosts);
+	dns_hints_close(hints);
 
 	return 0;
 } /* dns_r_open() */
+
+
+void dns_r_reset(struct dns_resolver *R) {
+	dns_so_reset(&R->so);
+
+	do {
+		free(R->stack[R->sp].query);
+		free(R->stack[R->sp].answer);
+	} while (R->sp--);
+
+	memset(&R->qname, '\0', sizeof *R - offsetof(struct dns_resolver, qname));
+} /* dns_r_reset() */
 
 
 void dns_r_close(struct dns_resolver *R) {
 	if (!R || 1 < dns_r_release(R))
 		return;
 
+	dns_r_reset(R);
+
 	dns_so_destroy(&R->so);
 
 	dns_hints_close(R->hints);
+	dns_hosts_close(R->hosts);
 	dns_resconf_close(R->resconf);
 
 	free(R);
@@ -3442,6 +3581,70 @@ unsigned dns_r_acquire(struct dns_resolver *R) {
 unsigned dns_r_release(struct dns_resolver *R) {
 	return dns_atomic_dec(&R->refcount);
 } /* dns_r_release() */
+
+
+#define goto(sp, i)	\
+	do { R->stack[(sp)].state = (i); goto exec; } while (0)
+
+static int dns_r_exec(struct dns_resolver *R) {
+	struct dns_r_state *F;
+	int error;
+
+exec:
+
+	F	= &R->stack[R->sp];
+
+	switch (F->state) {
+	case DNS_R_INIT:
+		F->state++;
+	case DNS_R_HOSTS_EARLY:
+		if (R->resconf->lookup[0] == 'f') {
+			if (!(F->answer = dns_hosts_query(R->hosts, F->query, &error)))
+				goto error;
+
+			if (dns_p_count(F->answer, DNS_S_AN) > 0)
+				goto(R->sp, DNS_R_DONE);
+
+			free(F->answer); F->answer = 0;
+		}
+
+		F->state++;
+	case DNS_R_HOSTS_LATE:
+		if (!F->answer && R->resconf->lookup[1] == 'f') {
+			if (!(F->answer = dns_hosts_query(R->hosts, F->query, &error)))
+				goto error;
+
+			if (dns_p_count(F->answer, DNS_S_AN) > 0)
+				goto(R->sp, DNS_R_DONE);
+
+			free(F->answer); F->answer = 0;
+		}
+
+		F->state++;
+	default:
+		error	= EINVAL;
+
+		goto error;
+	} /* switch () */
+
+	return 0;
+error:
+	return error;
+} /* dns_r_exec() */
+
+
+int dns_r_pollin(struct dns_resolver *R) {
+	return dns_so_pollin(&R->so);
+} /* dns_r_pollin() */
+
+
+int dns_r_pollout(struct dns_resolver *R) {
+	return dns_so_pollout(&R->so);
+} /* dns_r_pollout() */
+
+
+
+
 
 
 /*
@@ -3629,6 +3832,11 @@ static void panic(const char *fmt, ...) {
 
 	verrx(EXIT_FAILURE, fmt, ap);
 } /* panic() */
+
+#define panic_(fn, ln, fmt, ...)	\
+	panic(fmt "%0s", (fn), (ln), __VA_ARGS__)
+#define panic(...)			\
+	panic_(__func__, __LINE__, "(%s:%d) " __VA_ARGS__, "")
 
 
 static struct dns_resolv_conf *resconf(void) {
@@ -3911,8 +4119,8 @@ int permute_set(int argc, char *argv[]) {
 	unsigned lo, hi, i;
 	struct dns_k_permutor p;
 
-	hi	= (--argc)? atoi(argv[argc]) : 8;
-	lo	= (--argc)? atoi(argv[argc]) : 0;
+	hi	= (--argc > 0)? atoi(argv[argc]) : 8;
+	lo	= (--argc > 0)? atoi(argv[argc]) : 0;
 
 	fprintf(stdout, "[%u .. %u]\n", lo, hi);
 
@@ -4041,13 +4249,39 @@ static int print_arpa(int argc, char *argv[]) {
 
 
 static int show_hints(int argc, char *argv[]) {
+	struct dns_hints *(*load)(int *);
+	const char *which, *how, *who;
 	struct dns_hints *hints;
 	int error;
-	
-	if (!(hints = ((strstr(argv[0], "local"))? dns_hints_local(&error) : dns_hints_root(&error))))
+
+	which	= (argc > 1)? argv[1] : "local";
+	how	= (argc > 2)? argv[2] : "plain";
+	who	= (argc > 3)? argv[3] : "google.com";
+
+	load	= (0 == strcmp(which, "local"))
+		? &dns_hints_local
+		: &dns_hints_root;
+
+	if (!(hints = load(&error)))
 		panic("%s: %s", argv[0], strerror(error));
 
-	dns_hints_dump(hints, stdout);
+	if (0 == strcmp(how, "plain")) {
+		dns_hints_dump(hints, stdout);
+	} else {
+		struct dns_packet *query, *answer;
+
+		query	= dns_p_new(512);
+
+		if ((error = dns_p_push(query, DNS_S_QUESTION, who, strlen(who), DNS_T_A, DNS_C_IN, 0, 0)))
+			panic("%s: %s", who, strerror(error));
+
+		if (!(answer = dns_hints_query(hints, query, &error)))
+			panic("%s: %s", who, strerror(error));
+
+		print_packet(answer);
+
+		free(answer);
+	}
 
 	dns_hints_close(hints);
 
@@ -4068,8 +4302,7 @@ static const struct { const char *cmd; int (*run)(); const char *help; } cmds[] 
 	{ "send-query-udp",	&send_query,	"send udp query to host" },
 	{ "send-query-tcp",	&send_query,	"send tcp query to host" },
 	{ "print-arpa",		&print_arpa,	"print arpa. zone name of address" },
-	{ "show-hints-local",	&show_hints,	"print local hints" },
-	{ "show-hints-root",	&show_hints,	"print root hints" },
+	{ "show-hints",		&show_hints,	"print hints: show-hints [local|root] [plain|packet]" },
 };
 
 
