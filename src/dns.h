@@ -481,6 +481,12 @@ struct dns_resolv_conf {
 
 		unsigned ndots;
 
+		unsigned timeout;
+
+		unsigned attempts;
+
+		_Bool rotate;
+
 		_Bool recurse;
 
 		_Bool super_glue;
@@ -527,7 +533,7 @@ size_t dns_resconf_search(void *, size_t, const void *, size_t, struct dns_resol
 
 struct dns_hints;
 
-struct dns_hints *dns_hints_open(int *);
+struct dns_hints *dns_hints_open(struct dns_resolv_conf *, int *);
 
 void dns_hints_close(struct dns_hints *);
 
@@ -543,9 +549,9 @@ unsigned dns_hints_insert_resconf(struct dns_hints *, const char *, const struct
 
 void dns_hints_update(struct dns_hints *, const char *, const struct sockaddr *, int);
 
-struct dns_hints *dns_hints_local(int *);
+struct dns_hints *dns_hints_local(struct dns_resolv_conf *, int *);
 
-struct dns_hints *dns_hints_root(int *);
+struct dns_hints *dns_hints_root(struct dns_resolv_conf *, int *);
 
 
 struct dns_hints_i {
