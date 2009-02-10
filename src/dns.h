@@ -182,6 +182,10 @@ struct dns_header {
 #define dns_header(p)	((struct dns_header *)&(p)->data[0])
 
 
+#ifndef DNS_P_QBUFSIZ
+#define DNS_P_QBUFSIZ	dns_p_calcsize(12 + 256 + 4)
+#endif
+
 #ifndef DNS_P_DICTSIZE
 #define DNS_P_DICTSIZE	8
 #endif
@@ -197,7 +201,9 @@ struct dns_packet {
 	unsigned char data[1];
 }; /* struct dns_packet */
 
-#define dns_p_sizeof(P)		(offsetof(struct dns_packet, data) + P->end)
+#define dns_p_calcsize(n)	(offsetof(struct dns_packet, data) + (n))
+
+#define dns_p_sizeof(P)		dns_p_calcsize((P)->end)
 
 #define dns_p_new(n)		(dns_p_init((struct dns_packet *)&(union { unsigned char b[offsetof(struct dns_packet, data) + (n)]; struct dns_packet p; }){ { 0 } }, (offsetof(struct dns_packet, data) + (n))))
 
@@ -292,10 +298,15 @@ struct dns_rr_i {
 		unsigned short next;
 		unsigned short section;
 		unsigned short index;
-	} state;
+		unsigned short count;
+	} state, saved;
 }; /* struct dns_rr_i */
 
 struct dns_rr_i *dns_rr_i_init(struct dns_rr_i *);
+
+#define dns_rr_i_save(i)	((i)->saved = (i)->state)
+#define dns_rr_i_rewind(i)	((i)->state = (i)->saved)
+#define dns_rr_i_count(i)	((i)->state.count)
 
 unsigned dns_rr_grep(struct dns_rr *, unsigned, struct dns_rr_i *, struct dns_packet *, int *);
 
@@ -337,7 +348,7 @@ size_t dns_aaaa_print(void *, size_t, struct dns_aaaa *);
 
 struct dns_mx {
 	unsigned short preference;
-	char host[256];
+	char host[DNS_D_MAXNAME + 1];
 }; /* struct dns_mx */
 
 int dns_mx_parse(struct dns_mx *, struct dns_rr *, struct dns_packet *);
@@ -350,7 +361,7 @@ size_t dns_mx_print(void *, size_t, struct dns_mx *);
  */
 
 struct dns_ns {
-	char host[256];
+	char host[DNS_D_MAXNAME + 1];
 }; /* struct dns_ns */
 
 int dns_ns_parse(struct dns_ns *, struct dns_rr *, struct dns_packet *);
@@ -363,7 +374,7 @@ size_t dns_ns_print(void *, size_t, struct dns_ns *);
  */
 
 struct dns_cname {
-	char host[256];
+	char host[DNS_D_MAXNAME + 1];
 }; /* struct dns_cname */
 
 int dns_cname_parse(struct dns_cname *, struct dns_rr *, struct dns_packet *);
@@ -376,7 +387,7 @@ size_t dns_cname_print(void *, size_t, struct dns_cname *);
  */
 
 struct dns_ptr {
-	char host[256];
+	char host[DNS_D_MAXNAME + 1];
 }; /* struct dns_ptr */
 
 int dns_ptr_parse(struct dns_ptr *, struct dns_rr *, struct dns_packet *);
@@ -597,6 +608,13 @@ void dns_r_close(struct dns_resolver *);
 unsigned dns_r_acquire(struct dns_resolver *);
 
 unsigned dns_r_release(struct dns_resolver *);
+
+int dns_r_submit(struct dns_resolver *, const char *, enum dns_type, enum dns_class);
+
+int dns_r_check(struct dns_resolver *);
+
+struct dns_packet *dns_r_fetch(struct dns_resolver *, int *);
+
 
 
 /*

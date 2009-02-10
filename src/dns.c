@@ -79,6 +79,10 @@
 #define lengthof(a)	(sizeof (a) / sizeof (a)[0])
 #endif
 
+#ifndef endof
+#define endof(a)	(&(a)[lengthof((a))])
+#endif
+
 
 #define MARK	fprintf(stderr, "@@ %s:%d\n", __FILE__, __LINE__);
 
@@ -1044,6 +1048,7 @@ struct dns_rr_i *dns_rr_i_init(struct dns_rr_i *i) {
 	};
 
 	i->state	= i_initializer.state;
+	i->saved	= i->state;
 
 	return i;
 } /* dns_rr_i_init() */
@@ -1096,9 +1101,13 @@ unsigned dns_rr_grep(struct dns_rr *rr, unsigned lim, struct dns_rr_i *i, struct
 		return count;
 	} /* while() */
 
+	i->state.count	+= count;
+
 	return count;
 error:
 	*error_	= error;
+
+	i->state.count	+= count;
 
 	return count;
 } /* dns_rr_grep() */
@@ -3206,6 +3215,9 @@ static int dns_so_verify(struct dns_socket *so, struct dns_packet *P) {
 	if (so->qid != dns_header(so->answer)->qid)
 		return -1;
 
+	if (!dns_p_count(so->answer, DNS_S_QD))
+		return -1;
+
 	if (0 != dns_rr_parse(&rr, 12, so->answer))
 		return -1;
 
@@ -3378,10 +3390,15 @@ error:
 
 
 struct dns_packet *dns_so_fetch(struct dns_socket *so, int *error) {
+	struct dns_packet *answer;
+
 	switch (so->state) {
 	case DNS_SO_UDP_DONE:
 	case DNS_SO_TCP_DONE:
-		return so->answer;
+		answer		= so->answer;
+		so->answer	= 0;
+
+		return answer;
 	default:
 		*error	= -1;
 
@@ -3453,15 +3470,29 @@ int dns_so_pollout(struct dns_socket *so) {
 
 enum {
 	DNS_R_INIT,
+	DNS_R_SWITCH,		/* (B)IND, (F)ILE */
 
-	DNS_R_HOSTS_EARLY,
-	DNS_R_HOSTS_LATE,
+	DNS_R_FILE,		/* Lookup in local hosts database */
+
+	DNS_R_BIND,		/* Lookup in the network */
+	DNS_R_SEARCH,
+	DNS_R_HINTS,
+	DNS_R_ITERATE,
+	DNS_R_FOREACH_NS,
+	DNS_R_RESOLV0_NS,	/* Prologue: Setup next frame and recurse */
+	DNS_R_RESOLV1_NS,	/* Epilog: Inspect answer */
+	DNS_R_FOREACH_A,
+	DNS_R_QUERY_A,
+	DNS_R_CNAME0_A,
+	DNS_R_CNAME1_A,
 
 	DNS_R_DONE,
+	DNS_R_SERVFAIL,
 };
 
 
 #define DNS_R_MAXDEPTH	8
+#define DNS_R_ENDFRAME	(DNS_R_MAXDEPTH - 1)
 
 struct dns_resolver {
 	struct dns_socket so;
@@ -3484,8 +3515,13 @@ struct dns_resolver {
 
 	struct dns_r_state {
 		int state;
+		int error;
+		int which;	/* (B)IND, (F)ILE; index into resconf->lookup */
 
-		struct dns_packet *query, *answer;
+		struct dns_packet *query, *answer, *hints;
+
+		struct dns_rr_i hints_i, hints_j;
+		struct dns_rr hints_ns, ans_cname;
 	} stack[DNS_R_MAXDEPTH];
 
 	unsigned sp;
@@ -3545,12 +3581,20 @@ error:
 } /* dns_r_open() */
 
 
+static void dns_r_reset_frame(struct dns_resolver *R, struct dns_r_state *frame) {
+	free(frame->query);
+	free(frame->answer);
+	free(frame->hints);
+
+	memset(frame, '\0', sizeof *frame);
+} /* dns_r_reset_frame() */
+
+
 void dns_r_reset(struct dns_resolver *R) {
 	dns_so_reset(&R->so);
 
 	do {
-		free(R->stack[R->sp].query);
-		free(R->stack[R->sp].answer);
+		dns_r_reset_frame(R, &R->stack[R->sp]);
 	} while (R->sp--);
 
 	memset(&R->qname, '\0', sizeof *R - offsetof(struct dns_resolver, qname));
@@ -3583,11 +3627,53 @@ unsigned dns_r_release(struct dns_resolver *R) {
 } /* dns_r_release() */
 
 
+static void print_packet();
+
+static struct dns_packet *dns_r_merge(struct dns_packet *P0, struct dns_packet *P1, int *error_) {
+	struct dns_packet *P2	= 0;
+	struct dns_rr rr;
+	int error;
+
+	if (!(P2 = dns_p_init(malloc(dns_p_calcsize(P0->end + P1->end)), dns_p_calcsize(P0->end + P1->end))))
+		goto syerr;
+
+	dns_rr_foreach(&rr, P0, .section = DNS_S_QD) {
+		if ((error = dns_rr_copy(P2, &rr, P0)))
+			goto error;
+	}
+
+	dns_rr_foreach(&rr, P0, .section = DNS_S_AN) {
+		if ((error = dns_rr_copy(P2, &rr, P0)))
+			goto error;
+	}
+
+	dns_rr_foreach(&rr, P1, .section = (DNS_S_ALL & ~DNS_S_QD)) {
+		if ((error = dns_rr_copy(P2, &rr, P1)))
+			goto error;
+	}
+
+	return P2;
+syerr:
+	error	= errno;
+error:
+	*error_	= error;
+
+	free(P2);
+
+	return 0;
+} /* dns_r_merge() */
+
+
 #define goto(sp, i)	\
 	do { R->stack[(sp)].state = (i); goto exec; } while (0)
 
 static int dns_r_exec(struct dns_resolver *R) {
 	struct dns_r_state *F;
+	struct dns_packet *P;
+	char host[DNS_D_MAXNAME + 1];
+	size_t len;
+	struct dns_rr rr;
+	struct sockaddr_in sin;
 	int error;
 
 exec:
@@ -3597,30 +3683,215 @@ exec:
 	switch (F->state) {
 	case DNS_R_INIT:
 		F->state++;
-	case DNS_R_HOSTS_EARLY:
-		if (R->resconf->lookup[0] == 'f') {
-			if (!(F->answer = dns_hosts_query(R->hosts, F->query, &error)))
-				goto error;
+	case DNS_R_SWITCH:
+		while (F->which < sizeof R->resconf->lookup) {
+			switch (R->resconf->lookup[F->which++]) {
+			case 'b':
+				goto(R->sp, DNS_R_BIND);
+			case 'f':
+				goto(R->sp, DNS_R_FILE);
+			default:
+				break;
+			}
+		}
 
-			if (dns_p_count(F->answer, DNS_S_AN) > 0)
-				goto(R->sp, DNS_R_DONE);
+		goto(R->sp, DNS_R_SERVFAIL);	/* FIXME: Right behavior? */
+	case DNS_R_FILE:
+		if (!(F->answer = dns_hosts_query(R->hosts, F->query, &error)))
+			goto error;
 
-			free(F->answer); F->answer = 0;
+		if (dns_p_count(F->answer, DNS_S_AN) > 0)
+			goto(R->sp, DNS_R_DONE);
+
+		free(F->answer); F->answer = 0;
+
+		goto(R->sp, DNS_R_SWITCH);
+	case DNS_R_BIND:
+		if (R->sp > 0) {
+			assert(F->query);
+
+			goto(R->sp, DNS_R_HINTS);
 		}
 
 		F->state++;
-	case DNS_R_HOSTS_LATE:
-		if (!F->answer && R->resconf->lookup[1] == 'f') {
-			if (!(F->answer = dns_hosts_query(R->hosts, F->query, &error)))
-				goto error;
+	case DNS_R_SEARCH:
+		if (!(len = dns_resconf_search(host, sizeof host, R->qname, R->qlen, R->resconf, &R->search)))
+			goto(R->sp, DNS_R_SWITCH);
 
-			if (dns_p_count(F->answer, DNS_S_AN) > 0)
-				goto(R->sp, DNS_R_DONE);
+		if (!(P = dns_p_init(malloc(dns_p_calcsize(DNS_P_QBUFSIZ)), dns_p_calcsize(DNS_P_QBUFSIZ))))
+			goto error;
 
-			free(F->answer); F->answer = 0;
-		}
+		free(F->query);
+
+		F->query	= P;
+
+		if ((error = dns_p_push(F->query, DNS_S_QD, host, len, R->qtype, R->qclass, 0, 0)))
+			goto error;
 
 		F->state++;
+	case DNS_R_HINTS:
+		if (!(F->hints = dns_hints_query(R->hints, F->query, &error)))
+			goto error;
+
+		F->state++;
+	case DNS_R_ITERATE:
+		dns_rr_i_init(&F->hints_i);
+
+		F->hints_i.section	= DNS_S_AUTHORITY;
+		F->hints_i.type		= DNS_T_NS;
+
+		F->state++;
+	case DNS_R_FOREACH_NS:
+		dns_rr_i_save(&F->hints_i);
+
+		/* Load our next nameserver host. */
+		if (!dns_rr_grep(&F->hints_ns, 1, &F->hints_i, F->hints, &error))
+			goto(R->sp, DNS_R_SWITCH);
+
+		dns_rr_i_init(&F->hints_j);
+
+		/* Assume there are glue records */
+		goto(R->sp, DNS_R_FOREACH_A);
+	case DNS_R_RESOLV0_NS:
+		/* Have we reached our max depth? */
+		if (&F[1] >= endof(R->stack))
+			goto(R->sp, DNS_R_FOREACH_NS);
+
+		dns_r_reset_frame(R, &F[1]);
+
+		if (!(F[1].query = dns_p_init(malloc(dns_p_calcsize(DNS_P_QBUFSIZ)), dns_p_calcsize(DNS_P_QBUFSIZ))))
+			goto syerr;
+
+		if ((error = dns_ns_parse((struct dns_ns *)host, &F->hints_ns, F->hints)))
+			goto error;
+
+		if ((error = dns_p_push(F[1].query, DNS_S_QD, host, strlen(host), DNS_T_A, DNS_C_IN, 0, 0)))
+			goto error;
+
+		F->state++;
+
+		goto(++R->sp, DNS_R_INIT);
+	case DNS_R_RESOLV1_NS:
+		if (!dns_d_expand(host, sizeof host, 12, F[1].query, &error))
+			goto error;
+
+		dns_rr_foreach(&rr, F[1].answer, .name = host, .type = DNS_T_A, .section = (DNS_S_ALL & ~DNS_S_QD)) {
+			rr.section	= DNS_S_AR;
+
+			if ((error = dns_rr_copy(F->hints, &rr, F[1].answer)))
+				goto error;
+
+			dns_rr_i_rewind(&F->hints_i);	/* Now there's glue. */
+		}
+
+		goto(R->sp, DNS_R_FOREACH_NS);
+	case DNS_R_FOREACH_A:
+		/*
+		 * NOTE: Iterator initialized in DNS_R_FOREACH_NS because
+		 * this state is re-entrant, but we need to reset
+		 * .name to a valid pointer each time.
+		 */
+		if ((error = dns_ns_parse((struct dns_ns *)host, &F->hints_ns, F->hints)))
+			goto error;
+
+		F->hints_j.name		= host;
+		F->hints_j.type		= DNS_T_A;
+		F->hints_j.section	= DNS_S_ALL & ~DNS_S_QD;
+
+		if (!dns_rr_grep(&rr, 1, &F->hints_j, F->hints, &error)) {
+			if (!dns_rr_i_count(&F->hints_j))
+				goto(R->sp, DNS_R_RESOLV0_NS);
+
+			goto(R->sp, DNS_R_FOREACH_NS);
+		}
+
+		sin.sin_family	= AF_INET;
+		sin.sin_port	= htons(53);
+
+		if ((error = dns_a_parse((struct dns_a *)&sin.sin_addr, &rr, F->hints)))
+			goto error;
+
+		if ((error = dns_so_submit(&R->so, F->query, (struct sockaddr *)&sin)))
+			goto error;
+
+		F->state++;
+	case DNS_R_QUERY_A:
+		if ((error = dns_so_check(&R->so)))
+			goto error;
+
+		free(F->answer);
+
+		if (!(F->answer = dns_so_fetch(&R->so, &error)))
+			goto error;
+
+		if ((error = dns_rr_parse(&rr, 12, F->query)))
+			goto error;
+
+		if (!dns_d_expand(host, sizeof host, rr.dn.p, F->query, &error))
+			goto error;
+
+		dns_rr_foreach(&rr, F->answer, .section = DNS_S_AN, .name = host, .type = rr.type) {
+			goto(R->sp, DNS_R_DONE);	/* Found */
+		}
+
+		dns_rr_foreach(&rr, F->answer, .section = DNS_S_AN, .name = host, .type = DNS_T_CNAME) {
+			F->ans_cname	= rr;
+
+			goto(R->sp, DNS_R_CNAME0_A);
+		}
+
+		dns_rr_foreach(&rr, F->answer, .section = DNS_S_NS, .type = DNS_T_NS) {
+			free(F->hints);
+
+			F->hints	= F->answer;
+			F->answer	= 0;
+
+			goto(R->sp, DNS_R_ITERATE);
+		}
+
+		goto(R->sp, DNS_R_DONE);
+	case DNS_R_CNAME0_A:
+		if (&F[1] >= endof(R->stack))
+			goto(R->sp, DNS_R_DONE);
+
+		dns_r_reset_frame(R, &F[1]);
+
+		if (!(F[1].query = dns_p_init(malloc(dns_p_calcsize(DNS_P_QBUFSIZ)), dns_p_calcsize(DNS_P_QBUFSIZ))))
+			goto syerr;
+
+		if ((error = dns_cname_parse((struct dns_cname *)host, &F->ans_cname, F->answer)))
+			goto error;
+
+		if ((error = dns_rr_parse(&rr, 12, F->query)))
+			goto error;
+
+		if ((error = dns_p_push(F[1].query, DNS_S_QD, host, strlen(host), rr.type, DNS_C_IN, 0, 0)))
+			goto error;
+
+		F->state++;
+
+		goto(++R->sp, DNS_R_INIT);
+	case DNS_R_CNAME1_A:
+		if (!(P = dns_r_merge(F->answer, F[1].answer, &error)))
+			goto error;
+
+		free(F->answer); F->answer = P;
+
+		goto(R->sp, DNS_R_DONE);
+	case DNS_R_DONE:
+		assert(F->answer);
+
+		if (R->sp > 0)
+			goto(--R->sp, F[-1].state);
+
+		break;
+	case DNS_R_SERVFAIL:
+		if (!(F->answer = dns_p_copy(dns_p_init(malloc(dns_p_sizeof(F->query)), dns_p_sizeof(F->query)), F->query)))
+			goto syerr;
+
+		dns_header(F->answer)->rcode	= DNS_RC_SERVFAIL;
+
+		goto(R->sp, DNS_R_DONE);
 	default:
 		error	= EINVAL;
 
@@ -3628,6 +3899,8 @@ exec:
 	} /* switch () */
 
 	return 0;
+syerr:
+	error	= errno;
 error:
 	return error;
 } /* dns_r_exec() */
@@ -3643,8 +3916,46 @@ int dns_r_pollout(struct dns_resolver *R) {
 } /* dns_r_pollout() */
 
 
+int dns_r_submit(struct dns_resolver *R, const char *qname, enum dns_type qtype, enum dns_class qclass) {
+	dns_r_reset(R);
+
+	/* Don't anchor; that can conflict with searchlist generation. */
+	dns_d_init(R->qname, sizeof R->qname, qname, (R->qlen = strlen(qname)), 0);
+
+	R->qtype	= qtype;
+	R->qclass	= qclass;
+
+//	if (!(R->stack[0].query = dns_p_copy(dns_p_init(malloc(dns_p_sizeof(Q)), dns_p_sizeof(Q)), Q)))
+//		goto syerr;
+
+	return 0;
+} /* dns_r_submit() */
 
 
+int dns_r_check(struct dns_resolver *R) {
+	int error;
+
+	if ((error = dns_r_exec(R)))
+		return error;
+
+	return 0;
+} /* dns_r_check() */
+
+
+struct dns_packet *dns_r_fetch(struct dns_resolver *R, int *error) {
+	struct dns_packet *answer;
+
+	if (R->stack[0].state != DNS_R_DONE) {
+		*error	= -1;
+
+		return 0;
+	}
+
+	answer			= R->stack[0].answer;
+	R->stack[0].answer	= 0;
+
+	return answer;
+} /* dns_r_fetch() */
 
 
 /*
@@ -4289,6 +4600,50 @@ static int show_hints(int argc, char *argv[]) {
 } /* show_hints() */
 
 
+static int resolve_query(int argc, char *argv[]) {
+	struct dns_resolver *R;
+	int error;
+
+	if (!MAIN.qname)
+		MAIN.qname	= "www.google.com";
+	if (!MAIN.qtype)	
+		MAIN.qtype	= DNS_T_A;
+
+	if (!(R = dns_r_open(0, 0, dns_hints_root(&error), &error)))
+		panic("%s: %s", MAIN.qname, strerror(error));
+
+	if ((error = dns_r_submit(R, MAIN.qname, MAIN.qtype, DNS_C_IN)))
+		panic("%s: %s", MAIN.qname, strerror(error));
+
+	while ((error = dns_r_check(R))) {
+		fd_set rfds, wfds;
+		int rfd, wfd;
+
+		if (error != EAGAIN)
+			panic("dns_r_check: %s(%d)", strerror(error), error);
+//		if (dns_so_elapsed(so) > 10)
+//			panic("query timed-out");
+
+		FD_ZERO(&rfds);
+		FD_ZERO(&wfds);
+
+		if (-1 != (rfd = dns_r_pollin(R)))
+			FD_SET(rfd, &rfds);
+
+		if (-1 != (wfd = dns_r_pollout(R)))
+			FD_SET(wfd, &wfds);
+
+		select(MAX(rfd, wfd) + 1, &rfds, &wfds, 0, &(struct timeval){ 1, 0 });
+	}
+
+	print_packet(dns_r_fetch(R, &error));
+
+	dns_r_close(R);
+
+	return 0;
+} /* resolve_query() */
+
+
 static const struct { const char *cmd; int (*run)(); const char *help; } cmds[] = {
 	{ "parse-packet",	&parse_packet,	"parse raw packet from stdin" },
 	{ "parse-domain",	&parse_domain,	"anchor and iteratively cleave domain" },
@@ -4303,6 +4658,8 @@ static const struct { const char *cmd; int (*run)(); const char *help; } cmds[] 
 	{ "send-query-tcp",	&send_query,	"send tcp query to host" },
 	{ "print-arpa",		&print_arpa,	"print arpa. zone name of address" },
 	{ "show-hints",		&show_hints,	"print hints: show-hints [local|root] [plain|packet]" },
+	{ "resolve-stub",	&resolve_query,	"resolve as stub resolver" },
+	{ "resolve-recurse",	&resolve_query,	"resolve as recursive resolver" },
 };
 
 
