@@ -3780,50 +3780,45 @@ unsigned dns_r_release(struct dns_resolver *R) {
 static void print_packet();
 
 static struct dns_packet *dns_r_merge(struct dns_packet *P0, struct dns_packet *P1, int *error_) {
-	struct dns_packet *P[2], *P2	= 0;
-	struct dns_rr *rr[2], r0, r1, r2;
+	struct dns_packet *P[3]	= { P0, P1, 0 };
+	struct dns_rr rr[3];
 	int error, copy, i;
 	enum dns_section section;
 
-	if (!(P2 = dns_p_init(malloc(dns_p_calcsize(P0->end + P1->end)), dns_p_calcsize(P0->end + P1->end))))
+	if (!(P[2] = dns_p_init(malloc(dns_p_calcsize(P[0]->end + P[1]->end)), dns_p_calcsize(P[0]->end + P[1]->end))))
 		goto syerr;
 
-	dns_rr_foreach(&r0, P0, .section = DNS_S_QD) {
-		if ((error = dns_rr_copy(P2, &r0, P0)))
+	dns_rr_foreach(&rr[0], P[0], .section = DNS_S_QD) {
+		if ((error = dns_rr_copy(P[2], &rr[0], P[0])))
 			goto error;
 	}
 
-	P[0]	= P0;
-	rr[0]	= &r0;
-	P[1]	= P1;
-	rr[1]	= &r1;
-
 	for (section = DNS_S_AN; (DNS_S_ALL & section); section <<= 1) {
-		for (i = 0; i < lengthof(rr); i++) {
-			dns_rr_foreach(rr[i], P[i], .section = section) {
+		for (i = 0; i < 2; i++) {
+			dns_rr_foreach(&rr[i], P[i], .section = section) {
 				copy	= 1;
 
-				dns_rr_foreach(&r2, P2, .type = rr[i]->type, .section = (DNS_S_ALL & ~DNS_S_QD)) {
-					if (0 == dns_rr_cmp(rr[i], P[i], &r2, P2)) {
+				dns_rr_foreach(&rr[2], P[2], .type = rr[i].type, .section = (DNS_S_ALL & ~DNS_S_QD)) {
+					if (0 == dns_rr_cmp(&rr[i], P[i], &rr[2], P[2])) {
 						copy	= 0;
 
 						break;
 					}
 				}
 
-				if (copy && (error = dns_rr_copy(P2, rr[i], P[i])))
+				if (copy && (error = dns_rr_copy(P[2], &rr[i], P[i])))
 					goto error;
 			} /* foreach(rr) */
 		} /* foreach(packet) */
 	} /* foreach(section) */
 
-	return P2;
+	return P[2];
 syerr:
 	error	= errno;
 error:
 	*error_	= error;
 
-	free(P2);
+	free(P[2]);
 
 	return 0;
 } /* dns_r_merge() */
