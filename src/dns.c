@@ -1040,6 +1040,47 @@ unsigned short dns_rr_skip(unsigned short src, struct dns_packet *P) {
 } /* dns_rr_skip() */
 
 
+static enum dns_type dns_rr_type(unsigned short src, struct dns_packet *P) {
+	struct dns_rr rr;
+	int error;
+
+	if ((error = dns_rr_parse(&rr, src, P)))
+		return 0;
+
+	return rr.type;
+} /* dns_rr_type() */
+
+
+static int dns_rr_cmp(struct dns_rr *r0, struct dns_packet *P0, struct dns_rr *r1, struct dns_packet *P1) {
+	char host0[DNS_D_MAXNAME + 1], host1[DNS_D_MAXNAME + 1];
+	union dns_any any0, any1;
+	int cmp, error;
+
+	if ((cmp = r0->type - r1->type))
+		return cmp;
+
+	if ((cmp = r0->class - r1->class))
+		return cmp;
+
+	if (!dns_d_expand(host0, sizeof host0, r0->dn.p, P0, &error))
+		return -1;
+
+	if (!dns_d_expand(host1, sizeof host1, r1->dn.p, P1, &error))
+		return 1;
+
+	if ((cmp = strcasecmp(host0, host1)))
+		return cmp;
+
+	if ((error = dns_any_parse(&any0, r0, P0)))
+		return -1;
+
+	if ((error = dns_any_parse(&any1, r1, P1)))
+		return 1;
+
+	return dns_any_cmp(&any0, r0->type, &any1, r1->type);
+} /* dns_rr_cmp() */
+
+
 #include <stdio.h>
 
 struct dns_rr_i *dns_rr_i_init(struct dns_rr_i *i) {
@@ -1357,6 +1398,16 @@ size_t dns_a_arpa(void *dst, size_t lim, const struct dns_a *a) {
 } /* dns_a_arpa() */
 
 
+int dns_a_cmp(const struct dns_a *a, const struct dns_a *b) {
+	if (ntohl(a->addr.s_addr) < ntohl(b->addr.s_addr))
+		return -1;
+	if (ntohl(a->addr.s_addr) > ntohl(b->addr.s_addr))
+		return 1;
+
+	return 0;
+} /* dns_a_cmp() */
+
+
 size_t dns_a_print(void *dst, size_t lim, struct dns_a *a) {
 	char addr[INET_ADDRSTRLEN + 1]	= "0.0.0.0";
 	size_t len;
@@ -1392,6 +1443,18 @@ int dns_aaaa_push(struct dns_packet *P, struct dns_aaaa *aaaa) {
 
 	return 0;
 } /* dns_aaaa_push() */
+
+
+int dns_aaaa_cmp(const struct dns_aaaa *a, const struct dns_aaaa *b) {
+	int cmp, i;
+
+	for (i = 0; i < lengthof(a->addr.s6_addr); i++) {
+		if ((cmp = (a->addr.s6_addr[i] - b->addr.s6_addr[i])))
+			return cmp;
+	}
+
+	return 0;
+} /* dns_aaaa_cmp() */
 
 
 size_t dns_aaaa_arpa(void *dst, size_t lim, const struct dns_aaaa *aaaa) {
@@ -1480,6 +1543,16 @@ error:
 } /* dns_mx_push() */
 
 
+int dns_mx_cmp(const struct dns_mx *a, const struct dns_mx *b) {
+	int cmp;
+
+	if ((cmp = a->preference - b->preference))
+		return cmp;
+
+	return strcasecmp(a->host, b->host);
+} /* dns_mx_cmp() */
+
+
 size_t dns_mx_print(void *dst, size_t lim, struct dns_mx *mx) {
 	size_t cp	= 0;
 
@@ -1534,6 +1607,11 @@ error:
 } /* dns_ns_push() */
 
 
+int dns_ns_cmp(const struct dns_ns *a, const struct dns_ns *b) {
+	return strcasecmp(a->host, b->host);
+} /* dns_ns_cmp() */
+
+
 size_t dns_ns_print(void *dst, size_t lim, struct dns_ns *ns) {
 	size_t cp;
 
@@ -1553,6 +1631,11 @@ int dns_cname_parse(struct dns_cname *cname, struct dns_rr *rr, struct dns_packe
 int dns_cname_push(struct dns_packet *P, struct dns_cname *cname) {
 	return dns_ns_push(P, (struct dns_ns *)cname);
 } /* dns_cname_push() */
+
+
+int dns_cname_cmp(const struct dns_cname *a, const struct dns_cname *b) {
+	return strcasecmp(a->host, b->host);
+} /* dns_cname_cmp() */
 
 
 size_t dns_cname_print(void *dst, size_t lim, struct dns_cname *cname) {
@@ -1579,6 +1662,11 @@ size_t dns_ptr_qname(void *dst, size_t lim, int af, void *addr) {
 
 	return len;
 } /* dns_ptr_qname() */
+
+
+int dns_ptr_cmp(const struct dns_ptr *a, const struct dns_ptr *b) {
+	return strcasecmp(a->host, b->host);
+} /* dns_ptr_cmp() */
 
 
 size_t dns_ptr_print(void *dst, size_t lim, struct dns_ptr *ptr) {
@@ -1669,6 +1757,11 @@ int dns_txt_push(struct dns_packet *P, struct dns_txt *txt) {
 } /* dns_txt_push() */
 
 
+int dns_txt_cmp(const struct dns_txt *a, const struct dns_txt *b) {
+	return -1;
+} /* dns_txt_cmp() */
+
+
 size_t dns_txt_print(void *dst_, size_t lim, struct dns_txt *txt) {
 	struct { unsigned char *b; size_t p, end; } dst, src;
 	unsigned ch;
@@ -1713,15 +1806,16 @@ static const struct {
 	const char *name;
 	int (*parse)();
 	int (*push)();
+	int (*cmp)();
 	size_t (*print)();
 } dns_rrtypes[]	= {
-	{ DNS_T_A,     "A",     &dns_a_parse,     &dns_a_push,     &dns_a_print     },
-	{ DNS_T_AAAA,  "AAAA",  &dns_aaaa_parse,  &dns_aaaa_push,  &dns_aaaa_print  },
-	{ DNS_T_MX,    "MX",    &dns_mx_parse,    &dns_mx_push,    &dns_mx_print    },
-	{ DNS_T_NS,    "NS",    &dns_ns_parse,    &dns_ns_push,    &dns_ns_print    },
-	{ DNS_T_CNAME, "CNAME", &dns_cname_parse, &dns_cname_push, &dns_cname_print },
-	{ DNS_T_PTR,   "PTR",   &dns_ptr_parse,   &dns_ptr_push,   &dns_ptr_print   },
-	{ DNS_T_TXT,   "TXT",   &dns_txt_parse,   &dns_txt_push,   &dns_txt_print   },
+	{ DNS_T_A,     "A",     &dns_a_parse,     &dns_a_push,     &dns_a_cmp,		&dns_a_print     },
+	{ DNS_T_AAAA,  "AAAA",  &dns_aaaa_parse,  &dns_aaaa_push,  &dns_aaaa_cmp,	&dns_aaaa_print  },
+	{ DNS_T_MX,    "MX",    &dns_mx_parse,    &dns_mx_push,    &dns_mx_cmp,		&dns_mx_print    },
+	{ DNS_T_NS,    "NS",    &dns_ns_parse,    &dns_ns_push,    &dns_ns_cmp,		&dns_ns_print    },
+	{ DNS_T_CNAME, "CNAME", &dns_cname_parse, &dns_cname_push, &dns_cname_cmp,	&dns_cname_print },
+	{ DNS_T_PTR,   "PTR",   &dns_ptr_parse,   &dns_ptr_push,   &dns_ptr_cmp,	&dns_ptr_print   },
+	{ DNS_T_TXT,   "TXT",   &dns_txt_parse,   &dns_txt_push,   &dns_txt_cmp,	&dns_txt_print   },
 }; /* dns_rrtypes[] */
 
 
@@ -1767,6 +1861,22 @@ int dns_any_push(struct dns_packet *P, union dns_any *any, enum dns_type type) {
 
 	return 0;
 } /* dns_any_push() */
+
+
+int dns_any_cmp(const union dns_any *a, enum dns_type x, const union dns_any *b, enum dns_type y) {
+	unsigned i;
+	int cmp;
+
+	if ((cmp = x - y))
+		return cmp;
+
+	for (i = 0; i < lengthof(dns_rrtypes); i++) {
+		if (dns_rrtypes[i].type == x)
+			return dns_rrtypes[i].cmp(a, b);
+	}
+
+	return -1;
+} /* dns_any_cmp() */
 
 
 size_t dns_any_print(void *dst_, size_t lim, union dns_any *any, enum dns_type type) {
@@ -3505,6 +3615,7 @@ int dns_so_pollout(struct dns_socket *so) {
 
 enum {
 	DNS_R_INIT,
+	DNS_R_GLUE,
 	DNS_R_SWITCH,		/* (B)IND, (F)ILE */
 
 	DNS_R_FILE,		/* Lookup in local hosts database */
@@ -3546,12 +3657,16 @@ struct dns_resolver {
 	enum dns_type qtype;
 	enum dns_class qclass;
 
+	time_t began;
+
 	dns_resconf_i_t search;
 
 	struct dns_r_state {
 		int state;
 		int error;
 		int which;	/* (B)IND, (F)ILE; index into resconf->lookup */
+
+		unsigned attempts;
 
 		struct dns_packet *query, *answer, *hints;
 
@@ -3666,8 +3781,8 @@ static void print_packet();
 
 static struct dns_packet *dns_r_merge(struct dns_packet *P0, struct dns_packet *P1, int *error_) {
 	struct dns_packet *P2	= 0;
-	struct dns_rr rr;
-	int error;
+	struct dns_rr rr, r0, r1;
+	int error, copy;
 
 	if (!(P2 = dns_p_init(malloc(dns_p_calcsize(P0->end + P1->end)), dns_p_calcsize(P0->end + P1->end))))
 		goto syerr;
@@ -3682,8 +3797,19 @@ static struct dns_packet *dns_r_merge(struct dns_packet *P0, struct dns_packet *
 			goto error;
 	}
 
-	dns_rr_foreach(&rr, P1, .section = (DNS_S_ALL & ~DNS_S_QD)) {
-		if ((error = dns_rr_copy(P2, &rr, P1)))
+	dns_rr_foreach(&r1, P1, .section = (DNS_S_ALL & ~DNS_S_QD)) {
+		copy	= 1;
+
+		dns_rr_foreach(&r0, P0, .type = r1.type, .section = DNS_S_AN) {
+			if (0 != dns_rr_cmp(&r0, P0, &r1, P1))
+				continue;
+			
+			copy	= 0;
+
+			break;
+		}
+
+		if (copy && (error = dns_rr_copy(P2, &r1, P1)))
 			goto error;
 	}
 
@@ -3697,6 +3823,59 @@ error:
 
 	return 0;
 } /* dns_r_merge() */
+
+
+static struct dns_packet *dns_r_glue(struct dns_resolver *R, struct dns_packet *Q) {
+	struct dns_packet *P	= dns_p_new(512);
+	char qname[DNS_D_MAXNAME + 1];
+	enum dns_type qtype;
+	struct dns_rr rr;
+	unsigned sp;
+	int error;
+
+	if (!dns_d_expand(qname, sizeof qname, 12, Q, &error))
+		return 0;
+
+	if (!(qtype = dns_rr_type(12, Q)))
+		return 0;
+
+	if ((error = dns_p_push(P, DNS_S_QD, qname, strlen(qname), qtype, DNS_C_IN, 0, 0)))
+		return 0;
+
+	for (sp = 0; sp <= R->sp; sp++) {
+		if (!R->stack[sp].answer)
+			continue;
+
+		dns_rr_foreach(&rr, R->stack[sp].answer, .name = qname, .type = qtype, .section = (DNS_S_ALL & ~DNS_S_QD)) {
+			rr.section	= DNS_S_AN;
+
+			if ((error = dns_rr_copy(P, &rr, Q)))
+				return 0;
+		}
+	}
+
+	if (dns_p_count(P, DNS_S_AN) > 0)
+		goto copy;
+
+	/* Otherwise, look for a CNAME */
+	for (sp = 0; sp <= R->sp; sp++) {
+		if (!R->stack[sp].answer)
+			continue;
+
+		dns_rr_foreach(&rr, R->stack[sp].answer, .name = qname, .type = DNS_T_CNAME, .section = (DNS_S_ALL & ~DNS_S_QD)) {
+			rr.section	= DNS_S_AN;
+
+			if ((error = dns_rr_copy(P, &rr, Q)))
+				return 0;
+		}
+	}
+
+	if (!dns_p_count(P, DNS_S_AN))
+		return 0;
+
+copy:
+	return dns_p_copy(dns_p_init(malloc(dns_p_sizeof(P)), dns_p_sizeof(P)), P);
+} /* dns_r_glue() */
 
 
 #define goto(sp, i)	\
@@ -3717,6 +3896,29 @@ exec:
 
 	switch (F->state) {
 	case DNS_R_INIT:
+		F->state++;
+	case DNS_R_GLUE:
+		if (R->sp == 0)
+			goto(R->sp, DNS_R_SWITCH);
+
+		assert(F->query);
+
+		if (!(F->answer = dns_r_glue(R, F->query)))
+			goto(R->sp, DNS_R_SWITCH);
+
+		if (!dns_d_expand(host, sizeof host, 12, F->query, &error))
+			goto error;
+
+		dns_rr_foreach(&rr, F->query, .name = host, .type = dns_rr_type(12, F->query), .section = DNS_S_AN) {
+			goto(R->sp, DNS_R_DONE);
+		}
+
+		dns_rr_foreach(&rr, F->query, .name = host, .type = DNS_T_CNAME, .section = DNS_S_AN) {
+			F->ans_cname	= rr;
+
+			goto(R->sp, DNS_R_CNAME0_A);
+		}
+
 		F->state++;
 	case DNS_R_SWITCH:
 		while (F->which < sizeof R->resconf->lookup) {
@@ -3914,20 +4116,12 @@ exec:
 		if ((error = dns_cname_parse((struct dns_cname *)host, &F->ans_cname, F->answer)))
 			goto error;
 
-		if ((error = dns_rr_parse(&rr, 12, F->query)))
-			goto error;
-
-		/* TRY TO RESOLVE INTERNALLY */
-
 		dns_r_reset_frame(R, &F[1]);
 
 		if (!(F[1].query = dns_p_init(malloc(dns_p_calcsize(DNS_P_QBUFSIZ)), dns_p_calcsize(DNS_P_QBUFSIZ))))
 			goto syerr;
 
-		if ((error = dns_rr_parse(&rr, 12, F->query)))
-			goto error;
-
-		if ((error = dns_p_push(F[1].query, DNS_S_QD, host, strlen(host), rr.type, DNS_C_IN, 0, 0)))
+		if ((error = dns_p_push(F[1].query, DNS_S_QD, host, strlen(host), dns_rr_type(12, F->query), DNS_C_IN, 0, 0)))
 			goto error;
 
 		F->state++;
@@ -3978,6 +4172,11 @@ int dns_r_pollout(struct dns_resolver *R) {
 } /* dns_r_pollout() */
 
 
+time_t dns_r_elapsed(struct dns_resolver *R) {
+	return dns_elapsed(R->began);
+} /* dns_r_elapsed() */
+
+
 int dns_r_submit(struct dns_resolver *R, const char *qname, enum dns_type qtype, enum dns_class qclass) {
 	dns_r_reset(R);
 
@@ -3987,8 +4186,7 @@ int dns_r_submit(struct dns_resolver *R, const char *qname, enum dns_type qtype,
 	R->qtype	= qtype;
 	R->qclass	= qclass;
 
-//	if (!(R->stack[0].query = dns_p_copy(dns_p_init(malloc(dns_p_sizeof(Q)), dns_p_sizeof(Q)), Q)))
-//		goto syerr;
+	R->began	= dns_now();
 
 	return 0;
 } /* dns_r_submit() */
@@ -4685,8 +4883,8 @@ static int resolve_query(int argc, char *argv[]) {
 
 		if (error != EAGAIN)
 			panic("dns_r_check: %s(%d)", strerror(error), error);
-//		if (dns_so_elapsed(so) > 10)
-//			panic("query timed-out");
+		if (dns_r_elapsed(R) > 10)
+			panic("query timed-out");
 
 		FD_ZERO(&rfds);
 		FD_ZERO(&wfds);

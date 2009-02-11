@@ -326,6 +326,7 @@ struct dns_a {
 
 int dns_a_parse(struct dns_a *, struct dns_rr *, struct dns_packet *);
 int dns_a_push(struct dns_packet *, struct dns_a *);
+int dns_a_cmp(const struct dns_a *, const struct dns_a *);
 size_t dns_a_print(void *, size_t, struct dns_a *);
 
 
@@ -339,6 +340,7 @@ struct dns_aaaa {
 
 int dns_aaaa_parse(struct dns_aaaa *, struct dns_rr *, struct dns_packet *);
 int dns_aaaa_push(struct dns_packet *, struct dns_aaaa *);
+int dns_aaaa_cmp(const struct dns_aaaa *, const struct dns_aaaa *);
 size_t dns_aaaa_print(void *, size_t, struct dns_aaaa *);
 
 
@@ -353,6 +355,7 @@ struct dns_mx {
 
 int dns_mx_parse(struct dns_mx *, struct dns_rr *, struct dns_packet *);
 int dns_mx_push(struct dns_packet *, struct dns_mx *);
+int dns_mx_cmp(const struct dns_mx *, const struct dns_mx *);
 size_t dns_mx_print(void *, size_t, struct dns_mx *);
 
 
@@ -366,6 +369,7 @@ struct dns_ns {
 
 int dns_ns_parse(struct dns_ns *, struct dns_rr *, struct dns_packet *);
 int dns_ns_push(struct dns_packet *, struct dns_ns *);
+int dns_ns_cmp(const struct dns_ns *, const struct dns_ns *);
 size_t dns_ns_print(void *, size_t, struct dns_ns *);
 
 
@@ -379,6 +383,7 @@ struct dns_cname {
 
 int dns_cname_parse(struct dns_cname *, struct dns_rr *, struct dns_packet *);
 int dns_cname_push(struct dns_packet *, struct dns_cname *);
+int dns_cname_cmp(const struct dns_cname *, const struct dns_cname *);
 size_t dns_cname_print(void *, size_t, struct dns_cname *);
 
 
@@ -392,6 +397,7 @@ struct dns_ptr {
 
 int dns_ptr_parse(struct dns_ptr *, struct dns_rr *, struct dns_packet *);
 int dns_ptr_push(struct dns_packet *, struct dns_ptr *);
+int dns_ptr_cmp(const struct dns_ptr *, const struct dns_ptr *);
 size_t dns_ptr_print(void *, size_t, struct dns_ptr *);
 
 
@@ -411,6 +417,7 @@ struct dns_txt {
 struct dns_txt *dns_txt_init(struct dns_txt *, size_t);
 int dns_txt_parse(struct dns_txt *, struct dns_rr *, struct dns_packet *);
 int dns_txt_push(struct dns_packet *, struct dns_txt *);
+int dns_txt_cmp(const struct dns_txt *, const struct dns_txt *);
 size_t dns_txt_print(void *, size_t, struct dns_txt *);
 
 
@@ -431,6 +438,7 @@ union dns_any {
 union dns_any *dns_any_init(union dns_any *, size_t);
 int dns_any_parse(union dns_any *, struct dns_rr *, struct dns_packet *);
 int dns_any_push(struct dns_packet *, union dns_any *, enum dns_type);
+int dns_any_cmp(const union dns_any *, enum dns_type, const union dns_any *, enum dns_type);
 size_t dns_any_print(void *, size_t, union dns_any *, enum dns_type);
 
 
