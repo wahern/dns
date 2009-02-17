@@ -2439,7 +2439,7 @@ static enum dns_resconf_keyword dns_resconf_keyword(const char *word) {
 	if (0 == strncasecmp(word, "attempts:", sizeof "attempts:" - 1))
 		return DNS_RESCONF_ATTEMPTS;
 
-	return 0;
+	return -1;
 } /* dns_resconf_keyword() */
 
 #define dns_resconf_issep(ch)	(isspace(ch) || (ch) == ',')
