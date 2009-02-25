@@ -305,7 +305,9 @@ struct dns_rr_i {
 	} state, saved;
 }; /* struct dns_rr_i */
 
-int dns_rr_i_cmp(struct dns_rr *, struct dns_rr *, struct dns_rr_i *, struct dns_packet *);
+int dns_rr_i_packet(struct dns_rr *, struct dns_rr *, struct dns_rr_i *, struct dns_packet *);
+
+int dns_rr_i_order(struct dns_rr *, struct dns_rr *, struct dns_rr_i *, struct dns_packet *);
 
 int dns_rr_i_shuffle(struct dns_rr *, struct dns_rr *, struct dns_rr_i *, struct dns_packet *);
 
@@ -425,6 +427,23 @@ size_t dns_ptr_print(void *, size_t, struct dns_ptr *);
 
 
 /*
+ * SRV  R E S O U R C E  R E C O R D
+ */
+
+struct dns_srv {
+	unsigned short priority;
+	unsigned short weight;
+	unsigned short port;
+	char target[DNS_D_MAXNAME + 1];
+}; /* struct dns_srv */
+
+int dns_srv_parse(struct dns_srv *, struct dns_rr *, struct dns_packet *);
+int dns_srv_push(struct dns_packet *, struct dns_srv *);
+int dns_srv_cmp(const struct dns_srv *, const struct dns_srv *);
+size_t dns_srv_print(void *, size_t, struct dns_srv *);
+
+
+/*
  * TXT  R E S O U R C E  R E C O R D
  */
 
@@ -455,7 +474,7 @@ union dns_any {
 	struct dns_ns ns;
 	struct dns_cname cname;
 	struct dns_soa soa;
-//	struct dns_srv srv;
+	struct dns_srv srv;
 	struct dns_txt txt, rdata;
 }; /* union dns_any */
 

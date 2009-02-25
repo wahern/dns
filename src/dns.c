@@ -1314,9 +1314,22 @@ cont:
 } /* dns_rr_i_skip() */
 
 
-int dns_rr_i_cmp(struct dns_rr *a, struct dns_rr *b, struct dns_rr_i *i, struct dns_packet *P) {
+int dns_rr_i_packet(struct dns_rr *a, struct dns_rr *b, struct dns_rr_i *i, struct dns_packet *P) {
 	return (int)a->dn.p - (int)b->dn.p;
-} /* dns_rr_i_cmp() */
+} /* dns_rr_i_packet() */
+
+
+int dns_rr_i_order(struct dns_rr *a, struct dns_rr *b, struct dns_rr_i *i, struct dns_packet *P) {
+	int cmp;
+
+	if ((cmp = a->section - b->section))
+		return cmp;
+
+	if (a->type != b->type)
+		return (int)a->dn.p - (int)b->dn.p;
+
+	return dns_rr_cmp(a, P, b, P);
+} /* dns_rr_i_order() */
 
 
 int dns_rr_i_shuffle(struct dns_rr *a, struct dns_rr *b, struct dns_rr_i *i, struct dns_packet *P) {
@@ -1349,7 +1362,7 @@ unsigned dns_rr_grep(struct dns_rr *rr, unsigned lim, struct dns_rr_i *i, struct
 	switch (i->state.exec) {
 	case 0:
 		if (!i->sort)
-			i->sort	= &dns_rr_i_cmp;
+			i->sort	= &dns_rr_i_packet;
 
 		i->state.next	= dns_rr_i_start(i, P);
 		i->state.exec++;
@@ -1943,6 +1956,123 @@ size_t dns_soa_print(void *dst, size_t lim, struct dns_soa *soa) {
 } /* dns_soa_print() */
 
 
+int dns_srv_parse(struct dns_srv *srv, struct dns_rr *rr, struct dns_packet *P) {
+	unsigned short rp;
+	unsigned i;
+	size_t n;
+	int error;
+
+	memset(srv, '\0', sizeof *srv);
+
+	rp	= rr->rd.p;
+
+	if (P->size - P->end < 6)
+		return -1;
+
+	for (i = 0; i < 2; i++, rp++) {
+		srv->priority	<<= 8;
+		srv->priority	|= (0xff & P->data[rp]);
+	}
+
+	for (i = 0; i < 2; i++, rp++) {
+		srv->weight	<<= 8;
+		srv->weight	|= (0xff & P->data[rp]);
+	}
+
+	for (i = 0; i < 2; i++, rp++) {
+		srv->port	<<= 8;
+		srv->port	|= (0xff & P->data[rp]);
+	}
+
+	if (0 == (n = dns_d_expand(srv->target, sizeof srv->target, rp, P, &error)))
+		return error;
+	else if (n >= sizeof srv->target)
+		return -1;
+
+	return 0;
+} /* dns_srv_parse() */
+
+
+int dns_srv_push(struct dns_packet *P, struct dns_srv *srv) {
+	size_t end, len;
+	int error;
+
+	end	= P->end;
+
+	if (P->size - P->end < 2)
+		goto toolong;
+
+	P->end	+= 2;
+
+	if (P->size - P->end < 6)
+		goto toolong;
+
+	P->data[P->end++]	= 0xff & (srv->priority >> 8);
+	P->data[P->end++]	= 0xff & (srv->priority >> 0);
+
+	P->data[P->end++]	= 0xff & (srv->weight >> 8);
+	P->data[P->end++]	= 0xff & (srv->weight >> 0);
+
+	P->data[P->end++]	= 0xff & (srv->port >> 8);
+	P->data[P->end++]	= 0xff & (srv->port >> 0);
+
+	if (0 == (len = dns_d_comp(&P->data[P->end], P->size - P->end, srv->target, strlen(srv->target), P, &error)))
+		goto error;
+	else if (P->size - P->end < len || len > 65535)
+		goto toolong;
+
+	P->end	+= len;
+
+	P->data[end + 0]	= 0xff & (len >> 8);
+	P->data[end + 1]	= 0xff & (len >> 0);
+
+	return 0;
+toolong:
+	error	= -1;
+
+	/* FALL THROUGH */
+error:
+	P->end	= end;
+
+	return error;
+} /* dns_srv_push() */
+
+
+int dns_srv_cmp(const struct dns_srv *a, const struct dns_srv *b) {
+	int cmp;
+	
+	if ((cmp = a->priority - b->priority))
+		return cmp;
+
+	/*
+	 * FIXME: We need some sort of random seed to implement the dynamic
+	 * weighting required by RFC 2782.
+	 */
+	if ((cmp = a->weight - b->weight))
+		return cmp;
+
+	if ((cmp = a->port - b->port))
+		return cmp;
+
+	return strcasecmp(a->target, b->target);
+} /* dns_srv_cmp() */
+
+
+size_t dns_srv_print(void *dst, size_t lim, struct dns_srv *srv) {
+	size_t cp	= 0;
+
+	cp	+= dns__print10(dst, lim, cp, srv->priority, 0);
+	cp	+= dns__printchar(dst, lim, cp, ' ');
+	cp	+= dns__print10(dst, lim, cp, srv->weight, 0);
+	cp	+= dns__printchar(dst, lim, cp, ' ');
+	cp	+= dns__print10(dst, lim, cp, srv->port, 0);
+	cp	+= dns__printchar(dst, lim, cp, ' ');
+	cp	+= dns__printstring(dst, lim, cp, srv->target, strlen(srv->target));
+
+	return cp;
+} /* dns_srv_print() */
+
+
 int dns_ptr_parse(struct dns_ptr *ptr, struct dns_rr *rr, struct dns_packet *P) {
 	return dns_ns_parse((struct dns_ns *)ptr, rr, P);
 } /* dns_ptr_parse() */
@@ -2115,6 +2245,7 @@ static const struct {
 	{ DNS_T_NS,    "NS",    &dns_ns_parse,    &dns_ns_push,    &dns_ns_cmp,		&dns_ns_print    },
 	{ DNS_T_CNAME, "CNAME", &dns_cname_parse, &dns_cname_push, &dns_cname_cmp,	&dns_cname_print },
 	{ DNS_T_SOA,   "SOA",   &dns_soa_parse,   &dns_soa_push,   &dns_soa_cmp,	&dns_soa_print   },
+	{ DNS_T_SRV,   "SRV",   &dns_srv_parse,   &dns_srv_push,   &dns_srv_cmp,	&dns_srv_print   },
 	{ DNS_T_PTR,   "PTR",   &dns_ptr_parse,   &dns_ptr_push,   &dns_ptr_cmp,	&dns_ptr_print   },
 	{ DNS_T_TXT,   "TXT",   &dns_txt_parse,   &dns_txt_push,   &dns_txt_cmp,	&dns_txt_print   },
 }; /* dns_rrtypes[] */
@@ -4689,7 +4820,7 @@ struct {
 
 	int verbose;
 } MAIN = {
-	.sort	= &dns_rr_i_cmp,
+	.sort	= &dns_rr_i_packet,
 };
 
 
@@ -5337,8 +5468,12 @@ int main(int argc, char **argv) {
 
 			break;
 		case 's':
-			if (0 == strcasecmp(optarg, "shuffle"))
+			if (0 == strcasecmp(optarg, "packet"))
+				MAIN.sort	= &dns_rr_i_packet;
+			else if (0 == strcasecmp(optarg, "shuffle"))
 				MAIN.sort	= &dns_rr_i_shuffle;
+			else if (0 == strcasecmp(optarg, "order"))
+				MAIN.sort	= &dns_rr_i_order;
 			else
 				panic("%s: invalid sort method", optarg);
 
