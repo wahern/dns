@@ -284,25 +284,32 @@ int dns_rr_parse(struct dns_rr *, unsigned short, struct dns_packet *);
 unsigned short dns_rr_skip(unsigned short, struct dns_packet *);
 
 
-#define DNS_RR_I_STATE_INITIALIZER	{ 12, DNS_S_QD, 0 }
-
-#define dns_rr_i_new(...)		(&(struct dns_rr_i){ .state = DNS_RR_I_STATE_INITIALIZER, __VA_ARGS__ })
+#define dns_rr_i_new(P, ...)		dns_rr_i_init(&(struct dns_rr_i){ 0, __VA_ARGS__ }, (P))
 
 struct dns_rr_i {
 	enum dns_section section;
 	const void *name;
 	enum dns_type type;
 	enum dns_class class;
+	const void *data;
+
+	int (*sort)();
+	unsigned args[2];
 
 	struct {
 		unsigned short next;
-		unsigned short section;
-		unsigned short index;
 		unsigned short count;
+
+		unsigned exec;
+		unsigned regs[2];
 	} state, saved;
 }; /* struct dns_rr_i */
 
-struct dns_rr_i *dns_rr_i_init(struct dns_rr_i *);
+int dns_rr_i_cmp(struct dns_rr *, struct dns_rr *, struct dns_rr_i *, struct dns_packet *);
+
+int dns_rr_i_shuffle(struct dns_rr *, struct dns_rr *, struct dns_rr_i *, struct dns_packet *);
+
+struct dns_rr_i *dns_rr_i_init(struct dns_rr_i *, struct dns_packet *);
 
 #define dns_rr_i_save(i)	((i)->saved = (i)->state)
 #define dns_rr_i_rewind(i)	((i)->state = (i)->saved)
@@ -311,9 +318,9 @@ struct dns_rr_i *dns_rr_i_init(struct dns_rr_i *);
 unsigned dns_rr_grep(struct dns_rr *, unsigned, struct dns_rr_i *, struct dns_packet *, int *);
 
 #define dns_rr_foreach_(rr, P, ...)	\
-	for (struct dns_rr_i i##__LINE__ = (struct dns_rr_i){ __VA_ARGS__ }; dns_rr_grep((rr), 1, &i##__LINE__, (P), &(int){ 0 }); )
+	for (struct dns_rr_i i##__LINE__ = *dns_rr_i_new(P, __VA_ARGS__); dns_rr_grep((rr), 1, &i##__LINE__, (P), &(int){ 0 }); )
 
-#define dns_rr_foreach(...)	dns_rr_foreach_(__VA_ARGS__, .state = DNS_RR_I_STATE_INITIALIZER)
+#define dns_rr_foreach(...)	dns_rr_foreach_(__VA_ARGS__)
 
 
 /*
