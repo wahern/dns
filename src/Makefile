@@ -1,4 +1,5 @@
-CFLAGS	+= -std=c99 -Wall -Werror -Wno-unused-function -O0 -g
+CPPFLAGS	+= -DDNS_DEBUG -DDNS_MAIN
+CFLAGS		+= -std=c99 -Wall -Werror -Wno-unused-function -O2 -g
 
 
 all: dns

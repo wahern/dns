@@ -89,12 +89,12 @@
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-#ifndef DEBUG
-#define DEBUG	1
+#ifndef DNS_DEBUG
+#define DNS_DEBUG	0
 #endif
 
-#ifndef TRACE
-#define TRACE	DEBUG
+#ifndef DNS_TRACE
+#define DNS_TRACE	DNS_DEBUG
 #endif
 
 #define MARK	fprintf(stderr, "@@ %s:%d\n", __FILE__, __LINE__);
@@ -110,7 +110,7 @@ static void print_packet();
 } while (0)
 
 
-#if DEBUG
+#if DNS_DEBUG
 #define DUMP(...)	DUMP_(__VA_ARGS__, "")
 #else
 #define DUMP(...)
@@ -4283,9 +4283,9 @@ exec:
 		if (!(P = dns_p_init(malloc(dns_p_calcsize(DNS_P_QBUFSIZ)), dns_p_calcsize(DNS_P_QBUFSIZ))))
 			goto error;
 
-		free(F->query);
+		dns_header(P)->rd	= !R->resconf->options.recurse;
 
-		F->query	= P;
+		free(F->query); F->query = P;
 
 		if ((error = dns_p_push(F->query, DNS_S_QD, host, len, R->qtype, R->qclass, 0, 0)))
 			goto error;
@@ -4375,7 +4375,7 @@ exec:
 		if ((error = dns_a_parse((struct dns_a *)&sin.sin_addr, &rr, F->hints)))
 			goto error;
 
-#if TRACE
+#if DNS_TRACE
 		do {
 			char addr[INET_ADDRSTRLEN + 1];
 			dns_a_print(addr, sizeof addr, (struct dns_a *)&sin.sin_addr);
@@ -4399,9 +4399,11 @@ exec:
 		if (!(F->answer = dns_so_fetch(&R->so, &error)))
 			goto error;
 
-#if TRACE
+#if DNS_TRACE
 		DUMP(F->answer, "ANSWER @ DEPTH: %u)", R->sp);
 #endif
+		if (!R->resconf->options.recurse)
+			goto(R->sp, DNS_R_DONE);
 
 		if ((error = dns_rr_parse(&rr, 12, F->query)))
 			goto error;
@@ -4652,6 +4654,7 @@ const char *dns_strrcode(enum dns_rcode rcode) {
  * C O M M A N D - L I N E / R E G R E S S I O N  R O U T I N E S
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+#if DNS_MAIN
 
 #include <stdarg.h>
 #include <stdlib.h>
@@ -5197,6 +5200,7 @@ static int resolve_query(int argc, char *argv[]) {
 	if (!MAIN.qtype)	
 		MAIN.qtype	= DNS_T_A;
 
+	resconf()->options.recurse	= (0 != strstr(argv[0], "recurse"));
 
 	if (!(R = dns_r_open(resconf(), hosts(), hints(resconf(), &error), &error)))
 		panic("%s: %s", MAIN.qname, strerror(error));
@@ -5360,3 +5364,6 @@ int main(int argc, char **argv) {
 
 	return EXIT_FAILURE;
 } /* main() */
+
+
+#endif /* DNS_MAIN */
