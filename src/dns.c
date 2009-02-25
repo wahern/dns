@@ -3736,7 +3736,7 @@ int dns_so_pollout(struct dns_socket *so) {
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-enum dns_r_states {
+enum dns_r_state {
 	DNS_R_INIT,
 	DNS_R_GLUE,
 	DNS_R_SWITCH,		/* (B)IND, (F)ILE */
@@ -3757,7 +3757,7 @@ enum dns_r_states {
 
 	DNS_R_DONE,
 	DNS_R_SERVFAIL,
-}; /* enum dns_r_states */
+}; /* enum dns_r_state */
 
 
 #define DNS_R_MAXDEPTH	8
@@ -3784,8 +3784,8 @@ struct dns_resolver {
 
 	dns_resconf_i_t search;
 
-	struct dns_r_state {
-		enum dns_r_states state;
+	struct dns_r_frame {
+		enum dns_r_state state;
 
 		int error;
 		int which;	/* (B)IND, (F)ILE; index into resconf->lookup */
@@ -3855,7 +3855,7 @@ error:
 } /* dns_r_open() */
 
 
-static void dns_r_reset_frame(struct dns_resolver *R, struct dns_r_state *frame) {
+static void dns_r_reset_frame(struct dns_resolver *R, struct dns_r_frame *frame) {
 	free(frame->query);
 	free(frame->answer);
 	free(frame->hints);
@@ -4038,7 +4038,7 @@ static int dns_r_nameserv_cmp(struct dns_rr *a, struct dns_rr *b, struct dns_rr_
 	do { R->stack[(sp)].state = (i); goto exec; } while (0)
 
 static int dns_r_exec(struct dns_resolver *R) {
-	struct dns_r_state *F;
+	struct dns_r_frame *F;
 	struct dns_packet *P;
 	char host[DNS_D_MAXNAME + 1];
 	size_t len;
