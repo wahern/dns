@@ -2365,7 +2365,7 @@ loop:		for (ent = hosts->head; ent; ent = ent->next) {
 
 		break;
 	default:
-		return 0;
+		break;
 	} /* switch() */
 
 
@@ -3736,7 +3736,7 @@ int dns_so_pollout(struct dns_socket *so) {
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-enum {
+enum dns_r_states {
 	DNS_R_INIT,
 	DNS_R_GLUE,
 	DNS_R_SWITCH,		/* (B)IND, (F)ILE */
@@ -3757,7 +3757,7 @@ enum {
 
 	DNS_R_DONE,
 	DNS_R_SERVFAIL,
-};
+}; /* enum dns_r_states */
 
 
 #define DNS_R_MAXDEPTH	8
@@ -3785,7 +3785,8 @@ struct dns_resolver {
 	dns_resconf_i_t search;
 
 	struct dns_r_state {
-		int state;
+		enum dns_r_states state;
+
 		int error;
 		int which;	/* (B)IND, (F)ILE; index into resconf->lookup */
 
@@ -4311,10 +4312,12 @@ exec:
 
 		break;
 	case DNS_R_SERVFAIL:
-		if (!(F->answer = dns_p_copy(dns_p_init(malloc(dns_p_sizeof(F->query)), dns_p_sizeof(F->query)), F->query)))
+		if (!(P = dns_p_copy(dns_p_init(malloc(dns_p_sizeof(F->query)), dns_p_sizeof(F->query)), F->query)))
 			goto syerr;
 
-		dns_header(F->answer)->rcode	= DNS_RC_SERVFAIL;
+		dns_header(P)->rcode	= DNS_RC_SERVFAIL;
+
+		free(F->answer); F->answer = P;
 
 		goto(R->sp, DNS_R_DONE);
 	default:
@@ -5055,7 +5058,7 @@ static int resolve_query(int argc, char *argv[]) {
 
 		if (error != EAGAIN)
 			panic("dns_r_check: %s(%d)", strerror(error), error);
-		if (dns_r_elapsed(R) > 10)
+		if (dns_r_elapsed(R) > 30)
 			panic("query timed-out");
 
 		FD_ZERO(&rfds);
