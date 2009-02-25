@@ -89,6 +89,14 @@
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+#ifndef DEBUG
+#define DEBUG	1
+#endif
+
+#ifndef TRACE
+#define TRACE	DEBUG
+#endif
+
 #define MARK	fprintf(stderr, "@@ %s:%d\n", __FILE__, __LINE__);
 
 static void print_packet();
@@ -101,7 +109,12 @@ static void print_packet();
 	fprintf(stderr, "@@ END * * * * * * * * * * * * *\n\n");	\
 } while (0)
 
+
+#if DEBUG
 #define DUMP(...)	DUMP_(__VA_ARGS__, "")
+#else
+#define DUMP(...)
+#endif
 
 
 /*
@@ -2840,12 +2853,7 @@ struct dns_hints_soa {
 	
 	struct {
 		struct sockaddr_storage ss;
-
-		struct {
-			dns_atomic_t saved, effective, ttl;
-		} pri;
-
-		dns_atomic_t nlost;
+		unsigned priority;
 	} addrs[16];
 
 	unsigned count;
@@ -3033,8 +3041,7 @@ int dns_hints_insert(struct dns_hints *H, const char *zone, const struct sockadd
 
 	memcpy(&soa->addrs[i].ss, sa, dns_sa_len(sa));
 
-	dns_atomic_store(&soa->addrs[i].pri.effective, MAX(1, priority));
-	dns_atomic_store(&soa->addrs[i].pri.saved, MAX(1, priority));
+	soa->addrs[i].priority	= MAX(1, priority);
 
 	if (soa->count < lengthof(soa->addrs))
 		soa->count++;
@@ -3062,113 +3069,91 @@ error:
 } /* dns_hints_insert_resconf() */
 
 
-/*
- * FIXME: This code (might need to / should) be refactored to ensure that
- * it can never lead to something undesirable, like an infinite loop in
- * dns_hints_i_grep() or dns_hints_i_ffwd().
- *
- * The hints structure might be the single most important (perhaps only)
- * critical section. It is highly desirable to keep a shared state regarding
- * unreachable servers (i.e. the effective priority), especially of caching
- * servers if we're not recursive. All other shared data can be considered
- * immutable after internal and applied initialization.
- */
-void dns_hints_update(struct dns_hints *H, const char *zone, const struct sockaddr *sa, int nice) {
-	struct dns_hints_soa *soa;
-	unsigned long i, nlost, ttl;
-	time_t now	= dns_now();
+static int dns_hints_i_cmp(unsigned a, unsigned b, struct dns_hints_i *i, struct dns_hints_soa *soa) {
+	int cmp;
 
-	if (!(soa = dns_hints_fetch(H, zone)))
-		return /* void */;
+	if ((cmp = soa->addrs[a].priority - soa->addrs[b].priority))
+		return cmp;
 
-	for (i = 0; i < soa->count; i++) {
-		if (sa->sa_family == soa->addrs[i].ss.ss_family && 0 == memcmp(&soa->addrs[i].ss, sa, dns_sa_len(sa))) {
-			if (nice < 0) {
-				nlost	= 1 + dns_atomic_inc(&soa->addrs[i].nlost);
+	return dns_k_shuffle8(a, i->state.seed) - dns_k_shuffle8(b, i->state.seed);
+} /* dns_hints_i_cmp() */
 
-				dns_atomic_store(&soa->addrs[i].pri.effective, 0);
 
-				dns_atomic_store(&soa->addrs[i].pri.ttl, now + MIN(60, 3 * nlost));
-			} else if (nice > 0) {
-				goto reset;
-			}
-		} else {
-			ttl	= dns_atomic_load(&soa->addrs[i].pri.ttl);
+static unsigned dns_hints_i_start(struct dns_hints_i *i, struct dns_hints_soa *soa) {
+	unsigned p0, p;
 
-			if (ttl > 0 && ttl < now) {
-reset:
-				dns_atomic_store(&soa->addrs[i].pri.effective, dns_atomic_load(&soa->addrs[i].pri.saved));
-				dns_atomic_store(&soa->addrs[i].pri.ttl, 0);
-				dns_atomic_store(&soa->addrs[i].nlost, 0);
-			}
-		}
+	p0	= 0;
+
+	for (p = 1; p < soa->count; p++) {
+		if (dns_hints_i_cmp(p, p0, i, soa) < 0)
+			p0	= p;
 	}
 
-	return /* void */;
-} /* dns_hints_update() */
+	return p0;
+} /* dns_hints_i_start() */
 
 
-struct dns_hints_i *dns_hints_i_init(struct dns_hints_i *i) {
+static unsigned dns_hints_i_skip(unsigned p0, struct dns_hints_i *i, struct dns_hints_soa *soa) {
+	unsigned pZ, p;
+
+	for (pZ = 0; pZ < soa->count; pZ++) {
+		if (dns_hints_i_cmp(pZ, p0, i, soa) > 0)
+			goto cont;
+	}
+
+	return soa->count;
+cont:
+	for (p = pZ + 1; p < soa->count; p++) {
+		if (dns_hints_i_cmp(p, p0, i, soa) <= 0)
+			continue;
+
+		if (dns_hints_i_cmp(p, pZ, i, soa) >= 0)
+			continue;
+
+		pZ	= p;
+	}
+
+
+	return pZ;
+} /* dns_hints_i_skip() */
+
+
+struct dns_hints_i *dns_hints_i_init(struct dns_hints_i *i, struct dns_hints *hints) {
 	static const struct dns_hints_i i_initializer;
+	struct dns_hints_soa *soa;
 
 	i->state	= i_initializer.state;
+
+	do {
+		i->state.seed	= dns_random();
+	} while (0 == i->state.seed);
+
+	if ((soa = dns_hints_fetch(hints, i->zone))) {
+		i->state.next	= dns_hints_i_start(i, soa);
+	}
 
 	return i;
 } /* dns_hints_i_init() */
 
 
-static int dns_hints_i_ffwd(struct dns_hints_i *i, struct dns_hints_soa *soa) {
-	unsigned min, max;
-	int j, found;
-
-	do {
-		while (i->state.p < i->state.end) {
-			j = i->state.p++ % soa->count;
-
-			if (dns_atomic_load(&soa->addrs[j].pri.effective) == i->state.priority)
-				return j;
-		}
-
-		/* Scan for next priority */
-		min	= ++i->state.priority;
-		max	= -1;
-		found	= 0;
-
-		for (j = 0; j < soa->count; j++) {
-			unsigned pri	= dns_atomic_load(&soa->addrs[j].pri.effective);
-
-			if (pri >= min && pri <= max) {
-				i->state.priority	= pri;
-				max			= pri;
-				found			= 1;
-			}
-		}
-
-		i->state.p	= 0xff & dns_random();
-		i->state.end	= i->state.p + soa->count;
-	} while (found);
-
-	return -1;
-} /* dns_hints_i_ffwd() */
-
-
 unsigned dns_hints_grep(struct sockaddr **sa, socklen_t *sa_len, unsigned lim, struct dns_hints_i *i, struct dns_hints *H) {
 	struct dns_hints_soa *soa;
 	unsigned n;
-	int j;
 
 	if (!(soa = dns_hints_fetch(H, i->zone)))
 		return 0;
 
 	n	= 0;
 
-	while (n < lim && -1 != (j = dns_hints_i_ffwd(i, soa))) {
-		*sa	= (struct sockaddr *)&soa->addrs[j].ss;
+	while (i->state.next < soa->count && n < lim) {
+		*sa	= (struct sockaddr *)&soa->addrs[i->state.next].ss;
 		*sa_len	= dns_sa_len(*sa);
 
 		sa++;
 		sa_len++;
 		n++;
+
+		i->state.next	= dns_hints_i_skip(i->state.next, i, soa);
 	}
 
 	return n;
@@ -3203,7 +3188,7 @@ struct dns_packet *dns_hints_query(struct dns_hints *hints, struct dns_packet *Q
 	do {
 		i.zone	= zone;
 
-		dns_hints_i_init(&i);
+		dns_hints_i_init(&i, hints);
 
 		while (dns_hints_grep(&sa, &slen, 1, &i, hints)) {
 			int af		= sa->sa_family;
@@ -3240,7 +3225,7 @@ int dns_hints_dump(struct dns_hints *hints, FILE *fp) {
 			if (!dns_inet_ntop(af, dns_sa_addr(af, &soa->addrs[i].ss), addr, sizeof addr))
 				return errno;
 
-			fprintf(fp, "\t(%d) [%s]:%hu\n", (int)soa->addrs[i].pri.saved, addr, ntohs(*dns_sa_port(af, &soa->addrs[i].ss)));
+			fprintf(fp, "\t(%d) [%s]:%hu\n", (int)soa->addrs[i].priority, addr, ntohs(*dns_sa_port(af, &soa->addrs[i].ss)));
 		}
 	}
 
@@ -4233,13 +4218,19 @@ exec:
 			goto(R->sp, DNS_R_FOREACH_NS);
 		}
 
-		//DUMP(F->query, "ASKING: %s @ DEPTH: %u)", host, R->sp);
-
 		sin.sin_family	= AF_INET;
 		sin.sin_port	= htons(53);
 
 		if ((error = dns_a_parse((struct dns_a *)&sin.sin_addr, &rr, F->hints)))
 			goto error;
+
+#if TRACE
+		do {
+			char addr[INET_ADDRSTRLEN + 1];
+			dns_a_print(addr, sizeof addr, (struct dns_a *)&sin.sin_addr);
+			DUMP(F->query, "ASKING: %s/%s @ DEPTH: %u)", host, addr, R->sp);
+		} while (0);
+#endif
 
 		if ((error = dns_so_submit(&R->so, F->query, (struct sockaddr *)&sin)))
 			goto error;
@@ -4257,7 +4248,9 @@ exec:
 		if (!(F->answer = dns_so_fetch(&R->so, &error)))
 			goto error;
 
-		//DUMP(F->query, "ANSWER @ DEPTH: %u)", R->sp);
+#if TRACE
+		DUMP(F->answer, "ANSWER @ DEPTH: %u)", R->sp);
+#endif
 
 		if ((error = dns_rr_parse(&rr, 12, F->query)))
 			goto error;

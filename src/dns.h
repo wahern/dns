@@ -562,8 +562,6 @@ int dns_hints_insert(struct dns_hints *, const char *, const struct sockaddr *, 
 
 unsigned dns_hints_insert_resconf(struct dns_hints *, const char *, const struct dns_resolv_conf *, int *);
 
-void dns_hints_update(struct dns_hints *, const char *, const struct sockaddr *, int);
-
 struct dns_hints *dns_hints_local(struct dns_resolv_conf *, int *);
 
 struct dns_hints *dns_hints_root(struct dns_resolv_conf *, int *);
@@ -573,8 +571,8 @@ struct dns_hints_i {
 	const char *zone;
 
 	struct {
-		unsigned p, end;
-        	unsigned priority;
+		unsigned next;
+        	unsigned seed;
 	} state;
 }; /* struct dns_hints_i */
 
