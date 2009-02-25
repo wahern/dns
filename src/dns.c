@@ -4430,6 +4430,10 @@ exec:
 			goto(R->sp, DNS_R_ITERATE);
 		}
 
+		/* XXX: Should this go further up? */
+		if (dns_header(F->answer)->aa)
+			goto(R->sp, DNS_R_DONE);
+
 		goto(R->sp, DNS_R_FOREACH_A);
 	case DNS_R_CNAME0_A:
 		if (&F[1] >= endof(R->stack))
