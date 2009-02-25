@@ -1410,7 +1410,7 @@ static size_t dns__print10(void *dst, size_t lim, size_t off, unsigned n, unsign
 	unsigned char tmp[32];
 	unsigned dp	= off;
 	unsigned cp	= 0;
-	unsigned d	= 1000000;
+	unsigned d	= 1000000000;
 	unsigned ch;
 
 	pad	= MAX(1, pad);
@@ -1794,6 +1794,155 @@ size_t dns_cname_print(void *dst, size_t lim, struct dns_cname *cname) {
 } /* dns_cname_print() */
 
 
+int dns_soa_parse(struct dns_soa *soa, struct dns_rr *rr, struct dns_packet *P) {
+	struct { void *dst; size_t lim; } dn[] =
+		{ { soa->mname, sizeof soa->mname },
+		  { soa->rname, sizeof soa->rname } };
+	unsigned *ts[] =
+		{ &soa->serial, &soa->refresh, &soa->retry, &soa->expire, &soa->minimum };
+	unsigned short rp;
+	unsigned i, j, n;
+	int error;
+
+	/* MNAME / RNAME */
+	if ((rp = rr->rd.p) >= P->end)
+		return -1;
+
+	for (i = 0; i < lengthof(dn); i++) {
+		n	= dns_d_expand(dn[i].dst, dn[i].lim, rp, P, &error);
+
+		if (n == 0)
+			return error;
+		if (n >= dn[i].lim)
+			return -1;
+
+		if ((rp = dns_d_skip(rp, P)) >= P->end)
+			return -1;
+	}
+
+	/* SERIAL / REFRESH / RETRY / EXPIRE / MINIMUM */
+	for (i = 0; i < lengthof(ts); i++) {
+		for (j = 0; j < 4; j++, rp++) {
+			if (rp >= P->end)
+				return -1;
+
+			*ts[i]	<<= 8;
+			*ts[i]	|= (0xff & P->data[rp]);
+		}
+	}
+
+	return 0;
+} /* dns_soa_parse() */
+
+
+int dns_soa_push(struct dns_packet *P, struct dns_soa *soa) {
+	void *dn[]	= { soa->mname, soa->rname };
+	unsigned ts[]	= { (0xffffffff & soa->serial),
+			    (0x7fffffff & soa->refresh),
+			    (0x7fffffff & soa->retry),
+			    (0x7fffffff & soa->expire),
+			    (0xffffffff & soa->minimum) };
+	unsigned i, j;
+	size_t end, len;
+	int error;
+
+	end	= P->end;
+
+	if ((P->end += 2) >= P->size)
+		goto toolong;
+
+	/* MNAME / RNAME */
+	for (i = 0; i < lengthof(dn); i++) {
+		if ((error = dns_d_push(P, dn[i], strlen(dn[i]))))
+			goto error;
+	}
+
+	/* SERIAL / REFRESH / RETRY / EXPIRE / MINIMUM */
+	for (i = 0; i < lengthof(ts); i++) {
+		if ((P->end += 4) >= P->size)
+			goto toolong;
+
+		for (j = 1; j <= 4; j++) {
+			P->data[P->end - j]	= (0xff & ts[i]);
+			ts[i]			>>= 8;
+		}
+	}
+
+	len			= P->end - end - 2;
+	P->data[end + 0]	= (0xff & (len >> 8));
+	P->data[end + 1]	= (0xff & (len >> 0));
+
+	return 0;
+toolong:
+	error	= -1;
+
+	/* FALL THROUGH */
+error:
+	P->end	= end;
+
+	return error;
+} /* dns_soa_push() */
+
+
+int dns_soa_cmp(const struct dns_soa *a, const struct dns_soa *b) {
+	int cmp;
+	
+	if ((cmp = strcasecmp(a->mname, b->mname)))
+		return cmp;
+
+	if ((cmp = strcasecmp(a->rname, b->rname)))
+		return cmp;
+
+	if (a->serial > b->serial)
+		return -1;
+	else if (a->serial < b->serial)
+		return 1;
+
+	if (a->refresh > b->refresh)
+		return -1;
+	else if (a->refresh < b->refresh)
+		return 1;
+
+	if (a->retry > b->retry)
+		return -1;
+	else if (a->retry < b->retry)
+		return 1;
+
+	if (a->expire > b->expire)
+		return -1;
+	else if (a->expire < b->expire)
+		return 1;
+
+	if (a->minimum > b->minimum)
+		return -1;
+	else if (a->minimum < b->minimum)
+		return 1;
+
+	return 0;
+} /* dns_soa_cmp() */
+
+
+size_t dns_soa_print(void *dst, size_t lim, struct dns_soa *soa) {
+	size_t cp	= 0;
+
+	cp	+= dns__printstring(dst, lim, cp, soa->mname, strlen(soa->mname));
+	cp	+= dns__printchar(dst, lim, cp, ' ');
+	cp	+= dns__printstring(dst, lim, cp, soa->rname, strlen(soa->rname));
+	cp	+= dns__printchar(dst, lim, cp, ' ');
+	cp	+= dns__print10(dst, lim, cp, soa->serial, 0);
+	cp	+= dns__printchar(dst, lim, cp, ' ');
+	cp	+= dns__print10(dst, lim, cp, soa->refresh, 0);
+	cp	+= dns__printchar(dst, lim, cp, ' ');
+	cp	+= dns__print10(dst, lim, cp, soa->retry, 0);
+	cp	+= dns__printchar(dst, lim, cp, ' ');
+	cp	+= dns__print10(dst, lim, cp, soa->expire, 0);
+	cp	+= dns__printchar(dst, lim, cp, ' ');
+	cp	+= dns__print10(dst, lim, cp, soa->minimum, 0);
+
+	return cp;
+} /* dns_soa_print() */
+
+
 int dns_ptr_parse(struct dns_ptr *ptr, struct dns_rr *rr, struct dns_packet *P) {
 	return dns_ns_parse((struct dns_ns *)ptr, rr, P);
 } /* dns_ptr_parse() */
@@ -1965,6 +2114,7 @@ static const struct {
 	{ DNS_T_MX,    "MX",    &dns_mx_parse,    &dns_mx_push,    &dns_mx_cmp,		&dns_mx_print    },
 	{ DNS_T_NS,    "NS",    &dns_ns_parse,    &dns_ns_push,    &dns_ns_cmp,		&dns_ns_print    },
 	{ DNS_T_CNAME, "CNAME", &dns_cname_parse, &dns_cname_push, &dns_cname_cmp,	&dns_cname_print },
+	{ DNS_T_SOA,   "SOA",   &dns_soa_parse,   &dns_soa_push,   &dns_soa_cmp,	&dns_soa_print   },
 	{ DNS_T_PTR,   "PTR",   &dns_ptr_parse,   &dns_ptr_push,   &dns_ptr_cmp,	&dns_ptr_print   },
 	{ DNS_T_TXT,   "TXT",   &dns_txt_parse,   &dns_txt_push,   &dns_txt_cmp,	&dns_txt_print   },
 }; /* dns_rrtypes[] */
@@ -5038,6 +5188,7 @@ static int show_hints(int argc, char *argv[]) {
 
 
 static int resolve_query(int argc, char *argv[]) {
+	struct dns_hints *(*hints)()	= (strstr(argv[0], "recurse"))? &dns_hints_root : &dns_hints_local;
 	struct dns_resolver *R;
 	int error;
 
@@ -5046,7 +5197,8 @@ static int resolve_query(int argc, char *argv[]) {
 	if (!MAIN.qtype)	
 		MAIN.qtype	= DNS_T_A;
 
-	if (!(R = dns_r_open(resconf(), hosts(), dns_hints_root(resconf(), &error), &error)))
+
+	if (!(R = dns_r_open(resconf(), hosts(), hints(resconf(), &error), &error)))
 		panic("%s: %s", MAIN.qname, strerror(error));
 
 	if ((error = dns_r_submit(R, MAIN.qname, MAIN.qtype, DNS_C_IN)))

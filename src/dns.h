@@ -395,6 +395,22 @@ size_t dns_cname_print(void *, size_t, struct dns_cname *);
 
 
 /*
+ * SOA  R E S O U R C E  R E C O R D
+ */
+
+struct dns_soa {
+	char mname[DNS_D_MAXNAME + 1];
+	char rname[DNS_D_MAXNAME + 1];
+	unsigned serial, refresh, retry, expire, minimum;
+}; /* struct dns_soa */
+
+int dns_soa_parse(struct dns_soa *, struct dns_rr *, struct dns_packet *);
+int dns_soa_push(struct dns_packet *, struct dns_soa *);
+int dns_soa_cmp(const struct dns_soa *, const struct dns_soa *);
+size_t dns_soa_print(void *, size_t, struct dns_soa *);
+
+
+/*
  * PTR  R E S O U R C E  R E C O R D
  */
 
@@ -438,6 +454,7 @@ union dns_any {
 	struct dns_mx mx;
 	struct dns_ns ns;
 	struct dns_cname cname;
+	struct dns_soa soa;
 //	struct dns_srv srv;
 	struct dns_txt txt, rdata;
 }; /* union dns_any */
