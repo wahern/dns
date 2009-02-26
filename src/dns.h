@@ -36,6 +36,22 @@
 #include <netinet/in.h>	/* struct in_addr struct in6_addr */
 
 
+/*
+ * E R R O R S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+enum dns_errno {
+	DNS_ENOBUFS	= -(('d' << 24) | ('n' << 16) | ('s' << 8) | 64),
+	DNS_EILLEGAL,
+	DNS_EUNKNOWN,
+}; /* dns_errno */
+
+/*
+ * E N U M E R A T I O N  I N T E R F A C E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
 enum dns_section {
 	DNS_S_QD		= 0x01,
 #define DNS_S_QUESTION		DNS_S_QD

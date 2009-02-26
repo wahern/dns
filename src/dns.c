@@ -693,7 +693,7 @@ int dns_p_push(struct dns_packet *P, enum dns_section section, const void *dn, s
 
 	return 0;
 toolong:
-	error	= -1;
+	error	= DNS_ENOBUFS;
 error:
 	P->end	= end;
 
@@ -1032,14 +1032,14 @@ size_t dns_d_expand(void *dst, size_t lim, unsigned short src, struct dns_packet
 	} /* while() */
 
 toolong:
-	*error	= -1;
+	*error	= DNS_EILLEGAL;
 
 	if (lim > 0)
 		((unsigned char *)dst)[MIN(dstp, lim - 1)]	= '\0';
 
 	return 0;
 reserved:
-	*error	= -1;
+	*error	= DNS_EILLEGAL;
 
 	if (lim > 0)
 		((unsigned char *)dst)[MIN(dstp, lim - 1)]	= '\0';
@@ -1058,7 +1058,7 @@ int dns_d_push(struct dns_packet *P, const void *dn, size_t len) {
 	if (len == 0)
 		return error;
 	if (len > lim)
-		return -1;
+		return DNS_ENOBUFS;
 
 	P->end	+= len;
 
@@ -1082,7 +1082,7 @@ int dns_rr_copy(struct dns_packet *P, struct dns_rr *rr, struct dns_packet *Q) {
 	if (0 == (len = dns_d_expand(dn, sizeof dn, rr->dn.p, Q, &error)))
 		return error;
 	else if (len >= sizeof dn)
-		return -1;
+		return DNS_ENOBUFS;
 
 	if (rr->section != DNS_S_QD && (error = dns_any_parse(dns_any_init(&any, sizeof any), rr, Q)))
 		return error;
@@ -1095,13 +1095,13 @@ int dns_rr_parse(struct dns_rr *rr, unsigned short src, struct dns_packet *P) {
 	unsigned short p	= src;
 
 	if (src >= P->end)
-		return -1;
+		return DNS_EILLEGAL;
 
 	rr->dn.p	= p;
 	rr->dn.len	= (p = dns_d_skip(p, P)) - rr->dn.p;
 
 	if (P->end - p < 4)
-		return -1;
+		return DNS_EILLEGAL;
 
 	rr->type	= ((0xff & P->data[p + 0]) << 8)
 			| ((0xff & P->data[p + 1]) << 0);
@@ -1122,7 +1122,7 @@ int dns_rr_parse(struct dns_rr *rr, unsigned short src, struct dns_packet *P) {
 	}
 
 	if (P->end - p < 4)
-		return -1;
+		return DNS_EILLEGAL;
 
 	rr->ttl		= ((0x7f & P->data[p + 0]) << 24)
 			| ((0xff & P->data[p + 1]) << 16)
@@ -1132,7 +1132,7 @@ int dns_rr_parse(struct dns_rr *rr, unsigned short src, struct dns_packet *P) {
 	p	+= 4;
 
 	if (P->end - p < 2)
-		return -1;
+		return DNS_EILLEGAL;
 
 	rr->rd.len	= ((0xff & P->data[p + 0]) << 8)
 			| ((0xff & P->data[p + 1]) << 0);
@@ -1141,7 +1141,7 @@ int dns_rr_parse(struct dns_rr *rr, unsigned short src, struct dns_packet *P) {
 	p	+= 2;
 
 	if (P->end - p < rr->rd.len)
-		return -1;
+		return DNS_EILLEGAL;
 
 	return 0;
 } /* dns_rr_parse() */
@@ -1574,7 +1574,7 @@ int dns_a_parse(struct dns_a *a, struct dns_rr *rr, struct dns_packet *P) {
 	unsigned long addr;
 
 	if (rr->rd.len != 4)
-		return -1;
+		return DNS_EILLEGAL;
 
 	addr	= ((0xff & P->data[rr->rd.p + 0]) << 24)
 		| ((0xff & P->data[rr->rd.p + 1]) << 16)
@@ -1591,7 +1591,7 @@ int dns_a_push(struct dns_packet *P, struct dns_a *a) {
 	unsigned long addr;
 
 	if (P->size - P->end < 6)
-		return -1;
+		return DNS_ENOBUFS;
 
 	P->data[P->end++]	= 0x00;
 	P->data[P->end++]	= 0x04;
@@ -1650,7 +1650,7 @@ size_t dns_a_print(void *dst, size_t lim, struct dns_a *a) {
 
 int dns_aaaa_parse(struct dns_aaaa *aaaa, struct dns_rr *rr, struct dns_packet *P) {
 	if (rr->rd.len != sizeof aaaa->addr.s6_addr)
-		return -1;
+		return DNS_EILLEGAL;
 
 	memcpy(aaaa->addr.s6_addr, &P->data[rr->rd.p], sizeof aaaa->addr.s6_addr);
 
@@ -1660,7 +1660,7 @@ int dns_aaaa_parse(struct dns_aaaa *aaaa, struct dns_rr *rr, struct dns_packet *
 
 int dns_aaaa_push(struct dns_packet *P, struct dns_aaaa *aaaa) {
 	if (P->size - P->end < 2 + sizeof aaaa->addr.s6_addr)
-		return -1;
+		return DNS_ENOBUFS;
 
 	P->data[P->end++]	= 0x00;
 	P->data[P->end++]	= 0x10;
@@ -1726,7 +1726,7 @@ int dns_mx_parse(struct dns_mx *mx, struct dns_rr *rr, struct dns_packet *P) {
 	int error;
 
 	if (rr->rd.len < 3)
-		return -1;
+		return DNS_EILLEGAL;
 
 	mx->preference	= (0xff00 & (P->data[rr->rd.p + 0] << 8))
 			| (0x00ff & (P->data[rr->rd.p + 1] << 0));
@@ -1736,7 +1736,7 @@ int dns_mx_parse(struct dns_mx *mx, struct dns_rr *rr, struct dns_packet *P) {
 	if (len == 0)
 		return error;
 	if (len >= sizeof mx->host)
-		return -1;
+		return DNS_EILLEGAL;
 
 	return 0;
 } /* dns_mx_parse() */
@@ -1747,7 +1747,7 @@ int dns_mx_push(struct dns_packet *P, struct dns_mx *mx) {
 	int error;
 
 	if (P->size - P->end < 5)
-		return -1;
+		return DNS_ENOBUFS;
 
 	end	= P->end;
 	P->end	+= 2;
@@ -1803,7 +1803,7 @@ int dns_ns_parse(struct dns_ns *ns, struct dns_rr *rr, struct dns_packet *P) {
 	if (len == 0)
 		return error;
 	if (len >= sizeof ns->host)
-		return -1;
+		return DNS_EILLEGAL;
 
 	return 0;
 } /* dns_ns_parse() */
@@ -1814,7 +1814,7 @@ int dns_ns_push(struct dns_packet *P, struct dns_ns *ns) {
 	int error;
 
 	if (P->size - P->end < 3)
-		return -1;
+		return DNS_ENOBUFS;
 
 	end	= P->end;
 	P->end	+= 2;
@@ -1883,7 +1883,7 @@ int dns_soa_parse(struct dns_soa *soa, struct dns_rr *rr, struct dns_packet *P) 
 
 	/* MNAME / RNAME */
 	if ((rp = rr->rd.p) >= P->end)
-		return -1;
+		return DNS_EILLEGAL;
 
 	for (i = 0; i < lengthof(dn); i++) {
 		n	= dns_d_expand(dn[i].dst, dn[i].lim, rp, P, &error);
@@ -1891,17 +1891,17 @@ int dns_soa_parse(struct dns_soa *soa, struct dns_rr *rr, struct dns_packet *P) 
 		if (n == 0)
 			return error;
 		if (n >= dn[i].lim)
-			return -1;
+			return DNS_EILLEGAL;
 
 		if ((rp = dns_d_skip(rp, P)) >= P->end)
-			return -1;
+			return DNS_EILLEGAL;
 	}
 
 	/* SERIAL / REFRESH / RETRY / EXPIRE / MINIMUM */
 	for (i = 0; i < lengthof(ts); i++) {
 		for (j = 0; j < 4; j++, rp++) {
 			if (rp >= P->end)
-				return -1;
+				return DNS_EILLEGAL;
 
 			*ts[i]	<<= 8;
 			*ts[i]	|= (0xff & P->data[rp]);
@@ -1951,7 +1951,7 @@ int dns_soa_push(struct dns_packet *P, struct dns_soa *soa) {
 
 	return 0;
 toolong:
-	error	= -1;
+	error	= DNS_ENOBUFS;
 
 	/* FALL THROUGH */
 error:
@@ -2031,7 +2031,7 @@ int dns_srv_parse(struct dns_srv *srv, struct dns_rr *rr, struct dns_packet *P) 
 	rp	= rr->rd.p;
 
 	if (P->size - P->end < 6)
-		return -1;
+		return DNS_EILLEGAL;
 
 	for (i = 0; i < 2; i++, rp++) {
 		srv->priority	<<= 8;
@@ -2051,7 +2051,7 @@ int dns_srv_parse(struct dns_srv *srv, struct dns_rr *rr, struct dns_packet *P) 
 	if (0 == (n = dns_d_expand(srv->target, sizeof srv->target, rp, P, &error)))
 		return error;
 	else if (n >= sizeof srv->target)
-		return -1;
+		return DNS_EILLEGAL;
 
 	return 0;
 } /* dns_srv_parse() */
@@ -2092,7 +2092,7 @@ int dns_srv_push(struct dns_packet *P, struct dns_srv *srv) {
 
 	return 0;
 toolong:
-	error	= -1;
+	error	= DNS_ENOBUFS;
 
 	/* FALL THROUGH */
 error:
@@ -2194,7 +2194,7 @@ int dns_txt_parse(struct dns_txt *txt, struct dns_rr *rr, struct dns_packet *P) 
 		n	= 0xff & P->data[src.p++];
 
 		if (src.end - src.p < n || dst.end - dst.p < n)
-			return -1;
+			return DNS_EILLEGAL;
 
 		memcpy(&dst.b[dst.p], &src.b[src.p], n);
 
@@ -2221,7 +2221,7 @@ int dns_txt_push(struct dns_packet *P, struct dns_txt *txt) {
 	src.end	= txt->len;
 
 	if (dst.end - dst.p < 2)
-		return -1;
+		return DNS_ENOBUFS;
 
 	n	= txt->len + 1 + (txt->len / 256);
 
@@ -2232,12 +2232,12 @@ int dns_txt_push(struct dns_packet *P, struct dns_txt *txt) {
 		n	= 0xff & (src.end - src.p);
 
 		if (dst.p >= dst.end)
-			return -1;
+			return DNS_ENOBUFS;
 
 		dst.b[dst.p++]	= n;
 
 		if (dst.end - dst.p < n)
-			return -1;
+			return DNS_ENOBUFS;
 
 		memcpy(&dst.b[dst.p], &src.b[src.p], n);
 
@@ -2329,7 +2329,7 @@ int dns_any_parse(union dns_any *any, struct dns_rr *rr, struct dns_packet *P) {
 	}
 
 	if (rr->rd.len > any->rdata.size)
-		return -1;
+		return DNS_EILLEGAL;
 
 	memcpy(any->rdata.data, &P->data[rr->rd.p], rr->rd.len);
 	any->rdata.len	= rr->rd.len;
@@ -2347,7 +2347,7 @@ int dns_any_push(struct dns_packet *P, union dns_any *any, enum dns_type type) {
 	}
 
 	if (P->size - P->end < any->rdata.len + 2)
-		return -1;
+		return DNS_ENOBUFS;
 
 	P->data[P->end++]	= 0xff & (any->rdata.len >> 8);
 	P->data[P->end++]	= 0xff & (any->rdata.len >> 0);
@@ -3832,25 +3832,25 @@ static int dns_so_verify(struct dns_socket *so, struct dns_packet *P) {
 	int error	= -1;
 
 	if (so->qid != dns_header(so->answer)->qid)
-		return -1;
+		return DNS_EUNKNOWN;
 
 	if (!dns_p_count(so->answer, DNS_S_QD))
-		return -1;
+		return DNS_EUNKNOWN;
 
 	if (0 != dns_rr_parse(&rr, 12, so->answer))
-		return -1;
+		return DNS_EUNKNOWN;
 
 	if (rr.type != so->qtype || rr.class != so->qclass)
-		return -1;
+		return DNS_EUNKNOWN;
 
 	if (0 == (qlen = dns_d_expand(qname, sizeof qname, rr.dn.p, P, &error)))
 		return error;
 
 	if (qlen != so->qlen)
-		return -1;
+		return DNS_EUNKNOWN;
 
 	if (0 != strcasecmp(so->qname, qname))
-		return -1;
+		return DNS_EUNKNOWN;
 
 	return 0;
 } /* dns_so_verify() */
@@ -3892,7 +3892,7 @@ static int dns_so_tcp_recv(struct dns_socket *so) {
 		if (0 > (n = recv(so->tcp, &asrc[so->apos], aend - so->apos, 0)))
 			return errno;
 		else if (n == 0)
-			return -1;	/* FIXME */
+			return DNS_EUNKNOWN;	/* FIXME */
 
 		so->apos	+= n;
 	
@@ -3976,14 +3976,14 @@ retry:
 		dns_shutdown(&so->tcp);
 
 		if (so->answer->end < 12)
-			return -1;
+			return DNS_EILLEGAL;
 
 		if ((error = dns_so_verify(so, so->answer)))
 			goto error;
 
 		return 0;
 	default:
-		error	= -1;
+		error	= DNS_EUNKNOWN;
 
 		goto error;
 	} /* switch() */
@@ -4019,7 +4019,7 @@ struct dns_packet *dns_so_fetch(struct dns_socket *so, int *error) {
 
 		return answer;
 	default:
-		*error	= -1;
+		*error	= DNS_EUNKNOWN;
 
 		return 0;
 	}
@@ -4258,14 +4258,14 @@ unsigned dns_r_release(struct dns_resolver *R) {
 
 
 static struct dns_packet *dns_r_merge(struct dns_packet *P0, struct dns_packet *P1, int *error_) {
-	size_t pbufsiz	= dns_p_calcsize(P0->end + P1->end);
+	size_t bufsiz	= P0->end + P1->end;
 	struct dns_packet *P[3]	= { P0, P1, 0 };
 	struct dns_rr rr[3];
 	int error, copy, i;
 	enum dns_section section;
 
-//retry:
-	if (!(P[2] = dns_p_init(malloc(pbufsiz), pbufsiz)))
+retry:
+	if (!(P[2] = dns_p_init(malloc(dns_p_calcsize(bufsiz)), dns_p_calcsize(bufsiz))))
 		goto syerr;
 
 	dns_rr_foreach(&rr[0], P[0], .section = DNS_S_QD) {
@@ -4286,8 +4286,17 @@ static struct dns_packet *dns_r_merge(struct dns_packet *P0, struct dns_packet *
 					}
 				}
 
-				if (copy && (error = dns_rr_copy(P[2], &rr[i], P[i])))
+				if (copy && (error = dns_rr_copy(P[2], &rr[i], P[i]))) {
+					if (error == DNS_ENOBUFS && bufsiz < 65535) {
+						free(P[2]); P[2] = 0;
+
+						bufsiz	= MAX(65535, bufsiz * 2);
+
+						goto retry;
+					}
+
 					goto error;
+				}
 			} /* foreach(rr) */
 		} /* foreach(packet) */
 	} /* foreach(section) */
@@ -4868,7 +4877,7 @@ struct dns_packet *dns_r_fetch(struct dns_resolver *R, int *error) {
 	struct dns_packet *answer;
 
 	if (R->stack[0].state != DNS_R_DONE) {
-		*error	= -1;
+		*error	= DNS_EUNKNOWN;
 
 		return 0;
 	}
