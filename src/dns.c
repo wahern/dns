@@ -607,8 +607,29 @@ struct dns_packet *dns_p_copy(struct dns_packet *P, const struct dns_packet *P0)
 } /* dns_p_copy() */
 
 
+static unsigned short dns_l_skip(unsigned short, const unsigned char *, size_t);
+
 void dns_p_dictadd(struct dns_packet *P, unsigned short dn) {
-	unsigned i;
+	unsigned short lp, lptr, i;
+
+	lp	= dn;
+
+	while (lp < P->end) {
+		if (0xc0 == (0xc0 & P->data[lp]) && P->end - lp >= 2 && lp != dn) {
+			lptr	= ((0x3f & P->data[lp + 0]) << 8)
+				| ((0xff & P->data[lp + 1]) << 0);
+
+			for (i = 0; i < lengthof(P->dict) && P->dict[i]; i++) {
+				if (P->dict[i] == lptr) {
+					P->dict[i]	= dn;
+
+					return;
+				}
+			}
+		}
+
+		lp	= dns_l_skip(lp, P->data, P->end);
+	}
 
 	for (i = 0; i < lengthof(P->dict); i++) {
 		if (!P->dict[i]) {
@@ -736,6 +757,34 @@ invalid:
 
 	return 0;
 } /* dns_l_expand() */
+
+
+static unsigned short dns_l_skip(unsigned short src, const unsigned char *data, size_t end) {
+	unsigned short len;
+
+	if (src >= end)
+		goto invalid;
+
+	switch (0x03 & (data[src] >> 6)) {
+	case 0x00:
+		len	= (0x3f & (data[src++]));
+
+		if (end - src < len)
+			goto invalid;
+
+		return (len)? src + len : end;
+	case 0x01:
+		goto invalid;
+	case 0x02:
+		goto invalid;
+	case 0x03:
+		return end;
+	} /* switch() */
+
+	/* NOT REACHED */
+invalid:
+	return end;
+} /* dns_l_skip() */
 
 
 char *dns_d_init(void *dst, size_t lim, const void *src, size_t len, int flags) {
@@ -1001,18 +1050,19 @@ reserved:
 
 int dns_d_push(struct dns_packet *P, const void *dn, size_t len) {
 	size_t lim	= P->size - P->end;
+	unsigned dp	= P->end;
 	int error;
 
-	len	= dns_d_comp(&P->data[P->end], lim, dn, len, P, &error);
+	len	= dns_d_comp(&P->data[dp], lim, dn, len, P, &error);
 
 	if (len == 0)
 		return error;
 	if (len > lim)
 		return -1;
 
-	dns_p_dictadd(P, P->end);
-
 	P->end	+= len;
+
+	dns_p_dictadd(P, dp);
 
 	return 0;
 } /* dns_d_push() */
@@ -4208,12 +4258,14 @@ unsigned dns_r_release(struct dns_resolver *R) {
 
 
 static struct dns_packet *dns_r_merge(struct dns_packet *P0, struct dns_packet *P1, int *error_) {
+	size_t pbufsiz	= dns_p_calcsize(P0->end + P1->end);
 	struct dns_packet *P[3]	= { P0, P1, 0 };
 	struct dns_rr rr[3];
 	int error, copy, i;
 	enum dns_section section;
 
-	if (!(P[2] = dns_p_init(malloc(dns_p_calcsize(P[0]->end + P[1]->end)), dns_p_calcsize(P[0]->end + P[1]->end))))
+//retry:
+	if (!(P[2] = dns_p_init(malloc(pbufsiz), pbufsiz)))
 		goto syerr;
 
 	dns_rr_foreach(&rr[0], P[0], .section = DNS_S_QD) {

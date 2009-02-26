@@ -187,7 +187,7 @@ struct dns_header {
 #endif
 
 #ifndef DNS_P_DICTSIZE
-#define DNS_P_DICTSIZE	8
+#define DNS_P_DICTSIZE	16
 #endif
 
 struct dns_packet {
