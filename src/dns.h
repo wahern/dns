@@ -540,7 +540,7 @@ struct dns_resolv_conf {
 
 		_Bool recurse;
 
-		_Bool super_glue;
+		_Bool smart;
 	} options;
 
 	struct sockaddr_storage interface;

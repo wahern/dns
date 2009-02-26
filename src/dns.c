@@ -93,8 +93,10 @@
 #define DNS_DEBUG	0
 #endif
 
+static int dns_trace;
+
 #ifndef DNS_TRACE
-#define DNS_TRACE	DNS_DEBUG
+#define DNS_TRACE	0
 #endif
 
 #define MARK	fprintf(stderr, "@@ %s:%d\n", __FILE__, __LINE__);
@@ -1183,6 +1185,18 @@ static int dns_rr_cmp(struct dns_rr *r0, struct dns_packet *P0, struct dns_rr *r
 
 	return dns_any_cmp(&any0, r0->type, &any1, r1->type);
 } /* dns_rr_cmp() */
+
+
+static _Bool dns_rr_exists(struct dns_rr *rr0, struct dns_packet *P0, struct dns_packet *P1) {
+	struct dns_rr rr1;
+
+	dns_rr_foreach(&rr1, P1, .section = rr0->section, .type = rr0->type) {
+		if (0 == dns_rr_cmp(rr0, P0, &rr1, P1))
+			return 1;
+	}
+
+	return 0;
+} /* dns_rr_exists() */
 
 
 static unsigned short dns_rr_offset(struct dns_rr *rr) {
@@ -2786,6 +2800,7 @@ enum dns_resconf_keyword {
 	DNS_RESCONF_ATTEMPTS,
 	DNS_RESCONF_ROTATE,
 	DNS_RESCONF_RECURSE,
+	DNS_RESCONF_SMART,
 	DNS_RESCONF_INTERFACE,
 }; /* enum dns_resconf_keyword */ 
 
@@ -2801,6 +2816,7 @@ static enum dns_resconf_keyword dns_resconf_keyword(const char *word) {
 		[DNS_RESCONF_EDNS0]		= "edns0",
 		[DNS_RESCONF_ROTATE]		= "rotate",
 		[DNS_RESCONF_RECURSE]		= "recurse",
+		[DNS_RESCONF_SMART]		= "smart",
 		[DNS_RESCONF_INTERFACE]		= "interface",
 	};
 	unsigned i;
@@ -2948,6 +2964,10 @@ skip:
 					break;
 				case DNS_RESCONF_RECURSE:
 					resconf->options.recurse	= 1;
+
+					break;
+				case DNS_RESCONF_SMART:
+					resconf->options.smart		= 1;
 
 					break;
 				default:
@@ -4036,6 +4056,9 @@ enum dns_r_state {
 	DNS_R_CNAME0_A,
 	DNS_R_CNAME1_A,
 
+	DNS_R_FINISH,
+	DNS_R_SMART0_A,
+	DNS_R_SMART1_A,
 	DNS_R_DONE,
 	DNS_R_SERVFAIL,
 }; /* enum dns_r_state */
@@ -4064,6 +4087,8 @@ struct dns_resolver {
 	time_t began;
 
 	dns_resconf_i_t search;
+
+	struct dns_rr_i smart;
 
 	struct dns_r_frame {
 		enum dns_r_state state;
@@ -4251,7 +4276,7 @@ static struct dns_packet *dns_r_glue(struct dns_resolver *R, struct dns_packet *
 		dns_rr_foreach(&rr, R->stack[sp].answer, .name = qname, .type = qtype, .section = (DNS_S_ALL & ~DNS_S_QD)) {
 			rr.section	= DNS_S_AN;
 
-			if ((error = dns_rr_copy(P, &rr, Q)))
+			if ((error = dns_rr_copy(P, &rr, R->stack[sp].answer)))
 				return 0;
 		}
 	}
@@ -4267,7 +4292,7 @@ static struct dns_packet *dns_r_glue(struct dns_resolver *R, struct dns_packet *
 		dns_rr_foreach(&rr, R->stack[sp].answer, .name = qname, .type = DNS_T_CNAME, .section = (DNS_S_ALL & ~DNS_S_QD)) {
 			rr.section	= DNS_S_AN;
 
-			if ((error = dns_rr_copy(P, &rr, Q)))
+			if ((error = dns_rr_copy(P, &rr, R->stack[sp].answer)))
 				return 0;
 		}
 	}
@@ -4278,6 +4303,30 @@ static struct dns_packet *dns_r_glue(struct dns_resolver *R, struct dns_packet *
 copy:
 	return dns_p_copy(dns_p_init(malloc(dns_p_sizeof(P)), dns_p_sizeof(P)), P);
 } /* dns_r_glue() */
+
+
+static struct dns_packet *dns_r_mkquery(struct dns_resolver *R, const char *qname, enum dns_type qtype, enum dns_class qclass, int *error_) {
+	struct dns_packet *Q	= 0;
+	int error;
+
+	if (!(Q = dns_p_init(malloc(DNS_P_QBUFSIZ), DNS_P_QBUFSIZ)))
+		goto syerr;
+
+	if ((error = dns_p_push(Q, DNS_S_QD, qname, strlen(qname), qtype, qclass, 0, 0)))
+		goto error;
+
+	dns_header(Q)->rd	= !R->resconf->options.recurse;
+
+	return Q;
+syerr:
+	error	= errno;
+error:
+	free(Q);
+
+	*error_	= error;
+
+	return 0;
+} /* dns_r_mkquery() */
 
 
 /*
@@ -4346,11 +4395,11 @@ exec:
 		if (!dns_d_expand(host, sizeof host, 12, F->query, &error))
 			goto error;
 
-		dns_rr_foreach(&rr, F->query, .name = host, .type = dns_rr_type(12, F->query), .section = DNS_S_AN) {
-			goto(R->sp, DNS_R_DONE);
+		dns_rr_foreach(&rr, F->answer, .name = host, .type = dns_rr_type(12, F->query), .section = DNS_S_AN) {
+			goto(R->sp, DNS_R_FINISH);
 		}
 
-		dns_rr_foreach(&rr, F->query, .name = host, .type = DNS_T_CNAME, .section = DNS_S_AN) {
+		dns_rr_foreach(&rr, F->answer, .name = host, .type = DNS_T_CNAME, .section = DNS_S_AN) {
 			F->ans_cname	= rr;
 
 			goto(R->sp, DNS_R_CNAME0_A);
@@ -4376,7 +4425,7 @@ exec:
 				goto error;
 
 			if (dns_p_count(F->answer, DNS_S_AN) > 0)
-				goto(R->sp, DNS_R_DONE);
+				goto(R->sp, DNS_R_FINISH);
 
 			free(F->answer); F->answer = 0;
 		} else {
@@ -4392,7 +4441,7 @@ exec:
 					goto error;
 
 				if (dns_p_count(F->answer, DNS_S_AN) > 0)
-					goto(R->sp, DNS_R_DONE);
+					goto(R->sp, DNS_R_FINISH);
 
 				free(F->answer); F->answer = 0;
 			}
@@ -4506,13 +4555,11 @@ exec:
 		if ((error = dns_a_parse((struct dns_a *)&sin.sin_addr, &rr, F->hints)))
 			goto error;
 
-#if DNS_TRACE
-		do {
+		if (DNS_TRACE) {
 			char addr[INET_ADDRSTRLEN + 1];
 			dns_a_print(addr, sizeof addr, (struct dns_a *)&sin.sin_addr);
 			DUMP(F->query, "ASKING: %s/%s @ DEPTH: %u)", host, addr, R->sp);
-		} while (0);
-#endif
+		}
 
 		if ((error = dns_so_submit(&R->so, F->query, (struct sockaddr *)&sin)))
 			goto error;
@@ -4530,11 +4577,12 @@ exec:
 		if (!(F->answer = dns_so_fetch(&R->so, &error)))
 			goto error;
 
-#if DNS_TRACE
-		DUMP(F->answer, "ANSWER @ DEPTH: %u)", R->sp);
-#endif
+		if (DNS_TRACE) {
+			DUMP(F->answer, "ANSWER @ DEPTH: %u)", R->sp);
+		}
+
 		if (!R->resconf->options.recurse)
-			goto(R->sp, DNS_R_DONE);
+			goto(R->sp, DNS_R_FINISH);
 
 		if ((error = dns_rr_parse(&rr, 12, F->query)))
 			goto error;
@@ -4543,7 +4591,7 @@ exec:
 			goto error;
 
 		dns_rr_foreach(&rr, F->answer, .section = DNS_S_AN, .name = host, .type = rr.type) {
-			goto(R->sp, DNS_R_DONE);	/* Found */
+			goto(R->sp, DNS_R_FINISH);	/* Found */
 		}
 
 		dns_rr_foreach(&rr, F->answer, .section = DNS_S_AN, .name = host, .type = DNS_T_CNAME) {
@@ -4563,12 +4611,12 @@ exec:
 
 		/* XXX: Should this go further up? */
 		if (dns_header(F->answer)->aa)
-			goto(R->sp, DNS_R_DONE);
+			goto(R->sp, DNS_R_FINISH);
 
 		goto(R->sp, DNS_R_FOREACH_A);
 	case DNS_R_CNAME0_A:
 		if (&F[1] >= endof(R->stack))
-			goto(R->sp, DNS_R_DONE);
+			goto(R->sp, DNS_R_FINISH);
 
 		if ((error = dns_cname_parse((struct dns_cname *)host, &F->ans_cname, F->answer)))
 			goto error;
@@ -4590,7 +4638,110 @@ exec:
 
 		free(F->answer); F->answer = P;
 
+		goto(R->sp, DNS_R_FINISH);
+	case DNS_R_FINISH:
+		assert(F->answer);
+
+		if (!R->resconf->options.smart || R->sp > 0)
+			goto(R->sp, DNS_R_DONE);
+
+		R->smart.section	= DNS_S_AN;
+		R->smart.type		= R->qtype;
+
+		dns_rr_i_init(&R->smart, F->answer);
+
+		F->state++;
+	case DNS_R_SMART0_A:
+		while (dns_rr_grep(&rr, 1, &R->smart, F->answer, &error)) {
+			union {
+				struct dns_ns ns;
+				struct dns_mx mx;
+				struct dns_srv srv;
+			} rd;
+			const char *qname;
+			enum dns_type qtype;
+			enum dns_class qclass;
+
+			switch (rr.type) {
+			case DNS_T_NS:
+				if ((error = dns_ns_parse(&rd.ns, &rr, F->answer)))
+					goto error;
+
+				qname	= rd.ns.host;
+				qtype	= DNS_T_A;
+				qclass	= DNS_C_IN;
+
+				break;
+			case DNS_T_MX:
+				if ((error = dns_mx_parse(&rd.mx, &rr, F->answer)))
+					goto error;
+
+				qname	= rd.mx.host;
+				qtype	= DNS_T_A;
+				qclass	= DNS_C_IN;
+
+				break;
+			case DNS_T_SRV:
+				if ((error = dns_srv_parse(&rd.srv, &rr, F->answer)))
+					goto error;
+
+				qname	= rd.srv.target;
+				qtype	= DNS_T_A;
+				qclass	= DNS_C_IN;
+
+				break;
+			default:
+				continue;
+			} /* switch() */
+
+			dns_r_reset_frame(R, &F[1]);
+
+			if (!(F[1].query = dns_r_mkquery(R, qname, qtype, qclass, &error)))
+				goto error;
+
+			F->state++;
+
+			goto(++R->sp, DNS_R_INIT);
+		} /* while() */
+
+		/*
+		 * NOTE: SMTP specification says to fallback to A record.
+		 *
+		 * XXX: Should we add a mock MX answer?
+		 */
+		if (R->qtype == DNS_T_MX && R->smart.state.count == 0) {
+			dns_r_reset_frame(R, &F[1]);
+
+			if (!(F[1].query = dns_r_mkquery(R, R->qname, DNS_T_A, DNS_C_IN, &error)))
+				goto error;
+
+			R->smart.state.count++;
+			F->state++;
+
+			goto(++R->sp, DNS_R_INIT);
+		}
+
 		goto(R->sp, DNS_R_DONE);
+	case DNS_R_SMART1_A:
+		assert(F[1].answer);
+
+		/*
+		 * FIXME: For CNAME chains (which are typically illegal in
+		 * this context), we should rewrite the record host name
+		 * to the original smart qname. All the user cares about
+		 * is locating that A/AAAA record.
+		 */
+		dns_rr_foreach(&rr, F[1].answer, .section = DNS_S_AN, .type = DNS_T_A) {
+			rr.section	= DNS_S_AR;
+
+			if (dns_rr_exists(&rr, F[1].answer, F->answer))
+				continue;
+
+			if ((error = dns_rr_copy(F->answer, &rr, F[1].answer)))
+				goto error;
+		}
+
+		goto(R->sp, DNS_R_SMART0_A);
 	case DNS_R_DONE:
 		assert(F->answer);
 
@@ -4971,7 +5122,7 @@ static void print_packet(struct dns_packet *P, FILE *fp) {
 		section	= rr.section;
 	}
 
-	if (MAIN.verbose)
+	if (MAIN.verbose > 1)
 		dump(P->data, P->end, fp);
 } /* print_packet() */
 
@@ -5034,7 +5185,7 @@ static int parse_packet(int argc, char *argv[]) {
 		section	= rr.section;
 	}
 
-	if (MAIN.verbose) {
+	if (MAIN.verbose > 1) {
 		fprintf(stderr, "orig:%zu\n", P->end);
 		dump(P->data, P->end, stdout);
 
@@ -5479,7 +5630,9 @@ int main(int argc, char **argv) {
 
 			break;
 		case 'v':
-			MAIN.verbose	= 1;
+			MAIN.verbose++;
+
+			dns_trace	= (MAIN.verbose > 0);
 
 			break;
 		case 'h':
