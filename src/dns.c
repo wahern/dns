@@ -4516,6 +4516,8 @@ exec:
 			goto(R->sp, DNS_R_HINTS);
 		}
 
+		R->search	= 0;
+
 		F->state++;
 	case DNS_R_SEARCH:
 		if (!(len = dns_resconf_search(host, sizeof host, R->qname, R->qlen, R->resconf, &R->search)))
@@ -4811,12 +4813,14 @@ exec:
 
 		break;
 	case DNS_R_SERVFAIL:
-		if (!(P = dns_p_copy(dns_p_init(malloc(dns_p_sizeof(F->query)), dns_p_sizeof(F->query)), F->query)))
+		if (!(F->answer = dns_p_init(malloc(DNS_P_QBUFSIZ), DNS_P_QBUFSIZ)))
 			goto syerr;
 
-		dns_header(P)->rcode	= DNS_RC_SERVFAIL;
+		dns_header(F->answer)->qr	= 1;
+		dns_header(F->answer)->rcode	= DNS_RC_SERVFAIL;
 
-		free(F->answer); F->answer = P;
+		if ((error = dns_p_push(F->answer, DNS_S_QD, R->qname, strlen(R->qname), R->qtype, R->qclass, 0, 0)))
+			goto error;
 
 		goto(R->sp, DNS_R_DONE);
 	default:
