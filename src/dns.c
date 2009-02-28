@@ -4493,7 +4493,23 @@ exec:
 			R->search	= 0;
 
 			while ((len = dns_resconf_search(host, sizeof host, R->qname, R->qlen, R->resconf, &R->search))) {
+/*
+ * FIXME: Some sort of bug, either with this code or with GCC 3.3.5 on
+ * OpenBSD 4.4, overwites the stack guard. If the bug is in this file, it
+ * appears to be localized somewhere around here. It can also be mitigated
+ * in dns_hosts_query(). In any event, the bug manifests only when using
+ * compound literals. alloca(), malloc(), calloc(), etc, all work fine. 
+ * Valgrind (tested on Linux) cannot detect any issues, but stack issues are
+ * not Valgrind's forte. Neither can I spot anything in the assembly, but
+ * that's not my forte.
+ */
+#if __OpenBSD__ && __GNUC__
+				struct dns_packet *query	= __builtin_alloca(DNS_P_QBUFSIZ);
+
+				dns_p_init(query, DNS_P_QBUFSIZ);
+#else
 				struct dns_packet *query	= dns_p_new(DNS_P_QBUFSIZ);
+#endif
 
 				if ((error = dns_p_push(query, DNS_S_QD, host, len, R->qtype, R->qclass, 0, 0)))
 					goto error;
