@@ -1,5 +1,5 @@
 /* ==========================================================================
- * dns.h - Restartable DNS Resolver.
+ * dns.h - Recursive, Reentrant DNS Resolver.
  * --------------------------------------------------------------------------
  * Copyright (c) 2009  William Ahern
  *

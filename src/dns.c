@@ -1,5 +1,5 @@
 /* ==========================================================================
- * dns.c - Restartable DNS Resolver.
+ * dns.c - Recursive, Reentrant DNS Resolver.
  * --------------------------------------------------------------------------
  * Copyright (c) 2008, 2009  William Ahern
  *
