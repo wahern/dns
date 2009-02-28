@@ -4813,6 +4813,8 @@ exec:
 
 		break;
 	case DNS_R_SERVFAIL:
+		free(F->answer);
+
 		if (!(F->answer = dns_p_init(malloc(DNS_P_QBUFSIZ), DNS_P_QBUFSIZ)))
 			goto syerr;
 
