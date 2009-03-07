@@ -4176,11 +4176,12 @@ struct dns_resolver *dns_r_open(struct dns_resolv_conf *resconf, struct dns_host
 	if (hints)
 		dns_hints_acquire(hints);
 
-	if (!resconf && !(resconf = dns_resconf_local(&error)))
-		goto error;
-	if (!hosts && !(hosts = dns_hosts_local(&error)))
-		goto error;
-	if (!hints && !(hints = dns_hints_local(resconf, &error)))
+	/*
+	 * Don't try to load it ourselves because a NULL object might be an
+	 * error from, say, dns_resconf_root(), and loading
+	 * dns_resconf_local() by default would create undesirable surpises.
+	 */
+	if (!resconf || !hosts || !hints)
 		goto error;
 
 	if (!(R = malloc(sizeof *R)))
