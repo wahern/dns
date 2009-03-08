@@ -5405,7 +5405,7 @@ exec:
 		free(ans);
 
 		if (!glue)
-			return errno;
+			return error;
 
 		if (ai->glue != ai->answer)
 			free(ai->glue);
