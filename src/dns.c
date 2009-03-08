@@ -41,7 +41,8 @@
 
 #include <assert.h>	/* assert(3) */
 
-#include <sys/types.h>	/* socklen_t */
+#include <sys/types.h>	/* FD_SETSIZE socklen_t */
+#include <sys/select.h>	/* FD_ZERO FD_SET fd_set select(2) */
 #include <sys/socket.h>	/* AF_INET AF_INET6 AF_UNIX struct sockaddr struct sockaddr_in struct sockaddr_in6 socket(2) */
 
 #if defined(AF_UNIX)
@@ -4277,6 +4278,25 @@ int dns_so_pollout(struct dns_socket *so) {
 } /* dns_so_pollout() */
 
 
+int dns_so_poll(struct dns_socket *so, int timeout) {
+	fd_set rfds, wfds;
+	int rfd, wfd;
+
+	FD_ZERO(&rfds);
+	FD_ZERO(&wfds);
+
+	if (-1 != (rfd = dns_so_pollin(so)) && rfd < FD_SETSIZE)
+		FD_SET(rfd, &rfds);
+
+	if (-1 != (wfd = dns_so_pollout(so)) && wfd < FD_SETSIZE)
+		FD_SET(wfd, &wfds);
+
+	select(MAX(rfd, wfd) + 1, &rfds, &wfds, 0, (timeout >= 0)? &(struct timeval){ timeout, 0 } : 0);
+
+	return 0;
+} /* dns_so_poll() */
+
+
 /*
  * R E S O L V E R  R O U T I N E S
  *
@@ -5066,6 +5086,11 @@ time_t dns_res_elapsed(struct dns_resolver *R) {
 } /* dns_res_elapsed() */
 
 
+int dns_res_poll(struct dns_resolver *R, int timeout) {
+	return dns_so_poll(&R->so, timeout);
+} /* dns_res_poll() */
+
+
 int dns_res_submit(struct dns_resolver *R, const char *qname, enum dns_type qtype, enum dns_class qclass) {
 	dns_res_reset(R);
 
@@ -5417,6 +5442,11 @@ int dns_ai_pollin(struct dns_addrinfo *ai) {
 int dns_ai_pollout(struct dns_addrinfo *ai) {
 	return dns_res_pollout(ai->res);
 } /* dns_ai_pollout() */
+
+
+int dns_ai_poll(struct dns_addrinfo *ai, int timeout) {
+	return dns_res_poll(ai->res, timeout);
+} /* dns_ai_poll() */
 
 
 static size_t dns_ai_print(void *dst, size_t lim, struct addrinfo *ent, struct dns_addrinfo *ai) {
@@ -6045,24 +6075,12 @@ static int send_query(int argc, char *argv[]) {
 		panic("dns_so_open: %s", strerror(error));
 
 	while (!(A = dns_so_query(so, Q, (struct sockaddr *)&ss, &error))) {
-		fd_set rfds, wfds;
-		int rfd, wfd;
-
 		if (error != EAGAIN)
 			panic("dns_so_query: %s(%d)", strerror(error), error);
 		if (dns_so_elapsed(so) > 10)
 			panic("query timed-out");
 
-		FD_ZERO(&rfds);
-		FD_ZERO(&wfds);
-
-		if (-1 != (rfd = dns_so_pollin(so)))
-			FD_SET(rfd, &rfds);
-
-		if (-1 != (wfd = dns_so_pollout(so)))
-			FD_SET(wfd, &wfds);
-
-		select(MAX(rfd, wfd) + 1, &rfds, &wfds, 0, &(struct timeval){ 1, 0 });
+		dns_so_poll(so, 1);
 	}
 
 	print_packet(A, stdout);
@@ -6148,24 +6166,12 @@ static int resolve_query(int argc, char *argv[]) {
 		panic("%s: %s", MAIN.qname, strerror(error));
 
 	while ((error = dns_res_check(R))) {
-		fd_set rfds, wfds;
-		int rfd, wfd;
-
 		if (error != EAGAIN)
 			panic("dns_res_check: %s(%d)", strerror(error), error);
 		if (dns_res_elapsed(R) > 30)
 			panic("query timed-out");
 
-		FD_ZERO(&rfds);
-		FD_ZERO(&wfds);
-
-		if (-1 != (rfd = dns_res_pollin(R)))
-			FD_SET(rfd, &rfds);
-
-		if (-1 != (wfd = dns_res_pollout(R)))
-			FD_SET(wfd, &wfds);
-
-		select(MAX(rfd, wfd) + 1, &rfds, &wfds, 0, &(struct timeval){ 1, 0 });
+		dns_res_poll(R, 1);
 	}
 
 	print_packet(dns_res_fetch(R, &error), stdout);
@@ -6199,9 +6205,6 @@ static int resolve_addrinfo(int argc, char *argv[]) {
 		panic("%s: %s", MAIN.qname, strerror(error));
 
 	do {
-		fd_set rfds, wfds;
-		int rfd, wfd;
-
 		switch (error = dns_ai_nextent(&ent, ai)) {
 		case 0:
 			dns_ai_print(pretty, sizeof pretty, ent, ai);
@@ -6217,16 +6220,7 @@ static int resolve_addrinfo(int argc, char *argv[]) {
 			if (dns_ai_elapsed(ai) > 30)
 				panic("query timed-out");
 
-			FD_ZERO(&rfds);
-			FD_ZERO(&wfds);
-
-			if (-1 != (rfd = dns_ai_pollin(ai)))
-				FD_SET(rfd, &rfds);
-
-			if (-1 != (wfd = dns_ai_pollout(ai)))
-				FD_SET(wfd, &wfds);
-
-			select(MAX(rfd, wfd) + 1, &rfds, &wfds, 0, &(struct timeval){ 1, 0 });
+			dns_ai_poll(ai, 1);
 
 			break;
 		default:

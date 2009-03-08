@@ -716,6 +716,8 @@ int dns_so_pollin(struct dns_socket *);
 
 int dns_so_pollout(struct dns_socket *);
 
+int dns_so_poll(struct dns_socket *, int);
+
 
 /*
  * R E S O L V E R  I N T E R F A C E
@@ -746,6 +748,8 @@ int dns_res_pollin(struct dns_resolver *);
 
 int dns_res_pollout(struct dns_resolver *);
 
+int dns_res_poll(struct dns_resolver *, int);
+
 
 /*
  * A D D R I N F O  I N T E R F A C E
@@ -765,6 +769,8 @@ time_t dns_ai_elapsed(struct dns_addrinfo *);
 int dns_ai_pollin(struct dns_addrinfo *);
 
 int dns_ai_pollout(struct dns_addrinfo *);
+
+int dns_ai_poll(struct dns_addrinfo *, int);
 
 
 /*
