@@ -35,6 +35,8 @@
 
 #include <netinet/in.h>	/* struct in_addr struct in6_addr */
 
+#include <netdb.h>	/* struct addrinfo */
+
 
 /*
  * E R R O R S
@@ -211,7 +213,7 @@ struct dns_packet {
 
 	struct { struct dns_packet *cqe_next, *cqe_prev; } cqe;
 
-	size_t size, end;
+	size_t size, end, qend;
 
 	unsigned char tcpb[2];
 	unsigned char data[1];
@@ -236,6 +238,8 @@ unsigned dns_p_count(struct dns_packet *, enum dns_section);
 int dns_p_push(struct dns_packet *, enum dns_section, const void *, size_t, enum dns_type, enum dns_class, unsigned, const void *);
 
 void dns_p_dictadd(struct dns_packet *, unsigned short);
+
+struct dns_packet *dns_p_merge(struct dns_packet *, enum dns_section, struct dns_packet *, enum dns_section, int *);
 
 
 /*
@@ -268,6 +272,8 @@ unsigned short dns_d_skip(unsigned short, struct dns_packet *);
 
 int dns_d_push(struct dns_packet *, const void *, size_t);
 
+size_t dns_d_cname(void *, size_t, const void *, size_t, struct dns_packet *, int *error);
+
 
 /*
  * R E S O U R C E  R E C O R D  I N T E R F A C E S
@@ -299,6 +305,8 @@ int dns_rr_parse(struct dns_rr *, unsigned short, struct dns_packet *);
 
 unsigned short dns_rr_skip(unsigned short, struct dns_packet *);
 
+int dns_rr_cmp(struct dns_rr *, struct dns_packet *, struct dns_rr *, struct dns_packet *);
+
 
 #define dns_rr_i_new(P, ...)		dns_rr_i_init(&(struct dns_rr_i){ 0, __VA_ARGS__ }, (P))
 
@@ -308,6 +316,8 @@ struct dns_rr_i {
 	enum dns_type type;
 	enum dns_class class;
 	const void *data;
+
+	int follow;
 
 	int (*sort)();
 	unsigned args[2];
@@ -336,7 +346,7 @@ struct dns_rr_i *dns_rr_i_init(struct dns_rr_i *, struct dns_packet *);
 unsigned dns_rr_grep(struct dns_rr *, unsigned, struct dns_rr_i *, struct dns_packet *, int *);
 
 #define dns_rr_foreach_(rr, P, ...)	\
-	for (struct dns_rr_i i##__LINE__ = *dns_rr_i_new(P, __VA_ARGS__); dns_rr_grep((rr), 1, &i##__LINE__, (P), &(int){ 0 }); )
+	for (struct dns_rr_i i##__LINE__ = *dns_rr_i_new((P), __VA_ARGS__); dns_rr_grep((rr), 1, &i##__LINE__, (P), &(int){ 0 }); )
 
 #define dns_rr_foreach(...)	dns_rr_foreach_(__VA_ARGS__)
 
@@ -350,8 +360,11 @@ struct dns_a {
 }; /* struct dns_a */
 
 int dns_a_parse(struct dns_a *, struct dns_rr *, struct dns_packet *);
+
 int dns_a_push(struct dns_packet *, struct dns_a *);
+
 int dns_a_cmp(const struct dns_a *, const struct dns_a *);
+
 size_t dns_a_print(void *, size_t, struct dns_a *);
 
 
@@ -364,8 +377,11 @@ struct dns_aaaa {
 }; /* struct dns_aaaa */
 
 int dns_aaaa_parse(struct dns_aaaa *, struct dns_rr *, struct dns_packet *);
+
 int dns_aaaa_push(struct dns_packet *, struct dns_aaaa *);
+
 int dns_aaaa_cmp(const struct dns_aaaa *, const struct dns_aaaa *);
+
 size_t dns_aaaa_print(void *, size_t, struct dns_aaaa *);
 
 
@@ -379,9 +395,14 @@ struct dns_mx {
 }; /* struct dns_mx */
 
 int dns_mx_parse(struct dns_mx *, struct dns_rr *, struct dns_packet *);
+
 int dns_mx_push(struct dns_packet *, struct dns_mx *);
+
 int dns_mx_cmp(const struct dns_mx *, const struct dns_mx *);
+
 size_t dns_mx_print(void *, size_t, struct dns_mx *);
+
+size_t dns_mx_cname(void *, size_t, struct dns_mx *);
 
 
 /*
@@ -393,9 +414,14 @@ struct dns_ns {
 }; /* struct dns_ns */
 
 int dns_ns_parse(struct dns_ns *, struct dns_rr *, struct dns_packet *);
+
 int dns_ns_push(struct dns_packet *, struct dns_ns *);
+
 int dns_ns_cmp(const struct dns_ns *, const struct dns_ns *);
+
 size_t dns_ns_print(void *, size_t, struct dns_ns *);
+
+size_t dns_ns_cname(void *, size_t, struct dns_ns *);
 
 
 /*
@@ -407,9 +433,14 @@ struct dns_cname {
 }; /* struct dns_cname */
 
 int dns_cname_parse(struct dns_cname *, struct dns_rr *, struct dns_packet *);
+
 int dns_cname_push(struct dns_packet *, struct dns_cname *);
+
 int dns_cname_cmp(const struct dns_cname *, const struct dns_cname *);
+
 size_t dns_cname_print(void *, size_t, struct dns_cname *);
+
+size_t dns_cname_cname(void *, size_t, struct dns_cname *);
 
 
 /*
@@ -423,8 +454,11 @@ struct dns_soa {
 }; /* struct dns_soa */
 
 int dns_soa_parse(struct dns_soa *, struct dns_rr *, struct dns_packet *);
+
 int dns_soa_push(struct dns_packet *, struct dns_soa *);
+
 int dns_soa_cmp(const struct dns_soa *, const struct dns_soa *);
+
 size_t dns_soa_print(void *, size_t, struct dns_soa *);
 
 
@@ -437,9 +471,14 @@ struct dns_ptr {
 }; /* struct dns_ptr */
 
 int dns_ptr_parse(struct dns_ptr *, struct dns_rr *, struct dns_packet *);
+
 int dns_ptr_push(struct dns_packet *, struct dns_ptr *);
+
 int dns_ptr_cmp(const struct dns_ptr *, const struct dns_ptr *);
+
 size_t dns_ptr_print(void *, size_t, struct dns_ptr *);
+
+size_t dns_ptr_cname(void *, size_t, struct dns_ptr *);
 
 
 /*
@@ -454,9 +493,14 @@ struct dns_srv {
 }; /* struct dns_srv */
 
 int dns_srv_parse(struct dns_srv *, struct dns_rr *, struct dns_packet *);
+
 int dns_srv_push(struct dns_packet *, struct dns_srv *);
+
 int dns_srv_cmp(const struct dns_srv *, const struct dns_srv *);
+
 size_t dns_srv_print(void *, size_t, struct dns_srv *);
+
+size_t dns_srv_cname(void *, size_t, struct dns_srv *);
 
 
 /*
@@ -473,9 +517,13 @@ struct dns_txt {
 }; /* struct dns_txt */
 
 struct dns_txt *dns_txt_init(struct dns_txt *, size_t);
+
 int dns_txt_parse(struct dns_txt *, struct dns_rr *, struct dns_packet *);
+
 int dns_txt_push(struct dns_packet *, struct dns_txt *);
+
 int dns_txt_cmp(const struct dns_txt *, const struct dns_txt *);
+
 size_t dns_txt_print(void *, size_t, struct dns_txt *);
 
 
@@ -495,10 +543,16 @@ union dns_any {
 }; /* union dns_any */
 
 union dns_any *dns_any_init(union dns_any *, size_t);
+
 int dns_any_parse(union dns_any *, struct dns_rr *, struct dns_packet *);
+
 int dns_any_push(struct dns_packet *, union dns_any *, enum dns_type);
+
 int dns_any_cmp(const union dns_any *, enum dns_type, const union dns_any *, enum dns_type);
+
 size_t dns_any_print(void *, size_t, union dns_any *, enum dns_type);
+
+size_t dns_any_cname(void *, size_t, union dns_any *, enum dns_type);
 
 
 /*
@@ -634,7 +688,7 @@ unsigned dns_hints_grep(struct sockaddr **, socklen_t *, unsigned, struct dns_hi
 
 
 /*
- * S O C K E T  R O U T I N E S
+ * S O C K E T  I N T E R F A C E
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -664,28 +718,53 @@ int dns_so_pollout(struct dns_socket *);
 
 
 /*
- * R E S O L V E R  R O U T I N E S
+ * R E S O L V E R  I N T E R F A C E
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 struct dns_resolver;
 
-struct dns_resolver *dns_r_open(struct dns_resolv_conf *, struct dns_hosts *hosts, struct dns_hints *, int *);
+struct dns_resolver *dns_res_open(struct dns_resolv_conf *, struct dns_hosts *hosts, struct dns_hints *, int *);
 
-void dns_r_reset(struct dns_resolver *);
+void dns_res_reset(struct dns_resolver *);
 
-void dns_r_close(struct dns_resolver *);
+void dns_res_close(struct dns_resolver *);
 
-unsigned dns_r_acquire(struct dns_resolver *);
+unsigned dns_res_acquire(struct dns_resolver *);
 
-unsigned dns_r_release(struct dns_resolver *);
+unsigned dns_res_release(struct dns_resolver *);
 
-int dns_r_submit(struct dns_resolver *, const char *, enum dns_type, enum dns_class);
+int dns_res_submit(struct dns_resolver *, const char *, enum dns_type, enum dns_class);
 
-int dns_r_check(struct dns_resolver *);
+int dns_res_check(struct dns_resolver *);
 
-struct dns_packet *dns_r_fetch(struct dns_resolver *, int *);
+struct dns_packet *dns_res_fetch(struct dns_resolver *, int *);
 
+time_t dns_res_elapsed(struct dns_resolver *);
+
+int dns_res_pollin(struct dns_resolver *);
+
+int dns_res_pollout(struct dns_resolver *);
+
+
+/*
+ * A D D R I N F O  I N T E R F A C E
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+struct dns_addrinfo;
+
+struct dns_addrinfo *dns_ai_open(const char *, const char *, enum dns_type, const struct addrinfo *, struct dns_resolver *, int *);
+
+void dns_ai_close(struct dns_addrinfo *);
+
+int dns_ai_nextent(struct addrinfo **, struct dns_addrinfo *);
+
+time_t dns_ai_elapsed(struct dns_addrinfo *);
+
+int dns_ai_pollin(struct dns_addrinfo *);
+
+int dns_ai_pollout(struct dns_addrinfo *);
 
 
 /*
