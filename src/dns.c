@@ -5501,7 +5501,7 @@ static size_t dns_ai_print(void *dst, size_t lim, struct addrinfo *ent, struct d
 	cp	+= dns__print10(dst, lim, cp, ntohs(*dns_sa_port(dns_sa_family(ent->ai_addr), ent->ai_addr)), 0);
 	cp	+= dns__printchar(dst, lim, cp, '\n');
 
-	cp	+= dns__printstring(dst, lim, cp, ".ai_cannoname = ");
+	cp	+= dns__printstring(dst, lim, cp, ".ai_canonname = ");
 	cp	+= dns__printstring(dst, lim, cp, (ent->ai_canonname)? ent->ai_canonname : "[NULL]");
 	cp	+= dns__printchar(dst, lim, cp, '\n');
 
