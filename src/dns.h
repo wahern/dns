@@ -30,12 +30,17 @@
 
 #include <time.h>	/* time_t */
 
+#if _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <sys/types.h>	/* socklen_t */
 #include <sys/socket.h>	/* struct socket */
 
 #include <netinet/in.h>	/* struct in_addr struct in6_addr */
 
 #include <netdb.h>	/* struct addrinfo */
+#endif
 
 
 /*
@@ -613,7 +618,7 @@ struct dns_resolv_conf {
 		_Bool smart;
 	} options;
 
-	struct sockaddr_storage interface;
+	struct sockaddr_storage iface;
 
 	struct { /* PRIVATE */
 		dns_atomic_t refcount;
