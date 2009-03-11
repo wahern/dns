@@ -5281,6 +5281,10 @@ void dns_ai_close(struct dns_addrinfo *ai) {
 		return;
 
 	dns_res_close(ai->res);
+
+	if (ai->answer != ai->glue)
+		free(ai->glue);
+
 	free(ai->answer);
 	free(ai);
 } /* dns_ai_close() */
