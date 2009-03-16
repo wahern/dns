@@ -23,45 +23,53 @@
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
  * ==========================================================================
  */
-#include <stddef.h>	/* offsetof() */
-#include <stdint.h>	/* uint32_t */
-#include <stdlib.h>	/* malloc(3) realloc(3) free(3) rand(3) random(3) arc4random(3) */
-#include <stdio.h>	/* FILE fopen(3) fclose(3) getc(3) rewind(3) */
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE	600	/* _POSIX_C_SOURCE=200112L + random(3) */
+#endif
 
-#include <string.h>	/* memcpy(3) strlen(3) memmove(3) memchr(3) memcmp(3) strchr(3) */
-#include <strings.h>	/* strcasecmp(3) strncasecmp(3) */
+#if __APPLE__
+#define _DARWIN_C_SOURCE	/* AF_MAX */
+#endif
 
-#include <ctype.h>	/* isspace(3) isdigit(3) */
+#include <stddef.h>		/* offsetof() */
+#include <stdint.h>		/* uint32_t */
+#include <stdlib.h>		/* malloc(3) realloc(3) free(3) rand(3) random(3) arc4random(3) */
+#include <stdio.h>		/* FILE fopen(3) fclose(3) getc(3) rewind(3) */
 
-#include <time.h>	/* time_t time(2) */
+#include <string.h>		/* memcpy(3) strlen(3) memmove(3) memchr(3) memcmp(3) strchr(3) */
+#include <strings.h>		/* strcasecmp(3) strncasecmp(3) */
 
-#include <signal.h>	/* sig_atomic_t */
+#include <ctype.h>		/* isspace(3) isdigit(3) */
 
-#include <errno.h>	/* errno EINVAL ENOENT */
+#include <time.h>		/* time_t time(2) */
 
-#include <assert.h>	/* assert(3) */
+#include <signal.h>		/* sig_atomic_t */
+
+#include <errno.h>		/* errno EINVAL ENOENT */
+
+#include <assert.h>		/* assert(3) */
 
 #if _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #else
-#include <sys/types.h>	/* FD_SETSIZE socklen_t */
-#include <sys/select.h>	/* FD_ZERO FD_SET fd_set select(2) */
-#include <sys/socket.h>	/* AF_INET AF_INET6 AF_UNIX struct sockaddr struct sockaddr_in struct sockaddr_in6 socket(2) */
+#include <sys/types.h>		/* FD_SETSIZE socklen_t */
+#include <sys/select.h>		/* FD_ZERO FD_SET fd_set select(2) */
+#include <sys/socket.h>		/* AF_INET AF_INET6 AF_UNIX struct sockaddr struct sockaddr_in struct sockaddr_in6 socket(2) */
 
 #if defined(AF_UNIX)
-#include <sys/un.h>	/* struct sockaddr_un */
+#include <sys/un.h>		/* struct sockaddr_un */
 #endif
 
-#include <fcntl.h>	/* F_SETFD F_GETFL F_SETFL O_NONBLOCK fcntl(2) */
+#include <fcntl.h>		/* F_SETFD F_GETFL F_SETFL O_NONBLOCK fcntl(2) */
 
-#include <unistd.h>	/* gethostname(3) close(2) */
+#include <unistd.h>		/* gethostname(3) close(2) */
 
-#include <netinet/in.h>	/* struct sockaddr_in struct sockaddr_in6 */
+#include <netinet/in.h>		/* struct sockaddr_in struct sockaddr_in6 */
 
-#include <arpa/inet.h>	/* inet_pton(3) inet_ntop(3) htons(3) ntohs(3) */
+#include <arpa/inet.h>		/* inet_pton(3) inet_ntop(3) htons(3) ntohs(3) */
 
-#include <netdb.h>	/* struct addrinfo */
+#include <netdb.h>		/* struct addrinfo */
 #endif
 
 #include "dns.h"

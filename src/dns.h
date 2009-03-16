@@ -23,23 +23,27 @@
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
  * ==========================================================================
  */
-#include <stddef.h>	/* offsetof() */
-#include <stdio.h>	/* FILE */
+#include <stddef.h>			/* offsetof() */
+#include <stdio.h>			/* FILE */
 
-#include <string.h>	/* strlen(3) */
+#include <string.h>			/* strlen(3) */
 
-#include <time.h>	/* time_t */
+#include <time.h>			/* time_t */
 
 #if _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #else
-#include <sys/types.h>	/* socklen_t */
-#include <sys/socket.h>	/* struct socket */
+#include <sys/types.h>			/* socklen_t */
+#include <sys/socket.h>			/* struct socket */
 
-#include <netinet/in.h>	/* struct in_addr struct in6_addr */
+#include <netinet/in.h>			/* struct in_addr struct in6_addr */
 
-#include <netdb.h>	/* struct addrinfo */
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE	200112L		/* struct addrinfo */
+#endif
+
+#include <netdb.h>			/* struct addrinfo */
 #endif
 
 
