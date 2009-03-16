@@ -24,12 +24,14 @@
  * ==========================================================================
  */
 #ifndef _XOPEN_SOURCE
-#define _XOPEN_SOURCE	600	/* _POSIX_C_SOURCE=200112L + random(3) */
+#define _XOPEN_SOURCE	600
 #endif
 
-#if __APPLE__
-#define _DARWIN_C_SOURCE	/* AF_MAX */
-#endif
+#undef _BSD_SOURCE
+#define _BSD_SOURCE
+
+#undef _DARWIN_C_SOURCE
+#define _DARWIN_C_SOURCE
 
 #include <stddef.h>		/* offsetof() */
 #include <stdint.h>		/* uint32_t */
