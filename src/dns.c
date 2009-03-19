@@ -4513,6 +4513,33 @@ error:
 } /* dns_res_open() */
 
 
+struct dns_resolver *dns_res_stub(int *error) {
+	struct dns_resolv_conf *resconf	= 0;
+	struct dns_hosts *hosts		= 0;
+	struct dns_hints *hints		= 0;
+	struct dns_resolver *res	= 0;
+
+	if (!(resconf = dns_resconf_local(error)))
+		goto epilog;
+
+	if (!(hosts = dns_hosts_local(error)))
+		goto epilog;
+
+	if (!(hints = dns_hints_local(resconf, error)))
+		goto epilog;
+
+	if (!(res = dns_res_open(resconf, hosts, hints, error)))
+		goto epilog;
+
+epilog:
+	dns_resconf_close(resconf);
+	dns_hosts_close(hosts);
+	dns_hints_close(hints);
+
+	return res;
+} /* dns_res_stub() */
+
+
 static void dns_res_reset_frame(struct dns_resolver *R, struct dns_res_frame *frame) {
 	free(frame->query);
 	free(frame->answer);

@@ -733,6 +733,8 @@ struct dns_resolver;
 
 struct dns_resolver *dns_res_open(struct dns_resolv_conf *, struct dns_hosts *hosts, struct dns_hints *, int *);
 
+struct dns_resolver *dns_res_stub(int *);
+
 void dns_res_reset(struct dns_resolver *);
 
 void dns_res_close(struct dns_resolver *);
