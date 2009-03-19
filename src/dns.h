@@ -743,6 +743,8 @@ unsigned dns_res_acquire(struct dns_resolver *);
 
 unsigned dns_res_release(struct dns_resolver *);
 
+struct dns_resolver *dns_res_mortal(struct dns_resolver *);
+
 int dns_res_submit(struct dns_resolver *, const char *, enum dns_type, enum dns_class);
 
 int dns_res_check(struct dns_resolver *);

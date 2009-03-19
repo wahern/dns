@@ -4586,6 +4586,13 @@ unsigned dns_res_release(struct dns_resolver *R) {
 } /* dns_res_release() */
 
 
+struct dns_resolver *dns_res_mortal(struct dns_resolver *res) {
+	if (res)
+		dns_res_release(res);
+	return res;
+} /* dns_res_mortal() */
+
+
 static struct dns_packet *dns_res_merge(struct dns_packet *P0, struct dns_packet *P1, int *error_) {
 	size_t bufsiz	= P0->end + P1->end;
 	struct dns_packet *P[3]	= { P0, P1, 0 };
