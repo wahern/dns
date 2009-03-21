@@ -116,8 +116,8 @@ static int dns_trace;
 #define DNS_TRACE	0
 #endif
 
-#define MARK_(fmt, ...)	fprintf(stderr, fmt "%s", __FILE__, __LINE__, __VA_ARGS__)
-#define MARK(...)	MARK_("@@ %s:%d: " __VA_ARGS__, "\n")
+#define MARK_(fmt, ...)	fprintf(stderr, fmt "%s", __FILE__, __LINE__, __func__, __VA_ARGS__)
+#define MARK(...)	MARK_("@@ %s:%d:%s: " __VA_ARGS__, "\n")
 
 static void print_packet();
 
@@ -5306,6 +5306,8 @@ struct dns_addrinfo *dns_ai_open(const char *host, const char *serv, enum dns_ty
 		ai->qport	*= 10;
 		ai->qport	+= *serv++ - '0';
 	}
+
+	ai->port	= ai->qport;
 
 	return ai;
 syerr:
