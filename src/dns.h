@@ -23,6 +23,9 @@
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
  * ==========================================================================
  */
+#ifndef DNS_H
+#define DNS_H
+
 #include <stddef.h>			/* offsetof() */
 #include <stdio.h>			/* FILE */
 
@@ -794,3 +797,5 @@ int dns_ai_poll(struct dns_addrinfo *, int);
 #define DNS_PP_XPASTE(x, y)	DNS_PP_PASTE(x, y)
 #define DNS_PP_STRINGIFY_(s)	#s
 #define DNS_PP_STRINGIFY(s)	DNS_PP_STRINGIFY_(s)
+
+#endif /* DNS_H */
