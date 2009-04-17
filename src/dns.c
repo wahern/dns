@@ -4996,9 +4996,6 @@ exec:
 			DUMP(F->answer, "ANSWER @ DEPTH: %u)", R->sp);
 		}
 
-		if (!R->resconf->options.recurse)
-			goto(R->sp, DNS_R_FINISH);
-
 		if ((error = dns_rr_parse(&rr, 12, F->query)))
 			goto error;
 
@@ -5008,6 +5005,9 @@ exec:
 		dns_rr_foreach(&rr, F->answer, .section = DNS_S_AN, .name = host, .type = rr.type) {
 			goto(R->sp, DNS_R_FINISH);	/* Found */
 		}
+
+		if (!R->resconf->options.recurse)
+			goto(R->sp, DNS_R_SWITCH);
 
 		dns_rr_foreach(&rr, F->answer, .section = DNS_S_AN, .name = host, .type = DNS_T_CNAME) {
 			F->ans_cname	= rr;
