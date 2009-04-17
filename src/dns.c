@@ -5402,6 +5402,7 @@ enum dns_ai_state {
 int dns_ai_nextent(struct addrinfo **ent, struct dns_addrinfo *ai) {
 	struct dns_packet *ans, *glue;
 	struct dns_rr rr;
+	char qname[DNS_D_MAXNAME + 1];
 	union dns_any any;
 	int error;
 
@@ -5453,7 +5454,11 @@ exec:
 
 		ai->state++;
 	case DNS_AI_S_FOREACH_I:
-		if (!dns_d_cname(ai->cname, sizeof ai->cname, ai->qname, strlen(ai->qname), ai->answer, &error))
+		/* Search generator may have changed our qname. */
+		if (!dns_d_expand(qname, sizeof qname, 12, ai->answer, &error))
+			return error;
+
+		if (!dns_d_cname(ai->cname, sizeof ai->cname, qname, strlen(qname), ai->answer, &error))
 			return error;
 
 		ai->i.name	= ai->cname;
