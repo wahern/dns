@@ -5006,14 +5006,14 @@ exec:
 			goto(R->sp, DNS_R_FINISH);	/* Found */
 		}
 
-		if (!R->resconf->options.recurse)
-			goto(R->sp, DNS_R_SWITCH);
-
 		dns_rr_foreach(&rr, F->answer, .section = DNS_S_AN, .name = host, .type = DNS_T_CNAME) {
 			F->ans_cname	= rr;
 
 			goto(R->sp, DNS_R_CNAME0_A);
 		}
+
+		if (!R->resconf->options.recurse)
+			goto(R->sp, DNS_R_SWITCH);
 
 		dns_rr_foreach(&rr, F->answer, .section = DNS_S_NS, .type = DNS_T_NS) {
 			free(F->hints);
