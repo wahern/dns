@@ -159,7 +159,7 @@ enum spf_result {
 
 enum spf_modifier {
 	SPF_REDIRECT = 0x20,
-	SPF_EXPLANATION,
+	SPF_EXP,
 	SPF_UNKNOWN,
 }; /* enum spf_modifier */
 
@@ -239,11 +239,11 @@ struct spf_redirect {
 }; /* struct spf_redirect */
 
 
-struct spf_explanation {
+struct spf_exp {
 	enum spf_modifier type;
 
 	char domain[SPF_MAXDN + 1];
-}; /* struct spf_explanation */
+}; /* struct spf_exp */
 
 
 struct spf_unknown {
@@ -271,7 +271,7 @@ struct spf_term {
 		struct spf_exists exists;
 
 		struct spf_redirect redirect;
-		struct spf_explanation exp;
+		struct spf_exp exp;
 		struct spf_unknown unknown;
 	};
 

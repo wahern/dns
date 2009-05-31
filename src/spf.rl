@@ -39,19 +39,21 @@
 #if SPF_DEBUG
 #include <stdio.h> /* stderr fprintf(3) */
 
-int spf_trace;
+int spf_debug;
 
 #undef SPF_DEBUG
-#define SPF_DEBUG spf_trace
+#define SPF_DEBUG spf_debug
+#define SPF_TRACE (spf_debug > 1)
 
-#define SPF_TRACE_(fmt, ...) fprintf(stderr, fmt "%.1s", __func__, __LINE__, __VA_ARGS__)
-#define SPF_TRACE(...) SPF_TRACE_(">>>> (%s:%d) " __VA_ARGS__, "\n")
-#define SPF_MARK 
+#define SPF_SAY_(fmt, ...) fprintf(stderr, fmt "%.1s", __func__, __LINE__, __VA_ARGS__)
+#define SPF_SAY(...) SPF_SAY_(">>>> (%s:%d) " __VA_ARGS__, "\n")
+#define SPF_HI SPF_SAY(":)")
 #else
 #define SPF_DEBUG 0
+#define SPF_TRACE 0
 
-#define SPF_TRACE(...)
-#define SPF_MARK
+#define SPF_SAY(...)
+#define SPF_HI
 #endif /* SPF_DEBUG */
 
 
@@ -91,14 +93,14 @@ size_t spf_trim(char *dst, const char *src, size_t lim) {
 	while (src[sp] == '.')
 		sp++;
 
-	for (lc = 0; src[sp]; lc = src[sp]) {
+	while ((lc = src[sp])) {
 		if (dp < lim)
 			dst[dp] = src[sp];
 
 		sp++; dp++;
 
 		/* trim extra dot(s) */
-		while (src[sp] == '.')
+		while (lc == '.' && src[sp] == '.')
 			sp++;
 	}
 
@@ -110,26 +112,49 @@ size_t spf_trim(char *dst, const char *src, size_t lim) {
 
 
 struct spf_sbuf {
-	char str[512];
 	unsigned end;
+
 	_Bool overflow;
+
+	char str[512];
 }; /* struct spf_sbuf */
 
-static _Bool spf_sbuf_putc(struct spf_sbuf *sbuf, int ch) {
+static void sbuf_init(struct spf_sbuf *sbuf) {
+	memset(sbuf, 0, sizeof *sbuf);
+} /* sbuf_init() */
+
+static _Bool sbuf_putc(struct spf_sbuf *sbuf, int ch) {
 	if (sbuf->end < sizeof sbuf->str - 1)
 		sbuf->str[sbuf->end++] = ch;
 	else
 		sbuf->overflow = 1;
 
 	return !sbuf->overflow;
-} /* spf_sbuf_putc() */
+} /* sbuf_putc() */
 
-static _Bool spf_sbuf_puts(struct spf_sbuf *sbuf, const char *src) {
-	while (*src && spf_sbuf_putc(sbuf, *src))
+static _Bool sbuf_puts(struct spf_sbuf *sbuf, const char *src) {
+	while (*src && sbuf_putc(sbuf, *src))
 		src++;
 
 	return !sbuf->overflow;
-} /* spf_sbuf_puts() */
+} /* sbuf_puts() */
+
+static _Bool sbuf_puti(struct spf_sbuf *sbuf, unsigned long i) {
+	unsigned r, d = 1000000000, p = 0;
+
+	if (i) {
+		do {
+			if ((r = i / d) || p) {
+				i -= r * d;
+				sbuf_putc(sbuf, '0' + r);
+				p++;
+			}
+		} while (d /= 10);
+	} else
+		sbuf_putc(sbuf, '0');
+
+	return sbuf->overflow;
+} /* sbuf_puti() */
 
 
 const char *spf_strtype(int type) {
@@ -152,7 +177,7 @@ const char *spf_strtype(int type) {
 		return "exists";
 	case SPF_REDIRECT:
 		return "redirect";
-	case SPF_EXPLANATION:
+	case SPF_EXP:
 		return "exp";
 	default:
 		return "[[[error]]]";
@@ -162,86 +187,173 @@ const char *spf_strtype(int type) {
 
 
 
-static const struct spf_all spf_all_initializer =
+static const struct spf_all all_initializer =
 	{ .type = SPF_ALL, .result = SPF_PASS };
 
-static const struct spf_include spf_include_initializer =
+static void all_comp(struct spf_sbuf *sbuf, struct spf_all *all) {
+	sbuf_putc(sbuf, all->result);
+	sbuf_puts(sbuf, "all");
+} /* all_comp() */
+
+
+static const struct spf_include include_initializer =
 	{ .type = SPF_INCLUDE, .result = SPF_PASS, .domain = "%{d}" };
 
-static const struct spf_a spf_a_initializer =
+static void include_comp(struct spf_sbuf *sbuf, struct spf_include *include) {
+	sbuf_putc(sbuf, include->result);
+	sbuf_puts(sbuf, "include");
+	sbuf_putc(sbuf, ':');
+	sbuf_puts(sbuf, include->domain);
+} /* include_comp() */
+
+
+static const struct spf_a a_initializer =
 	{ .type = SPF_A, .result = SPF_PASS, .domain = "%{d}", .prefix4 = 32, .prefix6 = 128 };
 
-static const struct spf_mx spf_mx_initializer =
+static void a_comp(struct spf_sbuf *sbuf, struct spf_a *a) {
+	sbuf_putc(sbuf, a->result);
+	sbuf_puts(sbuf, "a");
+	sbuf_putc(sbuf, ':');
+	sbuf_puts(sbuf, a->domain);
+	sbuf_putc(sbuf, '/');
+	sbuf_puti(sbuf, a->prefix4);
+	sbuf_puts(sbuf, "//");
+	sbuf_puti(sbuf, a->prefix6);
+} /* a_comp() */
+
+
+static const struct spf_mx mx_initializer =
 	{ .type = SPF_MX, .result = SPF_PASS, .domain = "%{d}", .prefix4 = 32, .prefix6 = 128 };
 
-static const struct spf_ptr spf_ptr_initializer =
+static void mx_comp(struct spf_sbuf *sbuf, struct spf_mx *mx) {
+	sbuf_putc(sbuf, mx->result);
+	sbuf_puts(sbuf, "mx");
+	sbuf_putc(sbuf, ':');
+	sbuf_puts(sbuf, mx->domain);
+	sbuf_putc(sbuf, '/');
+	sbuf_puti(sbuf, mx->prefix4);
+	sbuf_puts(sbuf, "//");
+	sbuf_puti(sbuf, mx->prefix6);
+} /* mx_comp() */
+
+
+static const struct spf_ptr ptr_initializer =
 	{ .type = SPF_PTR, .result = SPF_PASS, .domain = "%{d}" };
 
-static const struct spf_ip4 spf_ip4_initializer =
+static void ptr_comp(struct spf_sbuf *sbuf, struct spf_ptr *ptr) {
+	sbuf_putc(sbuf, ptr->result);
+	sbuf_puts(sbuf, "ptr");
+	sbuf_putc(sbuf, ':');
+	sbuf_puts(sbuf, ptr->domain);
+} /* ptr_comp() */
+
+
+static const struct spf_ip4 ip4_initializer =
 	{ .type = SPF_IP4, .result = SPF_PASS, .prefix = 32 };
 
-static const struct spf_ip6 spf_ip6_initializer =
+static void ip4_comp(struct spf_sbuf *sbuf, struct spf_ip4 *ip4) {
+	sbuf_putc(sbuf, ip4->result);
+	sbuf_puts(sbuf, "ip4");
+	sbuf_putc(sbuf, ':');
+	sbuf_puti(sbuf, 0xff & (ntohl(ip4->addr.s_addr) >> 24));
+	sbuf_putc(sbuf, '.');
+	sbuf_puti(sbuf, 0xff & (ntohl(ip4->addr.s_addr) >> 16));
+	sbuf_putc(sbuf, '.');
+	sbuf_puti(sbuf, 0xff & (ntohl(ip4->addr.s_addr) >> 8));
+	sbuf_putc(sbuf, '.');
+	sbuf_puti(sbuf, 0xff & (ntohl(ip4->addr.s_addr) >> 0));
+	sbuf_putc(sbuf, '/');
+	sbuf_puti(sbuf, ip4->prefix);
+} /* ip4_comp() */
+
+
+static const struct spf_ip6 ip6_initializer =
 	{ .type = SPF_IP6, .result = SPF_PASS, .prefix = 128 };
 
-static const struct spf_exists spf_exists_initializer =
+static void ip6_comp(struct spf_sbuf *sbuf, struct spf_ip6 *ip6) {
+	static const char tohex[] = "0123456789abcdef";
+
+	sbuf_putc(sbuf, ip6->result);
+	sbuf_puts(sbuf, "ip6");
+
+	for (unsigned i = 0; i < 128; i++) {
+		if (!(i % 4))
+			sbuf_putc(sbuf, ':');
+
+		sbuf_putc(sbuf, tohex[0x0f & (ip6->addr.s6_addr[i] >> 4)]);
+		sbuf_putc(sbuf, tohex[0x0f & (ip6->addr.s6_addr[i] >> 0)]);
+	}
+
+	sbuf_putc(sbuf, '/');
+	sbuf_puti(sbuf, ip6->prefix);
+} /* ip6_comp() */
+
+
+static const struct spf_exists exists_initializer =
 	{ .type = SPF_EXISTS, .result = SPF_PASS, .domain = "%{d}" };
 
-static const struct spf_redirect spf_redirect_initializer =
+static void exists_comp(struct spf_sbuf *sbuf, struct spf_exists *exists) {
+	sbuf_putc(sbuf, exists->result);
+	sbuf_puts(sbuf, "exists");
+	sbuf_putc(sbuf, ':');
+	sbuf_puts(sbuf, exists->domain);
+} /* exists_comp() */
+
+
+static const struct spf_redirect redirect_initializer =
 	{ .type = SPF_REDIRECT };
 
-static const struct spf_explanation spf_explanation_initializer =
-	{ .type = SPF_EXPLANATION };
+static void redirect_comp(struct spf_sbuf *sbuf, struct spf_redirect *redirect) {
+	sbuf_puts(sbuf, "redirect");
+	sbuf_putc(sbuf, '=');
+	sbuf_puts(sbuf, redirect->domain);
+} /* redirect_comp() */
 
-static const struct spf_unknown spf_unknown_initializer =
+
+static const struct spf_exp exp_initializer =
+	{ .type = SPF_EXP };
+
+static void exp_comp(struct spf_sbuf *sbuf, struct spf_exp *exp) {
+	sbuf_puts(sbuf, "exp");
+	sbuf_putc(sbuf, '=');
+	sbuf_puts(sbuf, exp->domain);
+} /* exp_comp() */
+
+
+static const struct spf_unknown unknown_initializer =
 	{ .type = SPF_UNKNOWN };
+
+static void unknown_comp(struct spf_sbuf *sbuf, struct spf_unknown *unknown) {
+	sbuf_puts(sbuf, unknown->name);
+	sbuf_putc(sbuf, '=');
+	sbuf_puts(sbuf, unknown->value);
+} /* unknown_comp() */
 
 
 static const struct {
 	const void *initializer;
 	size_t size;
-	void (*init)();
-	void (*reset)();
+	void (*comp)();
 } spf_term[] = {
-	[SPF_ALL]     = { &spf_all_initializer, sizeof spf_all_initializer },
-	[SPF_INCLUDE] = { &spf_include_initializer, sizeof spf_include_initializer },
-	[SPF_A]       = { &spf_a_initializer, sizeof spf_a_initializer },
-	[SPF_MX]      = { &spf_mx_initializer, sizeof spf_mx_initializer },
-	[SPF_PTR]     = { &spf_ptr_initializer, sizeof spf_ptr_initializer },
-	[SPF_IP4]     = { &spf_ip4_initializer, sizeof spf_ip4_initializer },
-	[SPF_IP6]     = { &spf_ip6_initializer, sizeof spf_ip6_initializer },
-	[SPF_EXISTS]  = { &spf_exists_initializer, sizeof spf_exists_initializer },
+	[SPF_ALL]     = { &all_initializer, sizeof all_initializer, &all_comp },
+	[SPF_INCLUDE] = { &include_initializer, sizeof include_initializer, &include_comp },
+	[SPF_A]       = { &a_initializer, sizeof a_initializer, &a_comp },
+	[SPF_MX]      = { &mx_initializer, sizeof mx_initializer, &mx_comp },
+	[SPF_PTR]     = { &ptr_initializer, sizeof ptr_initializer, &ptr_comp },
+	[SPF_IP4]     = { &ip4_initializer, sizeof ip4_initializer, &ip4_comp },
+	[SPF_IP6]     = { &ip6_initializer, sizeof ip6_initializer, &ip6_comp },
+	[SPF_EXISTS]  = { &exists_initializer, sizeof exists_initializer, &exists_comp },
 
-	[SPF_REDIRECT]    = { &spf_redirect_initializer, sizeof spf_redirect_initializer },
-	[SPF_EXPLANATION] = { &spf_explanation_initializer, sizeof spf_explanation_initializer },
-	[SPF_UNKNOWN]     = { &spf_unknown_initializer, sizeof spf_unknown_initializer },
+	[SPF_REDIRECT] = { &redirect_initializer, sizeof redirect_initializer, &redirect_comp },
+	[SPF_EXP]      = { &exp_initializer, sizeof exp_initializer, &exp_comp },
+	[SPF_UNKNOWN]  = { &unknown_initializer, sizeof unknown_initializer, &unknown_comp },
 }; /* spf_term[] */
 
+static char *term_comp(struct spf_sbuf *sbuf, void *term) {
+	spf_term[((struct spf_term *)term)->type].comp(sbuf, term);
 
-static void *spf_term_open(int type, int *error) {
-	struct spf_term *term;
-
-	if (!(term = malloc(sizeof *term)))
-		{ *error = errno; return 0; }
-
-	memset(term, 0, sizeof *term);
-	memcpy(term, spf_term[type].initializer, spf_term[type].size);
-
-	if (spf_term[type].init)
-		spf_term[type].init(term);
-
-	return term;
-} /* spf_term_open() */
-
-
-static void spf_term_close(void *term) {
-	int type = ((struct spf_term *)term)->type;
-
-	if (spf_term[type].reset)
-		spf_term[type].reset(term);
-
-	free(term);
-} /* spf_term_close() */
-
+	return sbuf->str;
+} /* term_comp() */
 
 
 %%{
@@ -258,9 +370,9 @@ static void spf_term_close(void *term) {
 				part = rdata;
 
 			if (isgraph(fc))
-				SPF_TRACE("`%c' invalid near `%.*s'", fc, (int)SPF_MIN(12, pe - part), part);
+				SPF_SAY("`%c' invalid near `%.*s'", fc, (int)SPF_MIN(12, pe - part), part);
 			else
-				SPF_TRACE("error near `%.*s'", (int)SPF_MIN(12, pe - part), part);
+				SPF_SAY("error near `%.*s'", (int)SPF_MIN(12, pe - part), part);
 		}
 
 		error = EINVAL;
@@ -271,17 +383,17 @@ static void spf_term_close(void *term) {
 	action term_begin {
 		result = SPF_PASS;
 		memset(&term, 0, sizeof term);
+		sbuf_init(&domain);
+		prefix4 = 32; prefix6 = 128;
 	}
 
 	action term_end {
-		if (SPF_ISMECHANISM(term.type))
-			SPF_TRACE("term -> %c%s", term.result, spf_strtype(term.type));
-		else
-			SPF_TRACE("term -> %s", spf_strtype(term.type));
+		if (SPF_TRACE && term.type)
+			SPF_SAY("term -> %s", term_comp(&(struct spf_sbuf){ 0 }, &term));
 	}
 
 	action all_begin {
-		term.all    = spf_all_initializer;
+		term.all    = all_initializer;
 		term.result = result;
 	}
 
@@ -289,79 +401,107 @@ static void spf_term_close(void *term) {
 	}
 
 	action include_begin {
-		term.include = spf_include_initializer;
+		term.include = include_initializer;
 		term.result  = result;
 	}
 
 	action include_end {
+		if (*domain.str)
+			spf_trim(term.include.domain, domain.str, sizeof term.include.domain);
 	}
 
 	action a_begin {
-		term.a      = spf_a_initializer;
+		term.a      = a_initializer;
 		term.result = result;
 	}
 
 	action a_end {
+		if (*domain.str)
+			spf_trim(term.a.domain, domain.str, sizeof term.a.domain);
+
+		term.a.prefix4 = prefix4;
+		term.a.prefix6 = prefix6;
 	}
 
 	action mx_begin {
-		term.mx    = spf_mx_initializer;
+		term.mx    = mx_initializer;
 		term.result = result;
+
+		term.mx.prefix4 = prefix4;
+		term.mx.prefix6 = prefix6;
 	}
 
 	action mx_end {
+		if (*domain.str)
+			spf_trim(term.mx.domain, domain.str, sizeof term.mx.domain);
 	}
 
 	action ptr_begin {
-		term.ptr    = spf_ptr_initializer;
+		term.ptr    = ptr_initializer;
 		term.result = result;
 	}
 
 	action ptr_end {
+		if (*domain.str)
+			spf_trim(term.ptr.domain, domain.str, sizeof term.ptr.domain);
 	}
 
 	action ip4_begin {
-		term.ip4    = spf_ip4_initializer;
+		term.ip4    = ip4_initializer;
 		term.result = result;
 	}
 
 	action ip4_end {
+		term.ip4.prefix = prefix4;
 	}
 
 	action ip6_begin {
-		term.ip6    = spf_ip6_initializer;
+		term.ip6    = ip6_initializer;
 		term.result = result;
 	}
 
 	action ip6_end {
+		term.ip6.prefix = prefix6;
 	}
 
 	action exists_begin {
-		term.exists = spf_exists_initializer;
+		term.exists = exists_initializer;
 		term.result = result;
 	}
 
 	action exists_end {
+		if (*domain.str)
+			spf_trim(term.exists.domain, domain.str, sizeof term.exists.domain);
 	}
 
 	action redirect_begin {
-		term.redirect = spf_redirect_initializer;
+		term.redirect = redirect_initializer;
 	}
 
 	action redirect_end {
+		if (*domain.str)
+			spf_trim(term.redirect.domain, domain.str, sizeof term.redirect.domain);
 	}
 
 	action exp_begin {
-		term.exp = spf_explanation_initializer;
+		term.exp = exp_initializer;
 	}
 
 	action exp_end {
+		if (*domain.str)
+			spf_trim(term.exp.domain, domain.str, sizeof term.exp.domain);
 	}
 
 	action unknown_begin {
+		sbuf_init(&name);
+		sbuf_init(&value);
 	}
 
 	action unknown_end {
+		term.unknown = unknown_initializer;
+
+		spf_strlcpy(term.unknown.name, name.str, sizeof term.unknown.name);
+		spf_strlcpy(term.unknown.value, value.str, sizeof term.unknown.value);
 	}
 
 	#
@@ -378,9 +518,11 @@ static void spf_term_close(void *term) {
 	macro_expand  = ("%{" macro_letter transformers delimiter* "}") | "%%" | "%_" | "%-";
 	macro_string  = (macro_expand | macro_literal)*;
 
-	toplabel    = (digit* alpha alnum*) | (alnum+ "-" (alnum | "-")* alnum);
-	domain_end  = ("." toplabel "."?) | macro_expand;
-	domain_spec = macro_string domain_end;
+	toplabel       = (digit* alpha alnum*) | (alnum+ "-" (alnum | "-")* alnum);
+	domain_end     = ("." toplabel "."?) | macro_expand;
+	domain_literal = (0x21 .. 0x24) | (0x26 .. 0x2e) | (0x30 .. 0x7e);
+	domain_macro   = (macro_expand | domain_literal)*;
+	domain_spec    = (domain_macro domain_end) ${ sbuf_putc(&domain, fc); };
 
 	qnum        = ("0" | ("3" .. "9"))
 	            | ("1" digit{0,2})
@@ -392,23 +534,25 @@ static void spf_term_close(void *term) {
 	ip4_network = qnum "." qnum "." qnum "." qnum;
 	ip6_network = (xdigit | ":" | ".")+;
 
-	ip4_cidr_length  = "/" digit+;
-	ip6_cidr_length  = "/" digit+;
+	ip4_cidr_length  = "/" digit+ >{ prefix4 = 0; } ${ prefix4 *= 10; prefix4 += fc - '0'; };
+	ip6_cidr_length  = "/" digit+ >{ prefix6 = 0; } ${ prefix6 *= 10; prefix6 += fc - '0'; };
 	dual_cidr_length = ip4_cidr_length? ("/" ip6_cidr_length)?;
 
-	unknown     = name "=" macro_string;
-	explanation = "exp"i %exp_begin "=" domain_spec;
-	redirect    = "redirect"i %redirect_begin "=" domain_spec;
-	modifier    = redirect | explanation | unknown;
+	unknown  = name >unknown_begin ${ sbuf_putc(&name, fc); }
+	           "=" macro_string ${ sbuf_putc(&value, fc); }
+	           %unknown_end;
+	exp      = "exp"i %exp_begin "=" domain_spec %exp_end;
+	redirect = "redirect"i %redirect_begin "=" domain_spec %redirect_end;
+	modifier = redirect | exp | unknown;
 
-	exists  = "exists"i %exists_begin ":" domain_spec;
+	exists  = "exists"i %exists_begin ":" domain_spec %exists_end;
 	IP6     = "ip6"i %ip6_begin ":" ip6_network ip6_cidr_length?;
 	IP4     = "ip4"i %ip4_begin ":" ip4_network ip4_cidr_length?;
-	PTR     = "ptr"i %ptr_begin (":" domain_spec)?;
-	MX      = "mx"i %mx_begin (":" domain_spec)? dual_cidr_length?;
-	A       = "a"i %a_begin (":" domain_spec)? dual_cidr_length?;
-	inklude = "include"i %include_begin ":" domain_spec;
-	all     = "all"i %all_begin;
+	PTR     = "ptr"i %ptr_begin (":" domain_spec)? %ptr_end;
+	MX      = "mx"i %mx_begin (":" domain_spec)? dual_cidr_length? %mx_end;
+	A       = "a"i %a_begin (":" domain_spec)? dual_cidr_length? %a_end;
+	inklude = "include"i %include_begin ":" domain_spec %include_end;
+	all     = "all"i %all_begin %all_end;
 
 	mechanism = all | inklude | A | MX | PTR | IP4 | IP6 | exists;
 	qualifier = ("+" | "-" | "?" | "~") @{ result = fc; };
@@ -425,6 +569,8 @@ static void spf_term_close(void *term) {
 int spf_rr_parse(struct spf_rr *rr, const void *rdata, size_t rdlen) {
 	enum spf_result result = 0;
 	struct spf_term term;
+	struct spf_sbuf domain, name, value;
+	unsigned prefix4 = 0, prefix6 = 0;
 	const unsigned char *p, *pe, *eof;
 	int cs, error;
 
@@ -520,10 +666,12 @@ int main(int argc, char **argv) {
 	extern int optind;
 	int opt;
 
+	spf_debug = 1;
+
 	while (-1 != (opt = getopt(argc, argv, "vh"))) {
 		switch (opt) {
 		case 'v':
-			spf_trace++;
+			spf_debug++;
 
 			break;
 		case 'h':
