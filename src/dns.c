@@ -110,7 +110,9 @@
 #define DNS_DEBUG	0
 #endif
 
+#if DNS_DEBUG
 static int dns_trace;
+#endif
 
 #ifndef DNS_TRACE
 #define DNS_TRACE	0
@@ -944,8 +946,46 @@ invalid:
 } /* dns_l_skip() */
 
 
+size_t dns_d_trim(void *dst_, size_t lim, const void *src_, size_t len, int flags) {
+	unsigned char *dst = dst_;
+	const unsigned char *src = src_;
+	size_t dp = 0, sp = 0;
+	int lc;
+
+	/* trim any leading dot(s) */
+	while (sp < len && src[sp] == '.')
+		sp++;
+
+	for (lc = 0; sp < len; lc = src[sp]) {
+		if (dp < lim)
+			dst[dp] = src[sp];
+
+		sp++;
+		dp++;
+
+		/* trim extra dot(s) */
+		while (sp < len && src[sp] == '.')
+			sp++;
+	}
+
+	if ((flags & DNS_D_ANCHOR) && lc != '.') {
+		if (dp < lim)
+			dst[dp] = '.';
+
+		dp++;
+	}
+
+	if (lim > 0)
+		dst[MIN(dp, lim - 1)] = '\0';
+
+	return dp;
+} /* dns_d_trim() */
+
+
 char *dns_d_init(void *dst, size_t lim, const void *src, size_t len, int flags) {
-	if (flags & DNS_D_ANCHOR) {
+	if (flags & DNS_D_TRIM) {
+		dns_d_trim(dst, lim, src, len, flags);
+	} if (flags & DNS_D_ANCHOR) {
 		dns_d_anchor(dst, lim, src, len);
 	} else {
 		memmove(dst, src, MIN(lim, len));

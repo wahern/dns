@@ -260,6 +260,7 @@ struct dns_packet *dns_p_merge(struct dns_packet *, enum dns_section, struct dns
 
 #define DNS_D_ANCHOR	1	/* anchor domain w/ root "." */
 #define DNS_D_CLEAVE	2	/* cleave sub-domain */
+#define DNS_D_TRIM	4	/* remove superfluous dots */ 
 
 #define dns_d_new3(a, b, f)	dns_d_init(&(char[DNS_D_MAXNAME + 1]){ 0 }, DNS_D_MAXNAME + 1, (a), (b), (f))
 #define dns_d_new2(a, f)	dns_d_new3((a), strlen((a)), (f))
