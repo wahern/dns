@@ -27,9 +27,16 @@ SPF_CFLAGS   += -std=gnu99 -Wall -Werror -Wno-unused-function -Wno-unused-variab
 spf: spf.c dns.c
 	$(CC) $(SPF_CFLAGS) $(SPF_CPPFLAGS) -DSPF_MAIN -DSPF_DEBUG  -o $@ $^
 
+.PHONY: check spf.t
+
+spf.t: spf
+	@if [ -n "$(SRCDIR)" ]; then $(SRCDIR)/$@; else ./$@; fi
+
+check: spf.t
+
 
 .PHONY: clean
 
 clean:
-	rm -f dns dns.exe
-	rm -fr dns.dSYM
+	rm -f dns dns.exe spf spf.c
+	rm -fr dns.dSYM spf.dSYM
