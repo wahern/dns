@@ -30,7 +30,7 @@ spf: spf.c dns.c
 .PHONY: check spf.t
 
 spf.t: spf
-	@if [ -n "$(SRCDIR)" ]; then $(SRCDIR)/$@; else ./$@; fi
+	@PATH=".:$${PATH}"; $@ -p $^
 
 check: spf.t
 
