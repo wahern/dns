@@ -17,6 +17,17 @@ dns.exe: dns.c
 dns.S: dns.c
 	$(CC) $(CFLAGS) -S $(CPPFLAGS) -o $@ $^
 
+
+SPF_CPPFLAGS += 
+SPF_CFLAGS   += -std=gnu99 -Wall -Werror -Wno-unused-function -Wno-unused-variable -O2 -g -fstack-protector
+
+%.c: %.rl
+	ragel -C -o $@ $<
+
+spf: spf.c dns.c
+	$(CC) $(SPF_CFLAGS) $(SPF_CPPFLAGS) -DSPF_MAIN -DSPF_DEBUG  -o $@ $^
+
+
 .PHONY: clean
 
 clean:
