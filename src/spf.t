@@ -66,9 +66,9 @@ parse() {
 usage() {
 	cat <<-EOF
 		spf.t -p:vh
-		  -p  PATH  Path to spf utility
-		  -v        Be verbose
-		  -h        Print usage
+		  -p PATH  Path to spf utility
+		  -v       Be verbose
+		  -h       Print usage
 
 		Report bugs to william@25thandClement.com
 	EOF
