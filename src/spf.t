@@ -45,11 +45,11 @@ check() {
 		shift 1
 		say "$@"
 	else
+		[ -f $ERRBUF ] && cat $ERRBUF >&2
+
 		say "FAIL "
 		shift 1
 		say "$@"
-
-		cat $ERRBUF >&2
 
 		exit 1
 	fi
