@@ -30,6 +30,9 @@
 #include <netinet/in.h>	/* struct in_addr struct in6_addr */
 
 
+#define SPF_MIN(a, b) (((a) < (b))? (a) : (b))
+#define SPF_MAX(a, b) (((a) > (b))? (a) : (b))
+
 #define SPF_MAXDN 255
 
 
@@ -288,6 +291,11 @@ struct spf_rr {
 	char qname[SPF_MAXDN + 1];
 	int rtype;
 
+	struct {
+		int lc;
+		char near[16];
+	} error;
+
 	SPF_HEAD(spf_rr) terms;
 
 	SPF_ENTRY(spf_rr) tqe;
@@ -299,6 +307,26 @@ struct spf_rr *spf_rr_open(const char *, enum spf_rtype, int *);
 void spf_rr_close(struct spf_rr *);
 
 int spf_rr_parse(struct spf_rr *, const void *, size_t);
+
+
+struct spf_env {
+	char s[64 + 1 + SPF_MAXDN + 1];
+	char l[64 + 1];
+	char o[SPF_MAXDN + 1];
+	char d[SPF_MAXDN + 1];
+	char i[SPF_MAX(INET_ADDRSTRLEN, INET6_ADDRSTRLEN) + 1];
+	char p[SPF_MAXDN + 1];
+	char v[SPF_MAX(sizeof "in-addr", sizeof "ip6")];
+	char h[SPF_MAXDN + 1];
+
+	char c[SPF_MAX(INET_ADDRSTRLEN, INET6_ADDRSTRLEN) + 1];
+	char r[SPF_MAXDN + 1];
+	char t[32];
+}; /* struct spf_env */
+
+
+struct spf_env *spf_env_init(struct spf_env *);
+
 
 
 #endif /* SPF_H */
