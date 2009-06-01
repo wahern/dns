@@ -30,11 +30,13 @@
 
 #include <string.h>	/* memcpy(3) strlen(3) strsep(3) */
 
-#include <errno.h>	/* EINVAL ENAMETOOLONG errno */
+#include <errno.h>	/* EINVAL ENAMETOOLONG E2BIG errno */
 
 #include <time.h>	/* time(3) */
 
 #include <unistd.h>	/* gethostname(3) */
+
+#include <arpa/inet.h>	/* inet_pton(3) */
 
 #include "dns.h"
 #include "spf.h"
@@ -64,7 +66,7 @@ int spf_debug;
 #define spf_lengthof(a) (sizeof (a) / sizeof (a)[0])
 
 
-static size_t spf_itoa(char *dst, size_t lim, unsigned long i) {
+static size_t spf_itoa(char *dst, size_t lim, unsigned i) {
 	unsigned r, d = 1000000000, p = 0;
 	size_t dp = 0;
 
@@ -91,6 +93,37 @@ static size_t spf_itoa(char *dst, size_t lim, unsigned long i) {
 
 	return dp;
 } /* spf_itoa() */
+
+
+size_t spf_itox(char *dst, size_t lim, unsigned i) {
+	static const char tohex[] = "0123456789abcdef";
+	unsigned r, d = 0x10000000, p = 0;
+	size_t dp = 0;
+
+	if (i) {
+		do {
+			if ((r = i / d) || p) {
+				i -= r * d;
+
+				p++;
+
+				if (dp < lim)
+					dst[dp] = tohex[r];
+				dp++;
+			}
+		} while (d /= 16);
+	} else {
+		if (dp < lim)
+			dst[dp] = '0';
+
+		dp++;
+	}
+
+	if (lim)
+		dst[SPF_MIN(dp, lim - 1)] = '\0';
+
+	return dp;
+} /* spf_itox() */
 
 
 static size_t spf_strlcpy(char *dst, const char *src, size_t lim) {
@@ -160,6 +193,109 @@ size_t spf_trim(char *dst, const char *src, size_t lim) {
 } /* spf_trim() */
 
 
+size_t spf_4top(char *dst, size_t lim, struct in_addr *ip) {
+	char tmp[16];
+	size_t len;
+	unsigned i;
+
+	len = spf_itoa(tmp, sizeof tmp, 0xff & (ntohl(ip->s_addr) >> 24));
+
+	for (i = 1; i < 4; i++) {
+		tmp[len++] = '.';
+		len += spf_itoa(&tmp[len], sizeof tmp - len, 0xff & (ntohl(ip->s_addr) >> (8 * (3 - i))));
+	}
+
+	return spf_strlcpy(dst, tmp, lim);
+} /* spf_4top() */
+
+
+size_t spf_6top(char *dst, size_t lim, struct in6_addr *ip, _Bool nybbles) {
+	static const char tohex[] = "0123456789abcdef";
+	unsigned short group[8];
+	char tmp[SPF_MAX(40, 64)]; /* 40 for short, 64 for nybbles (includes '\0') */
+	size_t len;
+	unsigned i;
+	_Bool run, ran;
+
+	if (nybbles) {
+		len = 0;
+
+		tmp[len++] = tohex[0x0f & (ip->s6_addr[0] >> 4)];
+		tmp[len++] = '.';
+		tmp[len++] = tohex[0x0f & (ip->s6_addr[0] >> 0)];
+
+		for (i = 1; i < 16; i++) {
+			tmp[len++] = '.';
+			tmp[len++] = tohex[0x0f & (ip->s6_addr[i] >> 4)];
+			tmp[len++] = '.';
+			tmp[len++] = tohex[0x0f & (ip->s6_addr[i] >> 0)];
+		}
+	} else {
+		for (i = 0; i < 8; i++) {
+			group[i] = (0xff00 & (ip->s6_addr[i * 2] << 8))
+			         | (0x00ff & (ip->s6_addr[i * 2 + 1] << 0));
+		}
+
+		run = 0; ran = 0;
+
+		if (group[0]) {
+			len = spf_itox(tmp, sizeof tmp, group[0]);
+		} else {
+			len = 0;
+			run++;
+		}
+
+		for (i = 1; i < 8; i++) {
+			if (group[i] || ran) {
+				if (run) {
+					tmp[len++] = ':';
+					ran = 1; run = 0;
+				}
+
+				tmp[len++] = ':';
+				len += spf_itox(&tmp[len], sizeof tmp - len, group[i]);
+			} else
+				run++;
+		}
+
+		if (run) {
+			tmp[len++] = ':';
+			tmp[len++] = ':';
+		}
+	}
+
+	tmp[len] = '\0';
+
+	return spf_strlcpy(dst, tmp, lim);
+} /* spf_6top() */
+
+
+size_t spf_ntop(char *dst, size_t lim, int af, void *ip) {
+	if (af == AF_INET6)
+		return spf_6top(dst, lim, ip, 0);
+	else
+		return spf_4top(dst, lim, ip);
+} /* spf_ntop() */
+
+
+int spf_pto4(struct in_addr *ip, const char *src) {
+	memset(ip, 0, sizeof ip);
+
+	inet_pton(AF_INET, src, ip);
+
+	return 0;
+} /* spf_pto4() */
+
+
+int spf_pto6(struct in6_addr *ip, const char *src) {
+	memset(ip, 0, sizeof ip);
+
+	inet_pton(AF_INET6, src, ip);
+
+	return 0;
+} /* spf_pto6() */
+
+
 struct spf_sbuf {
 	unsigned end;
 
@@ -189,11 +325,28 @@ static _Bool sbuf_puts(struct spf_sbuf *sbuf, const char *src) {
 } /* sbuf_puts() */
 
 static _Bool sbuf_puti(struct spf_sbuf *sbuf, unsigned long i) {
-	if (sizeof sbuf->str <= spf_itoa(&sbuf->str[sbuf->end], sizeof sbuf->str - sbuf->end, i))
-		sbuf->overflow = 1;
+	char tmp[32];
 
-	return !sbuf->overflow;
+	spf_itoa(tmp, sizeof tmp, i);
+
+	return sbuf_puts(sbuf, tmp);
 } /* sbuf_puti() */
+
+static _Bool sbuf_put4(struct spf_sbuf *sbuf, struct in_addr *ip) {
+	char tmp[16];
+
+	spf_4top(tmp, sizeof tmp, ip);
+
+	return sbuf_puts(sbuf, tmp);
+} /* sbuf_put4() */
+
+static _Bool sbuf_put6(struct spf_sbuf *sbuf, struct in6_addr *ip) {
+	char tmp[40];
+
+	spf_6top(tmp, sizeof tmp, ip, 0);
+
+	return sbuf_puts(sbuf, tmp);
+} /* sbuf_put6() */
 
 
 const char *spf_strtype(int type) {
@@ -294,13 +447,7 @@ static void ip4_comp(struct spf_sbuf *sbuf, struct spf_ip4 *ip4) {
 	sbuf_putc(sbuf, ip4->result);
 	sbuf_puts(sbuf, "ip4");
 	sbuf_putc(sbuf, ':');
-	sbuf_puti(sbuf, 0xff & (ntohl(ip4->addr.s_addr) >> 24));
-	sbuf_putc(sbuf, '.');
-	sbuf_puti(sbuf, 0xff & (ntohl(ip4->addr.s_addr) >> 16));
-	sbuf_putc(sbuf, '.');
-	sbuf_puti(sbuf, 0xff & (ntohl(ip4->addr.s_addr) >> 8));
-	sbuf_putc(sbuf, '.');
-	sbuf_puti(sbuf, 0xff & (ntohl(ip4->addr.s_addr) >> 0));
+	sbuf_put4(sbuf, &ip4->addr);
 	sbuf_putc(sbuf, '/');
 	sbuf_puti(sbuf, ip4->prefix);
 } /* ip4_comp() */
@@ -310,19 +457,10 @@ static const struct spf_ip6 ip6_initializer =
 	{ .type = SPF_IP6, .result = SPF_PASS, .prefix = 128 };
 
 static void ip6_comp(struct spf_sbuf *sbuf, struct spf_ip6 *ip6) {
-	static const char tohex[] = "0123456789abcdef";
-
 	sbuf_putc(sbuf, ip6->result);
 	sbuf_puts(sbuf, "ip6");
-
-	for (unsigned i = 0; i < 128; i++) {
-		if (!(i % 4))
-			sbuf_putc(sbuf, ':');
-
-		sbuf_putc(sbuf, tohex[0x0f & (ip6->addr.s6_addr[i] >> 4)]);
-		sbuf_putc(sbuf, tohex[0x0f & (ip6->addr.s6_addr[i] >> 0)]);
-	}
-
+	sbuf_putc(sbuf, ':');
+	sbuf_put6(sbuf, &ip6->addr);
 	sbuf_putc(sbuf, '/');
 	sbuf_puti(sbuf, ip6->prefix);
 } /* ip6_comp() */
@@ -496,6 +634,7 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 	}
 
 	action ip4_end {
+		spf_pto4(&term.ip4.addr, domain.str);
 		term.ip4.prefix = prefix4;
 	}
 
@@ -505,6 +644,7 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 	}
 
 	action ip6_end {
+		spf_pto6(&term.ip6.addr, domain.str);
 		term.ip6.prefix = prefix6;
 	}
 
@@ -575,8 +715,8 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 	                   | ("6" .. "9")?
 	                   )
 	              );
-	ip4_network = qnum "." qnum "." qnum "." qnum;
-	ip6_network = (xdigit | ":" | ".")+;
+	ip4_network = (qnum "." qnum "." qnum "." qnum) ${ sbuf_putc(&domain, fc); };
+	ip6_network = (xdigit | ":" | ".")+ ${ sbuf_putc(&domain, fc); };
 
 	ip4_cidr_length  = "/" digit+ >{ prefix4 = 0; } ${ prefix4 *= 10; prefix4 += fc - '0'; };
 	ip6_cidr_length  = "/" digit+ >{ prefix6 = 0; } ${ prefix6 *= 10; prefix6 += fc - '0'; };
@@ -590,8 +730,8 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 	modifier = redirect | exp | unknown;
 
 	exists  = "exists"i %exists_begin ":" domain_spec %exists_end;
-	IP6     = "ip6"i %ip6_begin ":" ip6_network ip6_cidr_length?;
-	IP4     = "ip4"i %ip4_begin ":" ip4_network ip4_cidr_length?;
+	IP6     = "ip6"i %ip6_begin ":" ip6_network ip6_cidr_length? %ip6_end;
+	IP4     = "ip4"i %ip4_begin ":" ip4_network ip4_cidr_length? %ip4_end;
 	PTR     = "ptr"i %ptr_begin (":" domain_spec)? %ptr_end;
 	MX      = "mx"i %mx_begin (":" domain_spec)? dual_cidr_length? %mx_end;
 	A       = "a"i %a_begin (":" domain_spec)? dual_cidr_length? %a_end;
@@ -662,7 +802,6 @@ void spf_rr_close(struct spf_rr *rr) {
 	if (!rr)
 		return;
 
-	
 } /* spf_rr_close() */
 
 
@@ -778,7 +917,7 @@ static size_t spf_expand_(char *dst, size_t lim, const char *src, const struct s
 	count = spf_split(spf_lengthof(part), part, field, delim);
 
 	if (spf_lengthof(part) <= count)
-		goto toolong;
+		goto toobig;
 
 	if (rev) {
 		for (i = 0, j = count - 1; i < j; i++, j--) {
@@ -815,6 +954,10 @@ static size_t spf_expand_(char *dst, size_t lim, const char *src, const struct s
 	return dp;
 toolong:
 	*error = ENAMETOOLONG;
+
+	return 0;
+toobig:
+	*error = E2BIG;
 
 	return 0;
 } /* spf_expand_() */
@@ -913,7 +1056,7 @@ static int expand(const char *src, const struct spf_env *env) {
 	if (!(spf_expand(dst, sizeof dst, src, env, &error)) && error)
 		panic("%s: %s", src, strerror(error));	
 
-	fprintf(stderr, "[%s]\n", dst);
+	fprintf(stdout, "[%s]\n", dst);
 
 	return 0;
 } /* expand() */

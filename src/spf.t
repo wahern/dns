@@ -63,6 +63,20 @@ parse() {
 } # parse
 
 
+expand() {
+	MACRO=$1
+	EXPECT=$2
+
+	shift 2
+
+	EXPANS=$($SPF $VERBOSE "$@" expand $MACRO 2>$ERRBUF | sed -e 's/^\[//' -e 's/\]$//')
+
+	[ "$EXPANS" == "$EXPECT" ]
+
+	check $? "expand \`%s' \`%s'\n" "$MACRO" "$EXPANS"
+} # expand
+
+
 usage() {
 	cat <<-EOF
 		spf.t -p:vh
@@ -130,6 +144,23 @@ parse 'v=spf1 mx/30 mx:example.org/30 -all'
 parse 'v=spf1 ptr -all'
 parse 'v=spf1 ip4:192.0.2.128/28 -all'
 
+
+#
+# RFC 4408 8.2 Expansion Examples
+#
+expand '%{s}' 'strong-bad@email.example.com' -S 'strong-bad@email.example.com' -L 'strong-bad' -O 'email.example.com' -D 'email.example.com'
+expand '%{o}' 'email.example.com' -S 'strong-bad@email.example.com' -L 'strong-bad' -O 'email.example.com' -D 'email.example.com'
+expand '%{d}' 'email.example.com' -S 'strong-bad@email.example.com' -L 'strong-bad' -O 'email.example.com' -D 'email.example.com'
+expand '%{d4}' 'email.example.com' -S 'strong-bad@email.example.com' -L 'strong-bad' -O 'email.example.com' -D 'email.example.com'
+expand '%{d3}' 'email.example.com' -S 'strong-bad@email.example.com' -L 'strong-bad' -O 'email.example.com' -D 'email.example.com'
+expand '%{d2}' 'example.com' -S 'strong-bad@email.example.com' -L 'strong-bad' -O 'email.example.com' -D 'email.example.com'
+expand '%{d1}' 'com' -S 'strong-bad@email.example.com' -L 'strong-bad' -O 'email.example.com' -D 'email.example.com'
+expand '%{dr}' 'com.example.email' -S 'strong-bad@email.example.com' -L 'strong-bad' -O 'email.example.com' -D 'email.example.com'
+expand '%{d2r}' 'example.email' -S 'strong-bad@email.example.com' -L 'strong-bad' -O 'email.example.com' -D 'email.example.com'
+expand '%{l}' 'strong-bad' -S 'strong-bad@email.example.com' -L 'strong-bad' -O 'email.example.com' -D 'email.example.com'
+expand '%{l-}' 'strong.bad' -S 'strong-bad@email.example.com' -L 'strong-bad' -O 'email.example.com' -D 'email.example.com'
+expand '%{lr}' 'strong-bad' -S 'strong-bad@email.example.com' -L 'strong-bad' -O 'email.example.com' -D 'email.example.com'
+expand '%{lr-}' 'bad.strong' -S 'strong-bad@email.example.com' -L 'strong-bad' -O 'email.example.com' -D 'email.example.com'
 
 #
 # Phew!

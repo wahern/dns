@@ -26,6 +26,7 @@
 #ifndef SPF_H
 #define SPF_H
 
+#include <stddef.h>	/* size_t */
 
 #include <netinet/in.h>	/* struct in_addr struct in6_addr */
 
@@ -314,7 +315,7 @@ struct spf_env {
 	char l[64 + 1];
 	char o[SPF_MAXDN + 1];
 	char d[SPF_MAXDN + 1];
-	char i[SPF_MAX(INET_ADDRSTRLEN, INET6_ADDRSTRLEN) + 1];
+	char i[63 + 1]; /* IPv6 in long nybble format (32 nybbles + 31 "."s) */
 	char p[SPF_MAXDN + 1];
 	char v[SPF_MAX(sizeof "in-addr", sizeof "ip6")];
 	char h[SPF_MAXDN + 1];
@@ -327,6 +328,11 @@ struct spf_env {
 
 struct spf_env *spf_env_init(struct spf_env *);
 
+size_t spf_env_set(struct spf_env *, int, const char *);
+
+size_t spf_env_get(char *, size_t, int, const struct spf_env *);
+
+size_t spf_expand(char *, size_t, const char *, const struct spf_env *, int *);
 
 
 #endif /* SPF_H */
