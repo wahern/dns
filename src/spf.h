@@ -152,8 +152,10 @@ enum spf_mechanism {
 
 
 enum spf_result {
-	SPF_QUERYRR  = -2,
-	SPF_SYSFAIL,
+	SPF_RESUME   = -3,
+
+	SPF_QUERY    = -2,
+	SPF_ERROR    = -1,
 
 	SPF_NONE     = 0,
 	SPF_TEMPERROR,
@@ -291,6 +293,8 @@ struct spf_term {
 
 
 struct spf_ip {
+	char cname[SPF_MAXDN + 1];
+
 	int af;
 
 	union {
@@ -331,19 +335,14 @@ enum spf_rr_type {
 struct spf_rr {
 	char qname[SPF_MAXDN + 1];
 	enum spf_rr_type qtype;
+	int rcode;
 
 	int nrefs;
 
 	union {
 		struct {
 			SPF_HEAD(spf_ip) ips;
-		} a, mx;
-
-		struct {
-			SPF_HEAD(spf_ip) ips; /* aligned with a, mx */
-
-			char cname[SPF_MAXDN + 1];
-		} ptr;
+		} a, mx, ptr;
 
 		struct {
 			SPF_HEAD(spf_term) terms;
@@ -362,11 +361,14 @@ struct spf_rr *spf_rr_open(const char *qname, enum spf_rr_type qtype, int *error
 
 void spf_rr_close(struct spf_rr *rr);
 
-/** Parse SPF policy, or parse IP address string. */
-int spf_rr_parse(struct spf_rr *rr, const void *str, size_t len);
+/** (TXT, SPF) Parse SPF policy, or (A, MX) IP address string. */
+int spf_rr_parse(struct spf_rr *rr, int rcode, const void *str, size_t len);
 
-/** Add (struct in_addr) or (struct in6_addr). */
-int spf_rr_addip(struct spf_rr *rr, int af, const void *ip);
+/** (A, MX) Add (struct in_addr) or (struct in6_addr). */
+int spf_rr_addip(struct spf_rr *rr, int rcode, int af, const void *ip);
+
+/** (PTR) Add (struct in_addr) or (struct in6_addr) with validated CNAME */
+int spf_rr_addptr(struct spf_rr *rr, int rcode, const char *cname, int af, const void *ip);
 
 
 struct spf_env {
@@ -390,14 +392,26 @@ size_t spf_set(struct spf_env *, int, const char *);
 
 size_t spf_get(char *, size_t, int, const struct spf_env *);
 
-size_t spf_expand(char *, size_t, const char *, const struct spf_env *, int *);
 
-_Bool spf_match(struct spf_term *, const struct spf_env *, int *error);
+typedef unsigned spf_macros_t;
+
+_Bool spf_used(spf_macros_t, int);
+
+size_t spf_expand(char *, size_t, spf_macros_t *, const char *, const struct spf_env *, int *);
+
+/** return set of macros used in expansion */
+spf_macros_t spf_macros(const char *, const struct spf_env *);
 
 
 struct spf_policy;
 
-struct spf_policy *spf_open(const struct spf_env *, int *);
+struct spf_limits {
+	unsigned querymax; /* max # terms which require a query */
+}; /* struct spf_limits */
+
+extern const struct spf_limits spf_safelimits;
+
+struct spf_policy *spf_open(const struct spf_env *, const struct spf_limits *, int *);
 
 void spf_close(struct spf_policy *);
 

@@ -30,7 +30,7 @@
 
 #include <string.h>	/* memcpy(3) strlen(3) strsep(3) strcmp(3) */
 
-#include <errno.h>	/* EINVAL ENAMETOOLONG E2BIG errno */
+#include <errno.h>	/* EINVAL EFAULT ENAMETOOLONG E2BIG errno */
 
 #include <assert.h>	/* assert(3) */
 
@@ -49,26 +49,33 @@
 #if SPF_DEBUG
 #include <stdio.h> /* stderr fprintf(3) */
 
-int spf_debug;
+int spf_debug = SPF_DEBUG - 1;
 
 #undef SPF_DEBUG
-#define SPF_DEBUG spf_debug
-#define SPF_TRACE (spf_debug > 1)
+#define SPF_DEBUG(N) (spf_debug >= (N))
 
-#define SPF_SAY_(fmt, ...) fprintf(stderr, fmt "%.1s", __func__, __LINE__, __VA_ARGS__)
+#define SPF_SAY_(fmt, ...) \
+	do { if (SPF_DEBUG(1)) fprintf(stderr, fmt "%.1s", __func__, __LINE__, __VA_ARGS__); } while (0)
 #define SPF_SAY(...) SPF_SAY_(">>>> (%s:%d) " __VA_ARGS__, "\n")
 #define SPF_HAI SPF_SAY("HAI")
+
+#define SPF_TRACE(retval, ...) ({ if (SPF_DEBUG(2)) SPF_SAY(__VA_ARGS__); (retval); })
 #else
-#define SPF_DEBUG 0
-#define SPF_TRACE 0
+#undef SPF_DEBUG
+#define SPF_DEBUG(N) 0
 
 #define SPF_SAY(...)
 #define SPF_HAI
+
+#define SPF_TRACE(retval, ...) (retval)
 #endif /* SPF_DEBUG */
 
 
 #define spf_lengthof(a) (sizeof (a) / sizeof (a)[0])
 #define spf_endof(a) (&(a)[spf_lengthof((a))])
+
+#define SPF_PASTE(x, y) a##b
+#define SPF_XPASTE(x, y) SPF_PASTE(a, b)
 
 
 static size_t spf_itoa(char *dst, size_t lim, unsigned i) {
@@ -200,20 +207,28 @@ static unsigned spf_split(unsigned max, char **argv, char *src, const char *deli
 } /* spf_split() */
 
 
-/*
- * Normalize domains:
- *
- *   (1) remove leading dots
- *   (2) remove extra dots
- *   (3) add/remove/leave anchor
- */
-size_t spf_trim(char *dst, const char *src, size_t lim, int anchor) {
-	size_t dp = 0, sp = 0;
-	int lc = 0;
+/** domain normalization */
+
+#define SPF_DN_CHOMP  1	/* discard root zone, if any */
+#define SPF_DN_ANCHOR 2 /* add root zone, if none */
+#define SPF_DN_TRUNC  4 /* discard sub-domain(s) if copy overflows */
+#define SPF_DN_SUPER  8 /* discard sub-domain */
+
+size_t spf_fixdn(char *dst, const char *src, size_t lim, int flags) {
+	size_t op, dp, sp;
+	int lc;
+
+	sp = 0;
+fixdn:
+	op = sp;
+	dp = 0;
+	lc = 0;
 
 	/* trim any leading dot(s) */
-	while (src[sp] == '.')
-		sp++;
+	while (src[sp] == '.') {
+		if (!src[++sp]) /* but keep lone dot */
+			{ --sp; break; }
+	}
 
 	while (src[sp]) {
 		lc = src[sp];
@@ -228,10 +243,10 @@ size_t spf_trim(char *dst, const char *src, size_t lim, int anchor) {
 			sp++;
 	}
 
-	if (anchor < 0) {
+	if (flags & SPF_DN_CHOMP) {
 		if (lc == '.')
 			dp--;
-	} else if (anchor > 0) {
+	} else if (flags & SPF_DN_ANCHOR) {
 		if (lc != '.') {
 			if (dp < lim)
 				dst[dp] = '.';
@@ -240,11 +255,46 @@ size_t spf_trim(char *dst, const char *src, size_t lim, int anchor) {
 		}
 	}
 
+	if (flags & SPF_DN_SUPER) {
+		flags &= ~SPF_DN_SUPER;
+
+		while (src[op] == '.') {
+			if (!src[++op]) {
+				flags &= ~SPF_DN_ANCHOR;
+
+				goto fixdn; /* output empty string */
+			}
+		}
+
+		op += strcspn(&src[op], ".");
+
+		if (src[op] == '.') {
+			sp = op + 1;
+
+			/** don't accidentally trim any final root zone. */
+			if (!src[sp])
+				sp--;
+		}
+
+		goto fixdn;
+	} else if ((flags & SPF_DN_TRUNC) && dp >= lim) {
+		op += strcspn(&src[op], ".");
+
+		if (src[op] == '.') {
+			sp = op + 1;
+
+			if (src[sp])
+				goto fixdn;
+
+			/** return the minimum length possible */
+		}
+	}
+
 	if (lim > 0)
 		dst[SPF_MIN(dp, lim - 1)] = '\0';
 
 	return dp;
-} /* spf_trim() */
+} /* spf_fixdn() */
 
 
 char *spf_tolower(char *src) {
@@ -744,7 +794,7 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 		memset(rr->spf.error.near, 0, sizeof rr->spf.error.near);
 		memcpy(rr->spf.error.near, part, SPF_MIN(sizeof rr->spf.error.near - 1, pe - part));
 
-		if (SPF_DEBUG) {
+		if (SPF_DEBUG(1)) {
 			if (isgraph(rr->spf.error.lc))
 				SPF_SAY("`%c' invalid near `%s'", rr->spf.error.lc, rr->spf.error.near);
 			else
@@ -767,8 +817,7 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 		if (term.type) {
 			struct spf_term *term_;
 
-			if (SPF_TRACE)
-				SPF_SAY("term -> %s", term_comp(&(struct spf_sbuf){ 0 }, &term));
+			SPF_TRACE(0, "term -> %s", term_comp(&(struct spf_sbuf){ 0 }, &term));
 
 			if (!(term_ = malloc(sizeof *term_)))
 				{ error = errno; goto error; }
@@ -794,7 +843,7 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 
 	action include_end {
 		if (*domain.str)
-			spf_trim(term.include.domain, domain.str, sizeof term.include.domain, 0);
+			spf_fixdn(term.include.domain, domain.str, sizeof term.include.domain, SPF_DN_TRUNC);
 	}
 
 	action a_begin {
@@ -804,7 +853,7 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 
 	action a_end {
 		if (*domain.str)
-			spf_trim(term.a.domain, domain.str, sizeof term.a.domain, 0);
+			spf_fixdn(term.a.domain, domain.str, sizeof term.a.domain, SPF_DN_TRUNC);
 
 		term.a.prefix4 = prefix4;
 		term.a.prefix6 = prefix6;
@@ -817,7 +866,7 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 
 	action mx_end {
 		if (*domain.str)
-			spf_trim(term.mx.domain, domain.str, sizeof term.mx.domain, 0);
+			spf_fixdn(term.mx.domain, domain.str, sizeof term.mx.domain, SPF_DN_TRUNC);
 
 		term.mx.prefix4 = prefix4;
 		term.mx.prefix6 = prefix6;
@@ -830,7 +879,7 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 
 	action ptr_end {
 		if (*domain.str)
-			spf_trim(term.ptr.domain, domain.str, sizeof term.ptr.domain, 0);
+			spf_fixdn(term.ptr.domain, domain.str, sizeof term.ptr.domain, SPF_DN_TRUNC);
 	}
 
 	action ip4_begin {
@@ -860,7 +909,7 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 
 	action exists_end {
 		if (*domain.str)
-			spf_trim(term.exists.domain, domain.str, sizeof term.exists.domain, 0);
+			spf_fixdn(term.exists.domain, domain.str, sizeof term.exists.domain, SPF_DN_TRUNC);
 	}
 
 	action redirect_begin {
@@ -869,7 +918,7 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 
 	action redirect_end {
 		if (*domain.str)
-			spf_trim(term.redirect.domain, domain.str, sizeof term.redirect.domain, 0);
+			spf_fixdn(term.redirect.domain, domain.str, sizeof term.redirect.domain, SPF_DN_TRUNC);
 	}
 
 	action exp_begin {
@@ -878,7 +927,7 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 
 	action exp_end {
 		if (*domain.str)
-			spf_trim(term.exp.domain, domain.str, sizeof term.exp.domain, 0);
+			spf_fixdn(term.exp.domain, domain.str, sizeof term.exp.domain, SPF_DN_TRUNC);
 	}
 
 	action unknown_begin {
@@ -986,7 +1035,7 @@ struct spf_rr *spf_rr_open(const char *qname, enum spf_rr_type qtype, int *error
 
 	memset(rr, 0, sizeof *rr);
 
-	if (sizeof rr->qname <= spf_trim(rr->qname, qname, sizeof rr->qname, 0))
+	if (sizeof rr->qname <= spf_fixdn(rr->qname, qname, sizeof rr->qname, 0))
 		{ *error = ENAMETOOLONG; goto error; }
 
 	rr->qtype = qtype;
@@ -1056,7 +1105,7 @@ void spf_rr_close(struct spf_rr *rr) {
 } /* spf_rr_close() */
 
 
-int spf_rr_parse(struct spf_rr *rr, const void *str, size_t len) {
+int spf_rr_parse(struct spf_rr *rr, int rcode, const void *str, size_t len) {
 	struct spf_sbuf sbuf = { 0 };
 	struct spf_ip *ip;
 	int error = 0;
@@ -1096,7 +1145,6 @@ int spf_init(struct spf_env *env, int af, const void *ip, const char *domain, co
 		spf_strlcpy(env->v, "in-addr", sizeof env->v);
 	}
 
-	spf_strlcpy(env->p, "unknown", sizeof env->p);
 	spf_strlcpy(env->r, "unknown", sizeof env->r);
 
 	spf_itoa(env->t, sizeof env->t, (unsigned long)time(0));
@@ -1253,7 +1301,7 @@ toobig:
 } /* spf_expand_() */
 
 
-size_t spf_expand(char *dst, size_t lim, const char *src, const struct spf_env *env, int *error) {
+size_t spf_expand(char *dst, size_t lim, spf_macros_t *macros, const char *src, const struct spf_env *env, int *error) {
 	struct spf_sbuf macro;
 	size_t len, dp = 0, sp = 0;
 
@@ -1281,6 +1329,9 @@ size_t spf_expand(char *dst, size_t lim, const char *src, const struct spf_env *
 
 			++sp;
 
+			if (isalpha((unsigned char)*macro.str))
+				*macros |= 1U << (tolower((unsigned char)*macro.str) - 'a');
+
 			len = (dp < lim)
 			    ? spf_expand_(&dst[dp], lim - dp, macro.str, env, error)
 			    : spf_expand_(0, 0, macro.str, env, error);
@@ -1307,35 +1358,51 @@ size_t spf_expand(char *dst, size_t lim, const char *src, const struct spf_env *
 } /* spf_expand() */
 
 
-_Bool spf_match(struct spf_term *term, const struct spf_env *env, int *error) {
-	return 0;
-} /* spf_match() */
+_Bool spf_used(spf_macros_t macros, int which) {
+	if (!isalpha((unsigned char)which))
+		return 0;
+
+	return !!(macros & (1U << (tolower((unsigned char)which) - 'a')));
+} /* spf_used() */
 
 
+spf_macros_t spf_macros(const char *src, const struct spf_env *env) {
+	spf_macros_t macros = 0;
+	int error;
+
+	spf_expand(0, 0, &macros, src, env, &error);
+
+	return macros;
+} /* spf_macros() */
+
+
+struct spf_frame;
 
 struct spf_policy {
 	struct spf_env env;
+	struct spf_limits limits;
 
 	SPF_HEAD(spf_rr) records;
 
 	enum spf_result result;
-
-	char qname[SPF_MAXDN + 1];
+	char qlast[SPF_MAXDN + 1];
 	enum spf_rr_type qtype;
+	int error;
 
 	struct {
-		char domain[SPF_MAXDN + 1];
+		const char *target;
+		enum spf_result (*resume)(struct spf_policy *, struct spf_frame *);
+	} call;
 
-		struct spf_rr *rr;
-		struct spf_term *term;
+	struct spf_frame {
+		char target[SPF_MAXDN + 1];
 
-		enum {
-			SPF_S_QUERYRR,
-			SPF_S_MECHANISMS,
-			SPF_S_INCLUDE,
-			SPF_S_MODIFIERS,
-		} state;
-	} stack[8], *frame;
+		struct spf_rr *rules;
+		struct spf_term *term, *next;
+
+		enum spf_result (*resume)(struct spf_policy *, struct spf_frame *);
+		int state;
+	} stack[10], *frame;
 }; /* struct spf_policy */
 
 
@@ -1343,12 +1410,12 @@ static struct spf_rr *spf_lookup(struct spf_policy *spf, const char *domain, enu
 	char a[SPF_MAXDN + 1], b[SPF_MAXDN + 1];
 	struct spf_rr *rr;
 
-	spf_trim(a, domain, sizeof a, -1);
+	spf_fixdn(a, domain, sizeof a, SPF_DN_CHOMP);
 	spf_tolower(a);
 
 	SPF_FOREACH(rr, &spf->records) {
 		if (rr->qtype == type) {
-			spf_trim(b, rr->qname, sizeof b, -1);
+			spf_fixdn(b, rr->qname, sizeof b, SPF_DN_CHOMP);
 			spf_tolower(b);
 
 			if (!strcmp(a, b))
@@ -1356,79 +1423,302 @@ static struct spf_rr *spf_lookup(struct spf_policy *spf, const char *domain, enu
 		}
 	}
 
+	spf_strlcpy(spf->qlast, domain, sizeof spf->qlast);
+	spf->qtype = type;
+
 	return 0;
 } /* spf_lookup() */
 
 
-static int spf_exec(struct spf_policy *spf) {
+/** example a generic PTR name target */
+static size_t spf_ptrname(char *dst, size_t lim, const struct spf_env *env) {
+	spf_macros_t macros = 0;
+	size_t len;
 	int error;
 
-exec:
+	assert(len = spf_expand(dst, lim, &macros, "%{ir}.%{v}.arpa", env, &error));
 
-	switch (spf->frame->state) {
-	case SPF_S_QUERYRR:
-		if (!(spf->frame->rr = spf_lookup(spf, spf->frame->domain, SPF_RR_SPF))) {
-			spf->result = SPF_QUERYRR;
+	return len;
+} /* spf_ptrname() */
 
-			spf_strlcpy(spf->qname, spf->frame->domain, sizeof spf->qname);
-			spf->qtype = SPF_RR_SPF;
 
-			return 0;
-		}
+/** find a validated PTR CNAME (ip0 -> ptr -> cname -> ip1, where ip0 == ip1) */
+static size_t spf_findptr(char *dst, size_t lim, struct spf_policy *spf) {
+	struct spf_rr *rr;
+	struct spf_ip *ip;
+	char tmp[128], qname[128], ipstr[128];
 
-		spf->frame->term = SPF_FIRST(&spf->frame->rr->spf.terms);
+	spf_ptrname(qname, sizeof qname, &spf->env);
 
-		spf->frame->state++;
-	case SPF_S_MECHANISMS:
-		while (spf->frame->term) {
-			switch (spf->frame->term->type) {
-			case SPF_ALL:
-				break;
-			case SPF_INCLUDE:
-				break;
-			case SPF_A:
-				break;
-			case SPF_MX:
-				break;
-			case SPF_PTR:
-				break;
-			case SPF_IP4:
-				break;
-			case SPF_IP6:
-				break;
-			case SPF_EXISTS:
-				break;
-			} /* switch() */
-		}
+	if (!(rr = spf_lookup(spf, qname, SPF_RR_PTR)))
+		return 0;
 
-		spf->result = SPF_NONE;
+	spf_strlcpy(tmp, spf->env.i, sizeof tmp);
+	spf_tolower(tmp);
 
-		break;
-	case SPF_S_INCLUDE:
-		break;
-	default:
-		assert(!"invalid SPF engine state");
-	} /* switch(state) */
+	SPF_FOREACH(ip, &rr->ptr.ips) {
+		spf_ntop(ipstr, sizeof ipstr, ip->af, &ip->ip4, SPF_6TOP_NYBBLE);
+		spf_tolower(ipstr);
 
-	if (spf->frame > spf->stack) {
-		spf->frame--;
-
-		spf_strlcpy(spf->env.d, spf->frame->domain, sizeof spf->env.d);
-
-		goto exec;
+		if (!strcmp(tmp, ipstr))
+			return spf_strlcpy(dst, ip->cname, lim);
 	}
 
-	return 0;
+	return spf_strlcpy(dst, "unknown", lim);
+} /* spf_findptr() */
+
+
+static _Bool spf_needptr(spf_macros_t macros, const struct spf_env *env)
+	{ return (spf_used(macros, 'p') && !*env->p); }
+
+static enum spf_result spf_target(char *dst, size_t lim, const char *src, struct spf_policy *spf) {
+	char tmp[2048];
+	size_t len;
+	spf_macros_t macros;
+	int error;
+
+expand:
+
+	macros = 0;
+
+	len = spf_expand(tmp, sizeof tmp, &macros, src, &spf->env, &error);
+
+	if (spf_needptr(macros, &spf->env)) {
+		if (spf_findptr(spf->env.d, sizeof spf->env.d, spf))
+			goto expand;
+		else
+			return SPF_QUERY;
+	}
+
+	if (!len) {
+		spf->error = (error)? error : EINVAL;
+
+		return SPF_ERROR;
+	}
+
+	if (len >= sizeof tmp) {
+		spf->error = ENAMETOOLONG;
+
+		return SPF_ERROR;
+	}
+
+	if (!(len = spf_fixdn(dst, tmp, lim, SPF_DN_TRUNC))) {
+		spf->error = EFAULT; /** shouldn't happen. */
+
+		return SPF_ERROR;
+	}
+
+	if (len >= lim) {
+		spf->error = ENAMETOOLONG;
+
+		return SPF_ERROR;
+	}
+
+	return SPF_NONE; /** meaningless (must be greater than or equal to 0) */
+} /* spf_target() */
+
+
+static enum spf_result spf_call_(struct spf_policy *spf, struct spf_frame *frame) {
+	enum spf_result result;
+
+	if ((frame = &spf->frame[1]) >= spf_endof(spf->stack)) {
+		spf->error = SPF_TRACE(EFAULT, "stack overflow");
+
+		return SPF_ERROR;
+	}
+
+	memset(frame, 0, sizeof *frame);
+
+	if (0 > (result = spf_target(frame->target, sizeof frame->target, spf->call.target, spf)))
+		return result;
+
+	frame->resume = spf->call.resume;
+
+	spf->frame++;
+
+	return SPF_RESUME;
+} /* spf_call_() */
+
+
+static enum spf_result spf_call(struct spf_policy *spf, enum spf_result (*resume)(), const char *target) {
+	spf->call.target = target;
+	spf->call.resume = resume;
+
+	return spf_call_(spf, 0);
+} /* spf_call() */
+
+
+#define SPF_RESUME(frame) switch ((frame)->state) { case 0:
+
+#define SPF_YIELD(frame, result) do { \
+	(frame)->state = __LINE__; \
+	return (result); \
+	case __LINE__: (frame)->state = __LINE__; \
+} while (0)
+
+#define SPF_CALL(spf, resume, target) do { \
+	(spf)->frame->state = __LINE__; \
+	return spf_call((spf), (resume), (target)); \
+	case __LINE__: (spf)->frame->state = __LINE__; \
+} while (0)
+
+
+static _Bool spf_match_6(struct in6_addr *a,  struct in6_addr *b, unsigned prefix) {
+	unsigned i, bits;
+
+	for (i = 0; i < prefix / 8; i++) {
+		if (a->s6_addr[i] != b->s6_addr[i])
+			return 0;
+	}
+
+	if ((prefix % 8) && i < 16) {
+		if ((a->s6_addr[i] >> (8 - (prefix % 8))) != (b->s6_addr[i] >> (8 - (prefix % 8))))
+			return 0;
+	}
+
+	return 1;
+} /* spf_match_6() */
+
+static _Bool spf_match_4(struct in_addr *a,  struct in_addr *b, unsigned prefix) {
+	unsigned x = ntohl(a->s_addr), y = ntohl(b->s_addr);
+
+	if (!prefix) {
+		return 1;
+	} if (prefix < 32) {
+		x >>= 32 - (prefix % 32);
+		y >>= 32 - (prefix % 32);
+	}
+
+	return x == y;
+} /* spf_match_4() */
+
+static enum spf_result spf_match_a(struct spf_policy *spf, struct spf_frame *frame) {
+	struct spf_a *a = &frame[-1].term->a;
+	struct spf_rr *rr;
+	struct spf_ip *ip;
+	union { struct in_addr ip4; struct in6_addr ip6; } u;
+	char v[sizeof spf->env.v];
+	int af, prefix;
+	_Bool (*match)();
+
+	if (!(rr = spf_lookup(spf, frame->target, SPF_RR_A)))
+		return SPF_QUERY;
+
+	spf_strlcpy(v, spf->env.v, sizeof v);
+	spf_tolower(v);
+
+	if (!strcmp(v, "ip6")) {
+		af = AF_INET6;
+		spf_pto6(&u.ip6, spf->env.i);
+		prefix = a->prefix6;
+		match = &spf_match_6;
+	} else {
+		af = AF_INET;
+		spf_pto4(&u.ip4, spf->env.i);
+		prefix = a->prefix4;
+		match = &spf_match_4;
+	}
+
+	SPF_FOREACH(ip, &rr->a.ips) {
+		if (af != ip->af)
+			continue;
+		if (match(&u, &ip->ip4, prefix))
+			return frame[-1].term->result;
+	}
+
+	return SPF_NONE;
+} /* spf_match_a() */
+
+
+/** a shim function to dispatch to the proper routine */
+static enum spf_result spf_match(struct spf_policy *spf, struct spf_frame *frame) {
+	struct spf_term *term = frame[-1].term;
+
+	switch (term->type) {
+	case SPF_ALL:
+		return term->result;
+	case SPF_A:
+		frame->resume = &spf_match_a;
+		return SPF_RESUME;
+	case SPF_MX:
+//		frame->resume = &spf_match_mx;
+		return SPF_RESUME;
+	case SPF_PTR:
+//		frame->resume = &spf_match_ptr;
+		return SPF_RESUME;
+	case SPF_IP4:
+//		frame->resume = &spf_match_ip4;
+		return SPF_RESUME;
+	case SPF_IP6:
+//		frame->resume = &spf_match_ip6;
+		return SPF_RESUME;
+	case SPF_EXISTS:
+//		frame->resume = &spf_match_exists;
+		return SPF_RESUME;
+	} /* switch () */
+
+	return SPF_NONE;
+} /* spf_match() */
+
+
+static enum spf_result spf_include(struct spf_policy *spf, struct spf_frame *frame) {
+	SPF_RESUME(frame) {
+		while (!(frame->rules = spf_lookup(spf, frame->target, SPF_RR_SPF)))
+			SPF_YIELD(frame, SPF_QUERY);
+
+		frame->next = SPF_FIRST(&frame->rules->spf.terms);
+
+		while ((frame->term = frame->next)) {
+			frame->next = SPF_NEXT(frame->term);
+
+			switch (frame->term->type) {
+			case SPF_ALL:
+				return frame->term->result;
+			case SPF_A:
+				SPF_CALL(spf, &spf_match, frame->term->a.domain);
+
+				break;
+			} /* switch() */
+
+		} /* while() */
+	}}
+
+	return SPF_NONE;
+} /* spf_include() */
+
+
+static struct spf_frame *spf_return(struct spf_policy *spf) {
+	return (spf->frame > &spf->stack[0])? &spf->frame[-1] : 0;
+} /* spf_return() */
+
+static enum spf_result spf_exec(struct spf_policy *spf) {
+	enum spf_result result;
+
+	do {
+		do {
+			result = spf->frame->resume(spf, spf->frame);
+		} while (result == SPF_RESUME);
+
+		if (result < 0)
+			return result;
+
+		spf->result = result;
+	} while ((spf->frame = spf_return(spf)));
+
+	return result;
 } /* spf_exec() */
 
 
-struct spf_policy *spf_open(const struct spf_env *env, int *error) {
+const struct spf_limits spf_safelimits = { .querymax = 10, };
+
+struct spf_policy *spf_open(const struct spf_env *env, const struct spf_limits *limits, int *error) {
 	struct spf_policy *spf = 0;
 
 	if (!(spf = malloc(sizeof *spf)))
 		goto syerr;
 
-	spf->env = *env;
+	spf->env    = *env;
+	spf->limits = *limits;
 
 	SPF_INIT(&spf->records);
 
@@ -1436,7 +1726,7 @@ struct spf_policy *spf_open(const struct spf_env *env, int *error) {
 
 	spf->frame = &spf->stack[0];
 
-	spf_strlcpy(spf->frame->domain, spf->env.d, sizeof spf->frame->domain);
+	spf_strlcpy(spf->frame->target, spf->env.d, sizeof spf->frame->target);
 
 	return spf;
 syerr:
@@ -1465,13 +1755,15 @@ void spf_close(struct spf_policy *spf) {
 
 enum spf_result spf_check(struct spf_policy *spf, const char **qname, enum spf_rr_type *qtype, int *error) {
 	if ((*error = spf_exec(spf)))
-		return SPF_SYSFAIL;
+		return SPF_ERROR;
 
-	if (spf->result == SPF_QUERYRR) {
-		*qname = spf->qname;
+	if (spf->result == SPF_QUERY) {
+		*qname = spf->qlast;
 		*qtype = spf->qtype;
-	} else
+	} else {
 		*qname = 0;
+		*qtype = 0;
+	}
 
 	return spf->result;
 } /* spf_check() */
@@ -1505,7 +1797,7 @@ static int parse(const char *policy) {
 	if (!(rr = spf_rr_open("25thandClement.com.", SPF_RR_SPF, &error)))
 		panic("%s", strerror(error));
 
-	if ((error = spf_rr_parse(rr, policy, strlen(policy))))
+	if ((error = spf_rr_parse(rr, 0, policy, strlen(policy))))
 		panic("%s", strerror(error));
 
 	spf_rr_close(rr);
@@ -1516,15 +1808,45 @@ static int parse(const char *policy) {
 
 static int expand(const char *src, const struct spf_env *env) {
 	char dst[512];
+	spf_macros_t macros = 0;
 	int error;
 
-	if (!(spf_expand(dst, sizeof dst, src, env, &error)) && error)
+	if (!(spf_expand(dst, sizeof dst, &macros, src, env, &error)) && error)
 		panic("%s: %s", src, strerror(error));	
 
 	fprintf(stdout, "[%s]\n", dst);
 
+	if (SPF_DEBUG(2)) {
+		fputs("macros:", stderr);
+
+		for (unsigned M = 'A'; M <= 'Z'; M++) {
+			if (spf_used(macros, M))
+				{ fputc(' ', stderr); fputc(M, stderr); }
+		}
+
+		fputc('\n', stderr);
+	}
+
 	return 0;
 } /* expand() */
+
+
+static int macros(const char *src, const struct spf_env *env) {
+	spf_macros_t macros = 0;
+	int error;
+
+	if (!(spf_expand(0, 0, &macros, src, env, &error)) && error)
+		panic("%s: %s", src, strerror(error));	
+
+	for (unsigned M = 'A'; M <= 'Z'; M++) {
+		if (spf_used(macros, M)) {
+			fputc(M, stdout);
+			fputc('\n', stdout);
+		}
+	}
+
+	return 0;
+} /* macros() */
 
 
 static void ip_flags(int *flags, _Bool *libc, int argc, char *argv[]) {
@@ -1604,6 +1926,43 @@ int ip4(int argc, char *argv[]) {
 	return 0;
 } /* ip4() */
 
+
+int fixdn(int argc, char *argv[]) {
+	char dst[(SPF_MAXDN * 2) + 1];
+	size_t lim = (SPF_MAXDN + 1), len;
+	int flags = 0;
+
+	for (int i = 1; i < argc; i++) {
+		if (!strcmp(argv[i], "super")) {
+			flags |= SPF_DN_SUPER;
+		} else if (!strcmp(argv[i], "trunc")) {
+			flags |= SPF_DN_TRUNC;
+		} else if (!strncmp(argv[i], "trunc=", 6)) {
+			flags |= SPF_DN_TRUNC;
+			lim = spf_atoi(&argv[i][6]);
+		} else if (!strcmp(argv[i], "anchor")) {
+			flags |= SPF_DN_ANCHOR;
+		} else if (!strcmp(argv[i], "chomp")) {
+			flags |= SPF_DN_CHOMP;
+		} else
+			panic("%s: invalid flag (\"trunc[=limit]\", \"anchor\", \"chomp\")", argv[i]);
+	}
+
+	len = spf_fixdn(dst, argv[0], SPF_MIN(lim, sizeof dst), flags);
+
+	if (SPF_DEBUG(2)) {
+		if (len < lim || !len)
+			SPF_SAY("%zu[%s]\n", len, dst);
+		else if (!lim)
+			SPF_SAY("-%zu[%s]\n", (len - lim), dst);
+		else
+			SPF_SAY("-%zu[%s]\n", (len - lim) + 1, dst);
+	}
+
+	puts(dst);
+
+	return 0;
+} /* fixdn() */
 
 
 #define USAGE \
@@ -1688,10 +2047,14 @@ usage:
 		return parse(argv[1]);
 	} else if (!strcmp(argv[0], "expand") && argc > 1) {
 		return expand(argv[1], &env);
+	} else if (!strcmp(argv[0], "macros") && argc > 1) {
+		return macros(argv[1], &env);
 	} else if (!strcmp(argv[0], "ip6") && argc > 1) {
 		return ip6(argc - 1, &argv[1]);
 	} else if (!strcmp(argv[0], "ip4") && argc > 1) {
 		return ip4(argc - 1, &argv[1]);
+	} else if (!strcmp(argv[0], "fixdn") && argc > 1) {
+		return fixdn(argc - 1, &argv[1]);
 	} else
 		goto usage;
 

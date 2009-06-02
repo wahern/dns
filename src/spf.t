@@ -102,6 +102,20 @@ ip4() {
 } # ip4
 
 
+fixdn() {
+	DN=$1
+	EXPECT=$2
+
+	shift 2
+
+	EXPANS=$($SPF $VERBOSE fixdn $DN "$@" 2>$ERRBUF)
+
+	[ "$EXPANS" == "$EXPECT" ]
+
+	check $? "fixdn \`%s' \`%s' %s\n" "$DN" "$EXPANS" "$*"
+} # fixdn
+
+
 usage() {
 	cat <<-EOF
 		spf.t -p:vh
@@ -240,6 +254,27 @@ ip6 '::10..1.' '::10.0.1.0' mixed
 ip4 '..' '0.0.0.0'
 ip4 '~.f.b.9' '0.0.0.9'
 ip4 '::' '0.0.0.0'
+
+
+#
+# DN hacking
+#
+fixdn "www.yahoo.com" "yahoo.com." super anchor
+fixdn "yahoo.com" "com." super anchor
+fixdn "com." "." super anchor
+fixdn "com" "." super anchor
+fixdn "." "" super anchor
+fixdn ".net." "" anchor super chomp
+fixdn "net." "" anchor super chomp
+fixdn "." "" anchor super chomp
+fixdn "..f..." "f" chomp
+fixdn "www.25thandClement.com" "www.25thandClement.com." anchor trunc=24
+fixdn "www.25thandClement.com" "25thandClement.com." anchor trunc=23
+fixdn "www.25thandClement.com" "www.25thandClement.com" trunc=23
+fixdn "www.25thandClement.com." "www.25thandClement.com" chomp trunc=23
+fixdn "aa.bb.cc.dd.ee" "aa.bb.cc.dd.ee." anchor trunc=16
+fixdn "aa.bb.cc.dd.ee" "bb.cc.dd.ee." anchor trunc=15
+fixdn "com.." "com" chomp
 
 
 #
