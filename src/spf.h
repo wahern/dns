@@ -152,6 +152,13 @@ enum spf_mechanism {
 
 
 enum spf_result {
+	SPF_QUERYRR  = -2,
+	SPF_SYSFAIL,
+
+	SPF_NONE     = 0,
+	SPF_TEMPERROR,
+	SPF_PERMERROR,
+
 	SPF_PASS     = '+',
 	SPF_FAIL     = '-',
 	SPF_SOFTFAIL = '~',
@@ -283,31 +290,83 @@ struct spf_term {
 }; /* struct spf_term */
 
 
-enum spf_rtype {
-	SPF_T_TXT = 16,
-	SPF_T_SPF = 99,
-}; /* spf_rtype */
+struct spf_ip {
+	int af;
+
+	union {
+		struct in_addr ip4;
+		struct in6_addr ip6;
+	};
+
+	SPF_ENTRY(spf_ip) tqe;
+}; /* struct spf_ip */
+
+
+/*
+ * R E S O U R C E  R E C O R D  I N T E R F A C E S
+ *
+ * These are used as input into the SPF policy engine. The semantics of * each type are different than for DNS; see RFC 4408 Sec. 5 for specifics.
+ *
+ * SPF_RR_A:
+ * 	Query A records.
+ *
+ * SPF_RR_PTR:
+ * 	Query PTR records, then resolve to A/AAAA addresses.
+ *
+ * SPF_RR_MX:
+ * 	Query MX records, then resolve to A/AAAA addresses.
+ *
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+
+enum spf_rr_type {
+	SPF_RR_A   = 1,
+	SPF_RR_PTR = 12,
+	SPF_RR_MX  = 15,
+	SPF_RR_TXT = 16,
+	SPF_RR_SPF = 99,
+}; /* enum spf_rr_type */
 
 struct spf_rr {
 	char qname[SPF_MAXDN + 1];
-	int rtype;
+	enum spf_rr_type qtype;
 
-	struct {
-		int lc;
-		char near[16];
-	} error;
+	int nrefs;
 
-	SPF_HEAD(spf_rr) terms;
+	union {
+		struct {
+			SPF_HEAD(spf_ip) ips;
+		} a, mx;
+
+		struct {
+			SPF_HEAD(spf_ip) ips; /* aligned with a, mx */
+
+			char cname[SPF_MAXDN + 1];
+		} ptr;
+
+		struct {
+			SPF_HEAD(spf_term) terms;
+
+			struct {
+				int lc;
+				char near[16];
+			} error;
+		} spf;
+	};
 
 	SPF_ENTRY(spf_rr) tqe;
 }; /* struct spf_rr */
 
+struct spf_rr *spf_rr_open(const char *qname, enum spf_rr_type qtype, int *error);
 
-struct spf_rr *spf_rr_open(const char *, enum spf_rtype, int *);
+void spf_rr_close(struct spf_rr *rr);
 
-void spf_rr_close(struct spf_rr *);
+/** Parse SPF policy, or parse IP address string. */
+int spf_rr_parse(struct spf_rr *rr, const void *str, size_t len);
 
-int spf_rr_parse(struct spf_rr *, const void *, size_t);
+/** Add (struct in_addr) or (struct in6_addr). */
+int spf_rr_addip(struct spf_rr *rr, int af, const void *ip);
 
 
 struct spf_env {
@@ -325,14 +384,26 @@ struct spf_env {
 	char t[32];
 }; /* struct spf_env */
 
+int spf_init(struct spf_env *, int, const void *, const char *, const char *);
 
-struct spf_env *spf_env_init(struct spf_env *);
+size_t spf_set(struct spf_env *, int, const char *);
 
-size_t spf_env_set(struct spf_env *, int, const char *);
-
-size_t spf_env_get(char *, size_t, int, const struct spf_env *);
+size_t spf_get(char *, size_t, int, const struct spf_env *);
 
 size_t spf_expand(char *, size_t, const char *, const struct spf_env *, int *);
+
+_Bool spf_match(struct spf_term *, const struct spf_env *, int *error);
+
+
+struct spf_policy;
+
+struct spf_policy *spf_open(const struct spf_env *, int *);
+
+void spf_close(struct spf_policy *);
+
+enum spf_result spf_check(struct spf_policy *, const char **, enum spf_rr_type *, int *);
+
+void spf_addrr(struct spf_policy *, struct spf_rr *);
 
 
 #endif /* SPF_H */

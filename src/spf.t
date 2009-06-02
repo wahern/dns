@@ -77,6 +77,31 @@ expand() {
 } # expand
 
 
+ip() {
+	VERSION=$1
+	IP=$2
+	EXPECT=$3
+
+	shift 3
+
+	EXPANS=$($SPF $VERBOSE $VERSION $IP "$@" 2>$ERRBUF)
+
+	[ "$EXPANS" == "$EXPECT" ]
+
+	check $? "$VERSION \`%s' \`%s' %s\n" "$IP" "$EXPANS" "$*"
+} # ip
+
+
+ip6() {
+	ip "ip6" "$@"
+} # ip6
+
+
+ip4() {
+	ip "ip4" "$@"
+} # ip4
+
+
 usage() {
 	cat <<-EOF
 		spf.t -p:vh
@@ -161,6 +186,50 @@ expand '%{l}' 'strong-bad' -S 'strong-bad@email.example.com' -L 'strong-bad' -O 
 expand '%{l-}' 'strong.bad' -S 'strong-bad@email.example.com' -L 'strong-bad' -O 'email.example.com' -D 'email.example.com'
 expand '%{lr}' 'strong-bad' -S 'strong-bad@email.example.com' -L 'strong-bad' -O 'email.example.com' -D 'email.example.com'
 expand '%{lr-}' 'bad.strong' -S 'strong-bad@email.example.com' -L 'strong-bad' -O 'email.example.com' -D 'email.example.com'
+
+
+#
+# RFC 4291 Sec. 2.2. Test Representation of Addresses
+#
+ip6 'ABCD:EF01:2345:6789:ABCD:EF01:2345:6789' 'abcd:ef01:2345:6789:abcd:ef01:2345:6789'
+ip6 '2001:DB8:0:0:8:800:200C:417A' '2001:db8::8:800:200c:417a'
+ip6 'FF01:0:0:0:0:0:0:101' 'ff01::101'
+ip6 '0:0:0:0:0:0:0:1' '::1'
+ip6 '0:0:0:0:0:0:0:0' '::'
+ip6 '::' '::'
+ip6 '::1' '::1'
+ip6 '0:0:0:0:0:0:13.1.68.3' '::d01:4403'
+ip6 '0:0:0:0:0:0:13.1.68.3' '::13.1.68.3' compat
+ip6 '0:0:0:0:0:0:13.1.68.3' '::13.1.68.3' mixed
+ip6 '0:0:0:0:0:FFFF:129.144.52.38' '::ffff:8190:3426'
+ip6 '0:0:0:0:0:FFFF:129.144.52.38' '::ffff:8190:3426' compat
+ip6 '0:0:0:0:0:FFFF:129.144.52.38' '::ffff:129.144.52.38' mapped
+
+
+#
+# SPF IPv6 nybble format
+#
+ip6 '0:0:0:0:0:0:13.1.68.3' '0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.d.0.1.4.4.0.3' nybble
+ip6 '0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.d.0.1.4.4.0.3' '::d01:4403'
+ip6 '0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.d.0.1.4.4.0.3' '::13.1.68.3' mixed
+
+
+#
+# Some IPv6 overflow scenarios
+#
+ip6 '0:0:0:0:0:0:0:127.0.0.1' '::7f00'
+ip6 'f.f.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.f.f' 'ff00::'
+
+
+#
+# Lip-service IPv4 tests
+#
+ip4 '127.0.0.1' '127.0.0.1'
+ip4 '127' '127.0.0.0'
+ip6 '::ffff:127.' '::ffff:127.0.0.0' mixed
+ip4 '10..1.' '10.0.1.0'
+ip6 '::10..1.' '::10.0.1.0' mixed
+
 
 #
 # Phew!

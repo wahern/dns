@@ -28,15 +28,19 @@
 
 #include <ctype.h>	/* isgraph(3) isdigit(3) tolower(3) */
 
-#include <string.h>	/* memcpy(3) strlen(3) strsep(3) */
+#include <string.h>	/* memcpy(3) strlen(3) strsep(3) strcmp(3) */
 
 #include <errno.h>	/* EINVAL ENAMETOOLONG E2BIG errno */
 
+#include <assert.h>	/* assert(3) */
+
 #include <time.h>	/* time(3) */
+
+#include <sys/socket.h>	/* AF_INET AF_INET6 */
 
 #include <unistd.h>	/* gethostname(3) */
 
-#include <arpa/inet.h>	/* inet_pton(3) */
+#include <netinet/in.h>	/* struct in_addr struct in6_addr */
 
 #include "dns.h"
 #include "spf.h"
@@ -64,6 +68,7 @@ int spf_debug;
 
 
 #define spf_lengthof(a) (sizeof (a) / sizeof (a)[0])
+#define spf_endof(a) (&(a)[spf_lengthof((a))])
 
 
 static size_t spf_itoa(char *dst, size_t lim, unsigned i) {
@@ -93,6 +98,36 @@ static size_t spf_itoa(char *dst, size_t lim, unsigned i) {
 
 	return dp;
 } /* spf_itoa() */
+
+
+unsigned spf_atoi(const char *src) {
+	unsigned i = 0;
+
+	while (isdigit((unsigned char)*src)) {
+		i *= 10;
+		i += *src++ - '0';
+	}
+
+	return i;
+} /* spf_atoi() */
+
+
+unsigned spf_xtoi(const char *src) {
+	static const unsigned char tobase[] =
+		{ [0 ... 255] = 0xf0,
+		  ['0'] = 0x0, ['1'] = 0x1, ['2'] = 0x2, ['3'] = 0x3, ['4'] = 0x4,
+		  ['5'] = 0x5, ['6'] = 0x6, ['7'] = 0x7, ['8'] = 0x8, ['9'] = 0x9,
+		  ['a'] = 0xa, ['b'] = 0xb, ['c'] = 0xc, ['d'] = 0xd, ['e'] = 0xe, ['f'] = 0xf,
+		  ['A'] = 0xA, ['B'] = 0xB, ['C'] = 0xC, ['D'] = 0xD, ['E'] = 0xE, ['F'] = 0xF };
+	unsigned n, i = 0;
+
+	while (!(0xf0 & (n = tobase[0xff & (unsigned char)*src++]))) {
+		i <<= 4;
+		i |= n;
+	}
+
+	return i;
+} /* spf_xtoi() */
 
 
 size_t spf_itox(char *dst, size_t lim, unsigned i) {
@@ -145,13 +180,17 @@ static size_t spf_strlcpy(char *dst, const char *src, size_t lim) {
 } /* spf_strlcpy() */
 
 
-static unsigned spf_split(unsigned max, char **argv, char *src, const char *delim) {
+static unsigned spf_split(unsigned max, char **argv, char *src, const char *delim, _Bool empty) {
 	unsigned argc = 0;
 	char *arg;
 
 	do {
-		if ((arg = strsep(&src, delim)) && *arg && argc < max)
-			argv[argc++] = arg;
+		if ((arg = strsep(&src, delim)) && (*arg || empty)) {
+			if (argc < max)
+				argv[argc] = arg;
+
+			argc++;
+		}
 	} while (arg);
 
 	if (max)
@@ -166,16 +205,19 @@ static unsigned spf_split(unsigned max, char **argv, char *src, const char *deli
  *
  *   (1) remove leading dots
  *   (2) remove extra dots
+ *   (3) add/remove/leave anchor
  */
-size_t spf_trim(char *dst, const char *src, size_t lim) {
+size_t spf_trim(char *dst, const char *src, size_t lim, int anchor) {
 	size_t dp = 0, sp = 0;
-	int lc;
+	int lc = 0;
 
 	/* trim any leading dot(s) */
 	while (src[sp] == '.')
 		sp++;
 
-	while ((lc = src[sp])) {
+	while (src[sp]) {
+		lc = src[sp];
+
 		if (dp < lim)
 			dst[dp] = src[sp];
 
@@ -186,6 +228,18 @@ size_t spf_trim(char *dst, const char *src, size_t lim) {
 			sp++;
 	}
 
+	if (anchor < 0) {
+		if (lc == '.')
+			dp--;
+	} else if (anchor > 0) {
+		if (lc != '.') {
+			if (dp < lim)
+				dst[dp] = '.';
+
+			dp++;
+		}
+	}
+
 	if (lim > 0)
 		dst[SPF_MIN(dp, lim - 1)] = '\0';
 
@@ -193,7 +247,19 @@ size_t spf_trim(char *dst, const char *src, size_t lim) {
 } /* spf_trim() */
 
 
-size_t spf_4top(char *dst, size_t lim, struct in_addr *ip) {
+char *spf_tolower(char *src) {
+	unsigned char *p = (unsigned char *)src;
+
+	while (*p) {
+		*p = tolower(*p);
+		++p;
+	}
+
+	return src;
+} /* spf_tolower() */
+
+
+size_t spf_4top(char *dst, size_t lim, const struct in_addr *ip) {
 	char tmp[16];
 	size_t len;
 	unsigned i;
@@ -209,17 +275,46 @@ size_t spf_4top(char *dst, size_t lim, struct in_addr *ip) {
 } /* spf_4top() */
 
 
-size_t spf_6top(char *dst, size_t lim, struct in6_addr *ip, _Bool nybbles) {
+/** a simple, optimistic IPv4 address string parser */
+struct in_addr *spf_pto4(struct in_addr *ip, const char *src) {
+	char *byte[4 + 1];
+	char tmp[16];
+	unsigned bytes, i, iaddr;
+
+	spf_strlcpy(tmp, src, sizeof tmp);
+
+	bytes = spf_split(spf_lengthof(byte), byte, tmp, ".", 1);
+	iaddr = 0;
+
+	for (i = 0; i < SPF_MIN(bytes, 4); i++) {
+		iaddr <<= 8;
+		iaddr |= 0xff & spf_atoi(byte[i]);
+	}
+
+	iaddr <<= 8 * (4 - i);
+
+	ip->s_addr = htonl(iaddr);
+
+	return ip;
+} /* spf_pto4() */
+
+
+#define SPF_6TOP_NYBBLE 1
+#define SPF_6TOP_COMPAT 2
+#define SPF_6TOP_MAPPED 4
+#define SPF_6TOP_MIXED  (SPF_6TOP_COMPAT|SPF_6TOP_MAPPED)
+
+size_t spf_6top(char *dst, size_t lim, const struct in6_addr *ip, int flags) {
 	static const char tohex[] = "0123456789abcdef";
 	unsigned short group[8];
-	char tmp[SPF_MAX(40, 64)]; /* 40 for short, 64 for nybbles (includes '\0') */
+	char tmp[SPF_MAX(40, 64)]; /* 40 for canon, 64 for nybbles (includes '\0') */
 	size_t len;
 	unsigned i;
 	_Bool run, ran;
 
-	if (nybbles) {
-		len = 0;
+	len = 0;
 
+	if (flags & SPF_6TOP_NYBBLE) {
 		tmp[len++] = tohex[0x0f & (ip->s6_addr[0] >> 4)];
 		tmp[len++] = '.';
 		tmp[len++] = tohex[0x0f & (ip->s6_addr[0] >> 0)];
@@ -229,6 +324,31 @@ size_t spf_6top(char *dst, size_t lim, struct in6_addr *ip, _Bool nybbles) {
 			tmp[len++] = tohex[0x0f & (ip->s6_addr[i] >> 4)];
 			tmp[len++] = '.';
 			tmp[len++] = tohex[0x0f & (ip->s6_addr[i] >> 0)];
+		}
+	} else if (IN6_IS_ADDR_V4COMPAT(ip) && (flags & SPF_6TOP_COMPAT)) {
+		tmp[len++] = ':';
+		tmp[len++] = ':';
+
+		len += spf_itoa(&tmp[len], sizeof tmp - len, ip->s6_addr[12]);
+
+		for (i = 13; i < 16; i++) {
+			tmp[len++] = '.';
+			len += spf_itoa(&tmp[len], sizeof tmp - len, ip->s6_addr[i]);
+		}
+	} else if (IN6_IS_ADDR_V4MAPPED(ip) && (flags & SPF_6TOP_MAPPED)) {
+		tmp[len++] = ':';
+		tmp[len++] = ':';
+		tmp[len++] = 'f';
+		tmp[len++] = 'f';
+		tmp[len++] = 'f';
+		tmp[len++] = 'f';
+		tmp[len++] = ':';
+
+		len += spf_itoa(&tmp[len], sizeof tmp - len, ip->s6_addr[12]);
+
+		for (i = 13; i < 16; i++) {
+			tmp[len++] = '.';
+			len += spf_itoa(&tmp[len], sizeof tmp - len, ip->s6_addr[i]);
 		}
 	} else {
 		for (i = 0; i < 8; i++) {
@@ -240,10 +360,8 @@ size_t spf_6top(char *dst, size_t lim, struct in6_addr *ip, _Bool nybbles) {
 
 		if (group[0]) {
 			len = spf_itox(tmp, sizeof tmp, group[0]);
-		} else {
-			len = 0;
+		} else
 			run++;
-		}
 
 		for (i = 1; i < 8; i++) {
 			if (group[i] || ran) {
@@ -270,30 +388,82 @@ size_t spf_6top(char *dst, size_t lim, struct in6_addr *ip, _Bool nybbles) {
 } /* spf_6top() */
 
 
-size_t spf_ntop(char *dst, size_t lim, int af, void *ip) {
+/** a simple, optimistic IPv6 address string parser */
+struct in6_addr *spf_pto6(struct in6_addr *ip, const char *src) {
+	char *part[32 + 1]; /* 8 words or 32 nybbles */
+	char tmp[64];
+	unsigned short group[8] = { 0 };
+	unsigned count, i, j, k;
+	struct in_addr ip4;
+
+	spf_strlcpy(tmp, src, sizeof tmp);
+
+	count = spf_split(spf_lengthof(part), part, tmp, ":", 1);
+
+	if (count > 1) {
+		for (i = 0; i < SPF_MIN(count, 8); i++) {
+			if (*part[i]) {
+				if (strchr(part[i], '.')) {
+					spf_pto4(&ip4, part[i]);
+
+					group[i] = 0xffff & (ntohl(ip4.s_addr) >> 16);
+
+					if (++i < 8)
+						group[i] = 0xffff & ntohl(ip4.s_addr);
+				} else {
+					group[i] = spf_xtoi(part[i]);
+				}
+			} else {
+				for (j = 7, k = count - 1; j > i && k > 0; j--, k--) {
+					if (strchr(part[k], '.')) {
+						spf_pto4(&ip4, part[k]);
+
+						group[j] = 0xffff & ntohl(ip4.s_addr);
+
+						if (--j >= 0)
+							group[j] = 0xffff & (ntohl(ip4.s_addr) >> 16);
+					} else {
+						group[j] = spf_xtoi(part[k]);
+					}
+				}
+
+				break;
+			}
+		}
+	} else {
+		spf_strlcpy(tmp, src, sizeof tmp);
+
+		count = spf_split(spf_lengthof(part), part, tmp, ".", 1);
+		count = SPF_MIN(count, 32);
+
+		for (i = 0, j = 0; i < count; j++) {
+			for (k = 0; k < 4 && i < count; k++, i++) {
+				group[j] <<= 4;
+				group[j] |= 0xf & spf_xtoi(part[i]);
+			}
+
+			group[j] <<= 4 * (4 - k);
+		}
+	}
+
+	for (i = 0, j = 0; i < 8; i++) {
+		ip->s6_addr[j++] = 0xff & (group[i] >> 8);
+		ip->s6_addr[j++] = 0xff & (group[i] >> 0);
+	}
+
+	while (j < 16)
+		ip->s6_addr[j++] = 0;
+
+	return ip;
+} /* spf_pto6() */
+
+
+size_t spf_ntop(char *dst, size_t lim, int af, const void *ip, int flags) {
 	if (af == AF_INET6)
-		return spf_6top(dst, lim, ip, 0);
+		return spf_6top(dst, lim, ip, flags);
 	else
 		return spf_4top(dst, lim, ip);
 } /* spf_ntop() */
-
-
-int spf_pto4(struct in_addr *ip, const char *src) {
-	memset(ip, 0, sizeof ip);
-
-	inet_pton(AF_INET, src, ip);
-
-	return 0;
-} /* spf_pto4() */
-
-
-int spf_pto6(struct in6_addr *ip, const char *src) {
-	memset(ip, 0, sizeof ip);
-
-	inet_pton(AF_INET6, src, ip);
-
-	return 0;
-} /* spf_pto6() */
 
 
 struct spf_sbuf {
@@ -324,6 +494,17 @@ static _Bool sbuf_puts(struct spf_sbuf *sbuf, const char *src) {
 	return !sbuf->overflow;
 } /* sbuf_puts() */
 
+static _Bool sbuf_putv(struct spf_sbuf *sbuf, const void *src, size_t len) {
+	size_t lim = SPF_MIN(len, (sizeof sbuf->str - 1) - sbuf->end);
+
+	memcpy(&sbuf->str[sbuf->end], src, lim);
+	sbuf->end += lim;
+
+	sbuf->overflow = (lim != len);
+
+	return !sbuf->overflow;
+} /* sbuf_putv() */
+
 static _Bool sbuf_puti(struct spf_sbuf *sbuf, unsigned long i) {
 	char tmp[32];
 
@@ -332,7 +513,7 @@ static _Bool sbuf_puti(struct spf_sbuf *sbuf, unsigned long i) {
 	return sbuf_puts(sbuf, tmp);
 } /* sbuf_puti() */
 
-static _Bool sbuf_put4(struct spf_sbuf *sbuf, struct in_addr *ip) {
+static _Bool sbuf_put4(struct spf_sbuf *sbuf, const struct in_addr *ip) {
 	char tmp[16];
 
 	spf_4top(tmp, sizeof tmp, ip);
@@ -340,10 +521,10 @@ static _Bool sbuf_put4(struct spf_sbuf *sbuf, struct in_addr *ip) {
 	return sbuf_puts(sbuf, tmp);
 } /* sbuf_put4() */
 
-static _Bool sbuf_put6(struct spf_sbuf *sbuf, struct in6_addr *ip) {
+static _Bool sbuf_put6(struct spf_sbuf *sbuf, const struct in6_addr *ip) {
 	char tmp[40];
 
-	spf_6top(tmp, sizeof tmp, ip, 0);
+	spf_6top(tmp, sizeof tmp, ip, SPF_6TOP_MIXED);
 
 	return sbuf_puts(sbuf, tmp);
 } /* sbuf_put6() */
@@ -387,6 +568,10 @@ static void all_comp(struct spf_sbuf *sbuf, struct spf_all *all) {
 	sbuf_puts(sbuf, "all");
 } /* all_comp() */
 
+static _Bool all_match(struct spf_all *all, struct spf_env *env) {
+	return 1;
+} /* all_match() */
+
 
 static const struct spf_include include_initializer =
 	{ .type = SPF_INCLUDE, .result = SPF_PASS, .domain = "%{d}" };
@@ -397,6 +582,10 @@ static void include_comp(struct spf_sbuf *sbuf, struct spf_include *include) {
 	sbuf_putc(sbuf, ':');
 	sbuf_puts(sbuf, include->domain);
 } /* include_comp() */
+
+static _Bool include_match(struct spf_include *include, struct spf_env *env) {
+	return 0; /* should be treated specially */
+} /* include_match() */
 
 
 static const struct spf_a a_initializer =
@@ -412,6 +601,10 @@ static void a_comp(struct spf_sbuf *sbuf, struct spf_a *a) {
 	sbuf_puts(sbuf, "//");
 	sbuf_puti(sbuf, a->prefix6);
 } /* a_comp() */
+
+static _Bool a_match(struct spf_a *a, struct spf_env *env) {
+	
+} /* a_match() */
 
 
 static const struct spf_mx mx_initializer =
@@ -511,6 +704,7 @@ static const struct {
 	const void *initializer;
 	size_t size;
 	void (*comp)();
+	_Bool (*match)();
 } spf_term[] = {
 	[SPF_ALL]     = { &all_initializer, sizeof all_initializer, &all_comp },
 	[SPF_INCLUDE] = { &include_initializer, sizeof include_initializer, &include_comp },
@@ -534,27 +728,27 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 
 
 %%{
-	machine spf_rr_parser;
+	machine spf_grammar;
 	alphtype unsigned char;
 
 	action oops {
 		const unsigned char *part;
 
-		rr->error.lc = fc;
+		rr->spf.error.lc = fc;
 
-		if (p - (unsigned char *)rdata >= (sizeof rr->error.near / 2))
-			part = p - (sizeof rr->error.near / 2);
+		if (p - (unsigned char *)rdata >= (sizeof rr->spf.error.near / 2))
+			part = p - (sizeof rr->spf.error.near / 2);
 		else
 			part = rdata;
 
-		memset(rr->error.near, 0, sizeof rr->error.near);
-		memcpy(rr->error.near, part, SPF_MIN(sizeof rr->error.near - 1, pe - part));
+		memset(rr->spf.error.near, 0, sizeof rr->spf.error.near);
+		memcpy(rr->spf.error.near, part, SPF_MIN(sizeof rr->spf.error.near - 1, pe - part));
 
 		if (SPF_DEBUG) {
-			if (isgraph(rr->error.lc))
-				SPF_SAY("`%c' invalid near `%s'", rr->error.lc, rr->error.near);
+			if (isgraph(rr->spf.error.lc))
+				SPF_SAY("`%c' invalid near `%s'", rr->spf.error.lc, rr->spf.error.near);
 			else
-				SPF_SAY("error near `%s'", rr->error.near);
+				SPF_SAY("error near `%s'", rr->spf.error.near);
 		}
 
 		error = EINVAL;
@@ -570,8 +764,19 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 	}
 
 	action term_end {
-		if (SPF_TRACE && term.type)
-			SPF_SAY("term -> %s", term_comp(&(struct spf_sbuf){ 0 }, &term));
+		if (term.type) {
+			struct spf_term *term_;
+
+			if (SPF_TRACE)
+				SPF_SAY("term -> %s", term_comp(&(struct spf_sbuf){ 0 }, &term));
+
+			if (!(term_ = malloc(sizeof *term_)))
+				{ error = errno; goto error; }
+
+			*term_ = term;
+
+			SPF_INSERT_TAIL(&rr->spf.terms, term_);
+		}
 	}
 
 	action all_begin {
@@ -589,7 +794,7 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 
 	action include_end {
 		if (*domain.str)
-			spf_trim(term.include.domain, domain.str, sizeof term.include.domain);
+			spf_trim(term.include.domain, domain.str, sizeof term.include.domain, 0);
 	}
 
 	action a_begin {
@@ -599,7 +804,7 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 
 	action a_end {
 		if (*domain.str)
-			spf_trim(term.a.domain, domain.str, sizeof term.a.domain);
+			spf_trim(term.a.domain, domain.str, sizeof term.a.domain, 0);
 
 		term.a.prefix4 = prefix4;
 		term.a.prefix6 = prefix6;
@@ -612,7 +817,7 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 
 	action mx_end {
 		if (*domain.str)
-			spf_trim(term.mx.domain, domain.str, sizeof term.mx.domain);
+			spf_trim(term.mx.domain, domain.str, sizeof term.mx.domain, 0);
 
 		term.mx.prefix4 = prefix4;
 		term.mx.prefix6 = prefix6;
@@ -625,7 +830,7 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 
 	action ptr_end {
 		if (*domain.str)
-			spf_trim(term.ptr.domain, domain.str, sizeof term.ptr.domain);
+			spf_trim(term.ptr.domain, domain.str, sizeof term.ptr.domain, 0);
 	}
 
 	action ip4_begin {
@@ -655,7 +860,7 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 
 	action exists_end {
 		if (*domain.str)
-			spf_trim(term.exists.domain, domain.str, sizeof term.exists.domain);
+			spf_trim(term.exists.domain, domain.str, sizeof term.exists.domain, 0);
 	}
 
 	action redirect_begin {
@@ -664,7 +869,7 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 
 	action redirect_end {
 		if (*domain.str)
-			spf_trim(term.redirect.domain, domain.str, sizeof term.redirect.domain);
+			spf_trim(term.redirect.domain, domain.str, sizeof term.redirect.domain, 0);
 	}
 
 	action exp_begin {
@@ -673,7 +878,7 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 
 	action exp_end {
 		if (*domain.str)
-			spf_trim(term.exp.domain, domain.str, sizeof term.exp.domain);
+			spf_trim(term.exp.domain, domain.str, sizeof term.exp.domain, 0);
 	}
 
 	action unknown_begin {
@@ -750,7 +955,7 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 }%%
 
 
-int spf_rr_parse(struct spf_rr *rr, const void *rdata, size_t rdlen) {
+static int spf_rr_parse_(struct spf_rr *rr, const void *rdata, size_t rdlen) {
 	enum spf_result result = 0;
 	struct spf_term term;
 	struct spf_sbuf domain, name, value;
@@ -770,10 +975,10 @@ int spf_rr_parse(struct spf_rr *rr, const void *rdata, size_t rdlen) {
 	return 0;
 error:
 	return error;
-} /* spf_rr_parse() */
+} /* spf_rr_parse_() */
 
 
-struct spf_rr *spf_rr_open(const char *qname, enum spf_rtype rtype, int *error) {
+struct spf_rr *spf_rr_open(const char *qname, enum spf_rr_type qtype, int *error) {
 	struct spf_rr *rr;
 
 	if (!(rr = malloc(sizeof *rr)))
@@ -781,12 +986,29 @@ struct spf_rr *spf_rr_open(const char *qname, enum spf_rtype rtype, int *error) 
 
 	memset(rr, 0, sizeof *rr);
 
-	SPF_INIT(&rr->terms);
-
-	if (sizeof rr->qname <= spf_trim(rr->qname, qname, sizeof rr->qname))
+	if (sizeof rr->qname <= spf_trim(rr->qname, qname, sizeof rr->qname, 0))
 		{ *error = ENAMETOOLONG; goto error; }
 
-	rr->rtype = rtype;
+	rr->qtype = qtype;
+
+	switch (rr->qtype) {
+	case SPF_RR_TXT:
+		/* FALL THROUGH */
+	case SPF_RR_SPF:
+		SPF_INIT(&rr->spf.terms);
+
+		break;
+	case SPF_RR_PTR:
+		/* FALL THROUGH */
+	case SPF_RR_MX:
+		/* FALL THROUGH */
+	case SPF_RR_A:
+		SPF_INIT(&rr->a.ips);
+
+		break;
+	} /* switch() */
+
+	rr->nrefs++;
 
 	return rr;
 syerr:
@@ -799,23 +1021,91 @@ error:
 
 
 void spf_rr_close(struct spf_rr *rr) {
-	if (!rr)
+	struct spf_term *term;
+	struct spf_ip *ip;
+
+	if (!rr || --rr->nrefs > 0)
 		return;
 
+	assert(rr->nrefs == 0);
+
+	switch (rr->qtype) {
+	case SPF_RR_TXT:
+		/* FALL THROUGH */
+	case SPF_RR_SPF:
+		while ((term = SPF_FIRST(&rr->spf.terms))) {
+			SPF_REMOVE(&rr->spf.terms, term);
+			free(term);
+		}
+
+		break;
+	case SPF_RR_PTR:
+		/* FALL THROUGH */
+	case SPF_RR_MX:
+		/* FALL THROUGH */
+	case SPF_RR_A:
+		while ((ip = SPF_FIRST(&rr->a.ips))) {
+			SPF_REMOVE(&rr->a.ips, ip);
+			free(ip);
+		}
+
+		break;
+	} /* switch() */
+
+	free(rr);
 } /* spf_rr_close() */
 
 
-struct spf_env *spf_env_init(struct spf_env *env) {
+int spf_rr_parse(struct spf_rr *rr, const void *str, size_t len) {
+	struct spf_sbuf sbuf = { 0 };
+	struct spf_ip *ip;
+	int error = 0;
+
+	switch (rr->qtype) {
+	case SPF_RR_TXT:
+		/* FALL THROUGH */
+	case SPF_RR_SPF:
+		return spf_rr_parse_(rr, str, len);
+	case SPF_RR_A:
+		/* FALL THROUGH */
+	case SPF_RR_PTR:
+		/* FALL THROUGH */
+	case SPF_RR_MX:
+		if (!sbuf_putv(&sbuf, str, len))
+			return EINVAL;
+
+		return 0;
+	default:
+		assert(!"invalid SPF record data type");
+	} /* switch() */
+} /* spf_rr_parse() */
+
+
+int spf_init(struct spf_env *env, int af, const void *ip, const char *domain, const char *sender) {
 	memset(env->r, 0, sizeof env->r);
-	gethostname(env->r, sizeof env->r - 1);
+
+	if (af == AF_INET6) {
+		spf_6top(env->i, sizeof env->i, ip, SPF_6TOP_NYBBLE);
+		spf_6top(env->c, sizeof env->c, ip, SPF_6TOP_MIXED);
+
+		spf_strlcpy(env->v, "ip6", sizeof env->v);
+	} else {
+		spf_4top(env->i, sizeof env->i, ip);
+		spf_4top(env->c, sizeof env->c, ip);
+
+		spf_strlcpy(env->v, "in-addr", sizeof env->v);
+	}
+
+	spf_strlcpy(env->p, "unknown", sizeof env->p);
+	spf_strlcpy(env->r, "unknown", sizeof env->r);
 
 	spf_itoa(env->t, sizeof env->t, (unsigned long)time(0));
 
-	return env;
-} /* spf_env_init() */
+	return 0;
+} /* spf_init() */
 
 
-static size_t spf_env_get_(char **field, int which, struct spf_env *env) {
+static size_t spf_get_(char **field, int which, struct spf_env *env) {
 	switch (tolower((unsigned char)which)) {
 	case 's':
 		*field = env->s;
@@ -854,30 +1144,30 @@ static size_t spf_env_get_(char **field, int which, struct spf_env *env) {
 		*field = 0;
 		return 0;
 	}
-} /* spf_env_get_() */
+} /* spf_get_() */
 
 
-size_t spf_env_get(char *dst, size_t lim, int which, const struct spf_env *env) {
+size_t spf_get(char *dst, size_t lim, int which, const struct spf_env *env) {
 	char *src;
 
-	if (!spf_env_get_(&src, which, (struct spf_env *)env))
+	if (!spf_get_(&src, which, (struct spf_env *)env))
 		return 0;
 
 	return spf_strlcpy(dst, src, lim);
-} /* spf_env_get() */
+} /* spf_get() */
 
 
-size_t spf_env_set(struct spf_env *env, int which, const char *src) {
+size_t spf_set(struct spf_env *env, int which, const char *src) {
 	size_t lim, len;
 	char *dst;
 
-	if (!(lim = spf_env_get_(&dst, which, (struct spf_env *)env)))
+	if (!(lim = spf_get_(&dst, which, (struct spf_env *)env)))
 		return strlen(src);
 
 	len = spf_strlcpy(dst, src, lim);
 
 	return SPF_MIN(lim - 1, len);
-} /* spf_env_set() */
+} /* spf_set() */
 
 
 static size_t spf_expand_(char *dst, size_t lim, const char *src, const struct spf_env *env, int *error) {
@@ -906,7 +1196,7 @@ static size_t spf_expand_(char *dst, size_t lim, const char *src, const struct s
 		tr = 1;
 	}
 
-	if (!(len = spf_env_get(field, sizeof field, macro, env)))
+	if (!(len = spf_get(field, sizeof field, macro, env)))
 		return 0;
 	else if (len >= sizeof field)
 		goto toolong;
@@ -914,7 +1204,7 @@ static size_t spf_expand_(char *dst, size_t lim, const char *src, const struct s
 	if (!tr)
 		return spf_strlcpy(dst, field, lim);
 
-	count = spf_split(spf_lengthof(part), part, field, delim);
+	count = spf_split(spf_lengthof(part), part, field, delim, 0);
 
 	if (spf_lengthof(part) <= count)
 		goto toobig;
@@ -1017,6 +1307,181 @@ size_t spf_expand(char *dst, size_t lim, const char *src, const struct spf_env *
 } /* spf_expand() */
 
 
+_Bool spf_match(struct spf_term *term, const struct spf_env *env, int *error) {
+	return 0;
+} /* spf_match() */
+
+
+
+struct spf_policy {
+	struct spf_env env;
+
+	SPF_HEAD(spf_rr) records;
+
+	enum spf_result result;
+
+	char qname[SPF_MAXDN + 1];
+	enum spf_rr_type qtype;
+
+	struct {
+		char domain[SPF_MAXDN + 1];
+
+		struct spf_rr *rr;
+		struct spf_term *term;
+
+		enum {
+			SPF_S_QUERYRR,
+			SPF_S_MECHANISMS,
+			SPF_S_INCLUDE,
+			SPF_S_MODIFIERS,
+		} state;
+	} stack[8], *frame;
+}; /* struct spf_policy */
+
+
+static struct spf_rr *spf_lookup(struct spf_policy *spf, const char *domain, enum spf_rr_type type) {
+	char a[SPF_MAXDN + 1], b[SPF_MAXDN + 1];
+	struct spf_rr *rr;
+
+	spf_trim(a, domain, sizeof a, -1);
+	spf_tolower(a);
+
+	SPF_FOREACH(rr, &spf->records) {
+		if (rr->qtype == type) {
+			spf_trim(b, rr->qname, sizeof b, -1);
+			spf_tolower(b);
+
+			if (!strcmp(a, b))
+				return rr;
+		}
+	}
+
+	return 0;
+} /* spf_lookup() */
+
+
+static int spf_exec(struct spf_policy *spf) {
+	int error;
+
+exec:
+
+	switch (spf->frame->state) {
+	case SPF_S_QUERYRR:
+		if (!(spf->frame->rr = spf_lookup(spf, spf->frame->domain, SPF_RR_SPF))) {
+			spf->result = SPF_QUERYRR;
+
+			spf_strlcpy(spf->qname, spf->frame->domain, sizeof spf->qname);
+			spf->qtype = SPF_RR_SPF;
+
+			return 0;
+		}
+
+		spf->frame->term = SPF_FIRST(&spf->frame->rr->spf.terms);
+
+		spf->frame->state++;
+	case SPF_S_MECHANISMS:
+		while (spf->frame->term) {
+			switch (spf->frame->term->type) {
+			case SPF_ALL:
+				break;
+			case SPF_INCLUDE:
+				break;
+			case SPF_A:
+				break;
+			case SPF_MX:
+				break;
+			case SPF_PTR:
+				break;
+			case SPF_IP4:
+				break;
+			case SPF_IP6:
+				break;
+			case SPF_EXISTS:
+				break;
+			} /* switch() */
+		}
+
+		spf->result = SPF_NONE;
+
+		break;
+	case SPF_S_INCLUDE:
+		break;
+	default:
+		assert(!"invalid SPF engine state");
+	} /* switch(state) */
+
+	if (spf->frame > spf->stack) {
+		spf->frame--;
+
+		spf_strlcpy(spf->env.d, spf->frame->domain, sizeof spf->env.d);
+
+		goto exec;
+	}
+
+	return 0;
+} /* spf_exec() */
+
+
+struct spf_policy *spf_open(const struct spf_env *env, int *error) {
+	struct spf_policy *spf = 0;
+
+	if (!(spf = malloc(sizeof *spf)))
+		goto syerr;
+
+	spf->env = *env;
+
+	SPF_INIT(&spf->records);
+
+	memset(spf->stack, 0, sizeof spf->stack);
+
+	spf->frame = &spf->stack[0];
+
+	spf_strlcpy(spf->frame->domain, spf->env.d, sizeof spf->frame->domain);
+
+	return spf;
+syerr:
+	*error = errno;
+
+	free(spf);
+
+	return 0;
+} /* spf_open() */
+
+
+void spf_close(struct spf_policy *spf) {
+	struct spf_rr *rr;
+
+	if (!spf)
+		return;
+
+	while ((rr = SPF_FIRST(&spf->records))) {
+		SPF_REMOVE(&spf->records, rr);
+		spf_rr_close(rr);
+	}
+
+	free(spf);
+} /* spf_close() */
+
+
+enum spf_result spf_check(struct spf_policy *spf, const char **qname, enum spf_rr_type *qtype, int *error) {
+	if ((*error = spf_exec(spf)))
+		return SPF_SYSFAIL;
+
+	if (spf->result == SPF_QUERYRR) {
+		*qname = spf->qname;
+		*qtype = spf->qtype;
+	} else
+		*qname = 0;
+
+	return spf->result;
+} /* spf_check() */
+
+
+void spf_addrr(struct spf_policy *spf, struct spf_rr *rr) {
+	SPF_INSERT_HEAD(&spf->records, rr);
+} /* spf_addrr() */
+
+
 #if SPF_MAIN
 
 #include <stdlib.h>
@@ -1037,7 +1502,7 @@ static int parse(const char *policy) {
 	struct spf_rr *rr;
 	int error;
 
-	if (!(rr = spf_rr_open("25thandClement.com.", SPF_T_TXT, &error)))
+	if (!(rr = spf_rr_open("25thandClement.com.", SPF_RR_SPF, &error)))
 		panic("%s", strerror(error));
 
 	if ((error = spf_rr_parse(rr, policy, strlen(policy))))
@@ -1062,8 +1527,87 @@ static int expand(const char *src, const struct spf_env *env) {
 } /* expand() */
 
 
+static void ip_flags(int *flags, _Bool *libc, int argc, char *argv[]) {
+	for (int i = 0; i < argc; i++) {
+		if (!strcmp(argv[i], "nybble"))
+			*flags |= SPF_6TOP_NYBBLE;
+		else if (!strcmp(argv[i], "compat"))
+			*flags |= SPF_6TOP_COMPAT;
+		else if (!strcmp(argv[i], "mapped"))
+			*flags |= SPF_6TOP_MAPPED;
+		else if (!strcmp(argv[i], "mixed"))
+			*flags |= SPF_6TOP_MIXED;
+		else if (!strcmp(argv[i], "libc"))
+			*libc = 1;
+	}
+
+	if (*libc && *flags)
+		SPF_SAY("libc and nybble/compat/mapped are mutually exclusive");
+	else if ((*flags & SPF_6TOP_NYBBLE) && (*flags & SPF_6TOP_MIXED))
+		SPF_SAY("nybble and compat/mapped are mutually exclusive");
+} /* ip_flags() */
+
+
+#include <arpa/inet.h>
+
+int ip6(int argc, char *argv[]) {
+	struct in6_addr ip;
+	char str[64];
+	int ret, flags = 0;
+	_Bool libc = 0;
+
+	ip_flags(&flags, &libc, argc - 1, &argv[1]);
+
+	memset(&ip, 0xff, sizeof ip);
+
+	if (libc) {
+		if (1 != (ret = inet_pton(AF_INET6, argv[0], &ip)))
+			panic("%s: %s", argv[0], (ret == 0)? "not v6 address" : strerror(errno));
+
+		inet_ntop(AF_INET6, &ip, str, sizeof str);
+	} else {
+		spf_pto6(&ip, argv[0]);
+		spf_6top(str, sizeof str, &ip, flags);
+	}
+
+	puts(str);
+
+	return 0;
+} /* ip6() */
+
+
+int ip4(int argc, char *argv[]) {
+	struct in_addr ip;
+	char str[16];
+	int ret, flags = 0;
+	_Bool libc = 0;
+
+	ip_flags(&flags, &libc, argc - 1, &argv[1]);
+
+	if (flags)
+		SPF_SAY("nybble/compat/mapped invalid flags for v4 address");
+
+	memset(&ip, 0xff, sizeof ip);
+
+	if (libc) {
+		if (1 != (ret = inet_pton(AF_INET, argv[0], &ip)))
+			panic("%s: %s", argv[0], (ret == 0)? "not v4 address" : strerror(errno));
+
+		inet_ntop(AF_INET, &ip, str, sizeof str);
+	} else {
+		spf_pto4(&ip, argv[0]);
+		spf_4top(str, sizeof str, &ip);
+	}
+
+	puts(str);
+
+	return 0;
+} /* ip4() */
+
+
+
 #define USAGE \
-	"spf [-S:L:O:D:I:P:V:H:C:R:T:vh] parse <POLICY> | expand <MACRO>\n" \
+	"spf [-S:L:O:D:I:P:V:H:C:R:T:vh] parse <POLICY> | expand <MACRO> | ip6 <ADDR>\n" \
 	"  -S EMAIL   <sender>\n" \
 	"  -L LOCAL   local-part of <sender>\n" \
 	"  -O DOMAIN  domain of <sender>\n" \
@@ -1088,7 +1632,11 @@ int main(int argc, char **argv) {
 
 	spf_debug = 1;
 
-	spf_env_init(&env);
+	memset(&env, 0, sizeof env);
+
+	spf_strlcpy(env.p, "unknown", sizeof env.p);
+	spf_strlcpy(env.r, "unknown", sizeof env.r);
+	spf_itoa(env.t, sizeof env.t, (unsigned)time(0));
 
 	while (-1 != (opt = getopt(argc, argv, "S:L:O:D:I:P:V:H:C:R:T:vh"))) {
 		switch (opt) {
@@ -1113,7 +1661,7 @@ int main(int argc, char **argv) {
 		case 'R':
 			/* FALL THROUGH */
 		case 'T':
-			spf_env_set(&env, opt, optarg);
+			spf_set(&env, opt, optarg);
 
 			break;
 		case 'v':
@@ -1140,6 +1688,10 @@ usage:
 		return parse(argv[1]);
 	} else if (!strcmp(argv[0], "expand") && argc > 1) {
 		return expand(argv[1], &env);
+	} else if (!strcmp(argv[0], "ip6") && argc > 1) {
+		return ip6(argc - 1, &argv[1]);
+	} else if (!strcmp(argv[0], "ip4") && argc > 1) {
+		return ip4(argc - 1, &argv[1]);
 	} else
 		goto usage;
 
