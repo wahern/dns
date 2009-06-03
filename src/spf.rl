@@ -813,6 +813,10 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 		prefix4 = 32; prefix6 = 128;
 	}
 
+	action term_macro {
+		term.macros |= 1U << ((tolower((unsigned char)fc)) - 'a');
+	}
+
 	action term_end {
 		if (term.type) {
 			struct spf_term *term_;
@@ -951,7 +955,7 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 	delimiter     = "." | "-" | "+" | "," | "/" | "_" | "=";
 	transformers  = digit* "r"i?;
 
-	macro_letter  = "s"i | "l"i | "o"i | "d"i | "i"i | "p"i | "v"i | "h"i | "c"i | "r"i | "t"i;
+	macro_letter  = ("s"i | "l"i | "o"i | "d"i | "i"i | "p"i | "v"i | "h"i | "c"i | "r"i | "t"i) $term_macro;
 	macro_literal = (0x21 .. 0x24) | (0x26 .. 0x7e);
 	macro_expand  = ("%{" macro_letter transformers delimiter* "}") | "%%" | "%_" | "%-";
 	macro_string  = (macro_expand | macro_literal)*;

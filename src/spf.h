@@ -177,15 +177,20 @@ enum spf_modifier {
 }; /* enum spf_modifier */
 
 
+/** forward definition */
+typedef unsigned spf_macros_t;
+
 struct spf_all {
 	enum spf_mechanism type;
 	enum spf_result result;
+	spf_macros_t macros;
 }; /* struct spf_all */
 
 
 struct spf_include {
 	enum spf_mechanism type;
 	enum spf_result result;
+	spf_macros_t macros;
 
 	char domain[SPF_MAXDN + 1];
 }; /* struct spf_include */
@@ -194,6 +199,7 @@ struct spf_include {
 struct spf_a {
 	enum spf_mechanism type;
 	enum spf_result result;
+	spf_macros_t macros;
 
 	char domain[SPF_MAXDN + 1];
 
@@ -204,6 +210,7 @@ struct spf_a {
 struct spf_mx {
 	enum spf_mechanism type;
 	enum spf_result result;
+	spf_macros_t macros;
 
 	char domain[SPF_MAXDN + 1];
 
@@ -214,6 +221,7 @@ struct spf_mx {
 struct spf_ptr {
 	enum spf_mechanism type;
 	enum spf_result result;
+	spf_macros_t macros;
 
 	char domain[SPF_MAXDN + 1];
 }; /* struct spf_ptr */
@@ -222,6 +230,7 @@ struct spf_ptr {
 struct spf_ip4 {
 	enum spf_mechanism type;
 	enum spf_result result;
+	spf_macros_t macros;
 
 	struct in_addr addr;
 	unsigned prefix;
@@ -231,6 +240,7 @@ struct spf_ip4 {
 struct spf_ip6 {
 	enum spf_mechanism type;
 	enum spf_result result;
+	spf_macros_t macros;
 
 	struct in6_addr addr;
 	unsigned prefix;
@@ -240,6 +250,7 @@ struct spf_ip6 {
 struct spf_exists {
 	enum spf_mechanism type;
 	enum spf_result result;
+	spf_macros_t macros;
 
 	char domain[SPF_MAXDN + 1];
 }; /* struct spf_exists */
@@ -247,6 +258,8 @@ struct spf_exists {
 
 struct spf_redirect {
 	enum spf_modifier type;
+	enum spf_result result;
+	spf_macros_t macros;
 
 	char domain[SPF_MAXDN + 1];
 }; /* struct spf_redirect */
@@ -254,6 +267,8 @@ struct spf_redirect {
 
 struct spf_exp {
 	enum spf_modifier type;
+	enum spf_result result;
+	spf_macros_t macros;
 
 	char domain[SPF_MAXDN + 1];
 }; /* struct spf_exp */
@@ -261,6 +276,8 @@ struct spf_exp {
 
 struct spf_unknown {
 	enum spf_modifier type;
+	enum spf_result result;
+	spf_macros_t macros;
 
 	char name[(SPF_MAXDN / 2) + 1];
 	char value[(SPF_MAXDN / 2) + 1];
@@ -272,6 +289,7 @@ struct spf_term {
 		struct {
 			int type;		/* enum spf_mechanism | enum spf_modifier */
 			enum spf_result result;	/* (mechanisms only) */
+			spf_macros_t macros;
 		};
 
 		struct spf_all all;
@@ -392,8 +410,6 @@ size_t spf_set(struct spf_env *, int, const char *);
 
 size_t spf_get(char *, size_t, int, const struct spf_env *);
 
-
-typedef unsigned spf_macros_t;
 
 _Bool spf_used(spf_macros_t, int);
 
