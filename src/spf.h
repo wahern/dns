@@ -67,71 +67,109 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-#define SPF_HEAD(type) \
-	struct { struct type *tqh_first; struct type **tqh_last; }
 
-#define SPF_ENTRY(type) \
-	struct { struct type *tqe_next; struct type **tqe_prev; }
+#define SPF_LIST_HEAD(name, type)					\
+struct name {								\
+	struct type *cqh_first;		/* first element */		\
+	struct type *cqh_last;		/* last element */		\
+}
 
-#define	SPF_FIRST(head) ((head)->tqh_first)
-#define	SPF_END(head) 0
-#define	SPF_NEXT(elm) ((elm)->tqe.tqe_next)
-#define	SPF_EMPTY(head) \
-	(SPF_FIRST(head) == SPF_END(head))
+#define SPF_LIST_HEAD_INITIALIZER(head)					\
+	{ SPF_LIST_END(&head), SPF_LIST_END(&head) }
 
-#define SPF_FOREACH(var, head) \
-	for((var) = SPF_FIRST(head); (var) != SPF_END(head); (var) = SPF_NEXT(var))
+#define SPF_LIST_ENTRY(type)						\
+struct {								\
+	struct type *cqe_next;		/* next element */		\
+	struct type *cqe_prev;		/* previous element */		\
+}
 
-#define	SPF_INIT(head) \
-	do { (head)->tqh_first = 0; (head)->tqh_last = &(head)->tqh_first; } while (0)
+#define	SPF_LIST_FIRST(head)		((head)->cqh_first)
+#define	SPF_LIST_LAST(head)		((head)->cqh_last)
+#define	SPF_LIST_END(head)		((void *)(head))
+#define	SPF_LIST_NEXT(elm)		((elm)->cqe.cqe_next)
+#define	SPF_LIST_PREV(elm)		((elm)->cqe.cqe_prev)
+#define	SPF_LIST_EMPTY(head)						\
+	(SPF_LIST_FIRST(head) == SPF_LIST_END(head))
 
-#define SPF_INSERT_HEAD(head, elm) do { \
-	if (((elm)->tqe.tqe_next = (head)->tqh_first)) \
-		(head)->tqh_first->tqe.tqe_prev = &(elm)->tqe.tqe_next; \
-	else \
-		(head)->tqh_last = &(elm)->tqe.tqe_next; \
-	(head)->tqh_first = (elm); \
-	(elm)->tqe.tqe_prev = &(head)->tqh_first; \
+#define SPF_LIST_FOREACH(var, head)					\
+	for((var) = SPF_LIST_FIRST(head);				\
+	    (var) != SPF_LIST_END(head);					\
+	    (var) = SPF_LIST_NEXT(var))
+
+#define SPF_LIST_FOREACH_REVERSE(var, head)				\
+	for((var) = SPF_LIST_LAST(head);					\
+	    (var) != SPF_LIST_END(head);					\
+	    (var) = SPF_LIST_PREV(var))
+
+#define	SPF_LIST_INIT(head) do {						\
+	(head)->cqh_first = SPF_LIST_END(head);				\
+	(head)->cqh_last = SPF_LIST_END(head);				\
 } while (0)
 
-#define SPF_INSERT_TAIL(head, elm) do { \
-	(elm)->tqe.tqe_next = 0; \
-	(elm)->tqe.tqe_prev = (head)->tqh_last; \
-	*(head)->tqh_last = (elm); \
-	(head)->tqh_last = &(elm)->tqe.tqe_next; \
+#define SPF_LIST_INSERT_AFTER(head, listelm, elm) do {			\
+	(elm)->cqe.cqe_next = (listelm)->cqe.cqe_next;			\
+	(elm)->cqe.cqe_prev = (listelm);				\
+	if ((listelm)->cqe.cqe_next == SPF_LIST_END(head))		\
+		(head)->cqh_last = (elm);				\
+	else								\
+		(listelm)->cqe.cqe_next->cqe.cqe_prev = (elm);		\
+	(listelm)->cqe.cqe_next = (elm);				\
 } while (0)
 
-#define SPF_INSERT_AFTER(head, listelm, elm) do { \
-	if (((elm)->tqe.tqe_next = (listelm)->tqe.tqe_next)) \
-		(elm)->tqe.tqe_next->tqe.tqe_prev = &(elm)->tqe.tqe_next; \
-	else \
-		(head)->tqh_last = &(elm)->tqe.tqe_next; \
-	(listelm)->tqe.tqe_next = (elm); \
-	(elm)->tqe.tqe_prev = &(listelm)->tqe.tqe_next; \
+#define SPF_LIST_INSERT_BEFORE(head, listelm, elm) do {			\
+	(elm)->cqe.cqe_next = (listelm);				\
+	(elm)->cqe.cqe_prev = (listelm)->cqe.cqe_prev;			\
+	if ((listelm)->cqe.cqe_prev == SPF_LIST_END(head))		\
+		(head)->cqh_first = (elm);				\
+	else								\
+		(listelm)->cqe.cqe_prev->cqe.cqe_next = (elm);		\
+	(listelm)->cqe.cqe_prev = (elm);				\
 } while (0)
 
-#define	SPF_INSERT_BEFORE(listelm, elm) do { \
-	(elm)->tqe.tqe_prev = (listelm)->tqe.tqe_prev; \
-	(elm)->tqe.tqe_next = (listelm); \
-	*(listelm)->tqe.tqe_prev = (elm); \
-	(listelm)->tqe.tqe_prev = &(elm)->tqe.tqe_next; \
+#define SPF_LIST_INSERT_HEAD(head, elm) do {				\
+	(elm)->cqe.cqe_next = (head)->cqh_first;			\
+	(elm)->cqe.cqe_prev = SPF_LIST_END(head);			\
+	if ((head)->cqh_last == SPF_LIST_END(head))			\
+		(head)->cqh_last = (elm);				\
+	else								\
+		(head)->cqh_first->cqe.cqe_prev = (elm);		\
+	(head)->cqh_first = (elm);					\
 } while (0)
 
-#define SPF_REMOVE(head, elm) do { \
-	if (((elm)->tqe.tqe_next)) \
-		(elm)->tqe.tqe_next->tqe.tqe_prev = (elm)->tqe.tqe_prev; \
-	else \
-		(head)->tqh_last = (elm)->tqe.tqe_prev; \
-	*(elm)->tqe.tqe_prev = (elm)->tqe.tqe_next; \
+#define SPF_LIST_INSERT_TAIL(head, elm) do {				\
+	(elm)->cqe.cqe_next = SPF_LIST_END(head);			\
+	(elm)->cqe.cqe_prev = (head)->cqh_last;				\
+	if ((head)->cqh_first == SPF_LIST_END(head))			\
+		(head)->cqh_first = (elm);				\
+	else								\
+		(head)->cqh_last->cqe.cqe_next = (elm);			\
+	(head)->cqh_last = (elm);					\
 } while (0)
 
-#define SPF_REPLACE(head, elm, elm2) do { \
-	if (((elm2)->tqe.tqe_next = (elm)->tqe.tqe_next)) \
-		(elm2)->tqe.tqe_next->tqe.tqe_prev = &(elm2)->tqe.tqe_next; \
-	else \
-		(head)->tqh_last = &(elm2)->tqe.tqe_next; \
-	(elm2)->tqe.tqe_prev = (elm)->tqe.tqe_prev; \
-	*(elm2)->tqe.tqe_prev = (elm2); \
+#define	SPF_LIST_REMOVE(head, elm) do {					\
+	if ((elm)->cqe.cqe_next == SPF_LIST_END(head))			\
+		(head)->cqh_last = (elm)->cqe.cqe_prev;			\
+	else								\
+		(elm)->cqe.cqe_next->cqe.cqe_prev =			\
+		    (elm)->cqe.cqe_prev;				\
+	if ((elm)->cqe.cqe_prev == SPF_LIST_END(head))			\
+		(head)->cqh_first = (elm)->cqe.cqe_next;		\
+	else								\
+		(elm)->cqe.cqe_prev->cqe.cqe_next =			\
+		    (elm)->cqe.cqe_next;				\
+} while (0)
+
+#define SPF_LIST_REPLACE(head, elm, elm2) do {				\
+	if (((elm2)->cqe.cqe_next = (elm)->cqe.cqe_next) ==		\
+	    SPF_LIST_END(head))						\
+		(head).cqh_last = (elm2);				\
+	else								\
+		(elm2)->cqe.cqe_next->cqe.cqe_prev = (elm2);		\
+	if (((elm2)->cqe.cqe_prev = (elm)->cqe.cqe_prev) ==		\
+	    SPF_LIST_END(head))						\
+		(head).cqh_first = (elm2);				\
+	else								\
+		(elm2)->cqe.cqe_prev->cqe.cqe_next = (elm2);		\
 } while (0)
 
 /** end BSD queue macros */
@@ -152,15 +190,14 @@ enum spf_mechanism {
 
 
 enum spf_result {
+	SPF_SYSERR   = -4,
 	SPF_RESUME   = -3,
-
 	SPF_QUERY    = -2,
-	SPF_ERROR    = -1,
+	SPF_OK       = -1,
 
 	SPF_NONE     = 0,
 	SPF_TEMPERROR,
 	SPF_PERMERROR,
-
 	SPF_PASS     = '+',
 	SPF_FAIL     = '-',
 	SPF_SOFTFAIL = '~',
@@ -177,8 +214,9 @@ enum spf_modifier {
 }; /* enum spf_modifier */
 
 
-/** forward definition */
+/** forward definitions */
 typedef unsigned spf_macros_t;
+
 
 struct spf_all {
 	enum spf_mechanism type;
@@ -306,8 +344,10 @@ struct spf_term {
 		struct spf_unknown unknown;
 	};
 
-	SPF_ENTRY(spf_term) tqe;
+	SPF_LIST_ENTRY(spf_term) cqe;
 }; /* struct spf_term */
+
+SPF_LIST_HEAD(spf_terms, spf_term);
 
 
 struct spf_ip {
@@ -320,14 +360,17 @@ struct spf_ip {
 		struct in6_addr ip6;
 	};
 
-	SPF_ENTRY(spf_ip) tqe;
+	SPF_LIST_ENTRY(spf_ip) cqe;
 }; /* struct spf_ip */
+
+SPF_LIST_HEAD(spf_ips, spf_ip);
 
 
 /*
  * R E S O U R C E  R E C O R D  I N T E R F A C E S
  *
- * These are used as input into the SPF policy engine. The semantics of * each type are different than for DNS; see RFC 4408 Sec. 5 for specifics.
+ * These are used as input into the SPF policy engine. The semantics of
+ * each type are different than for DNS; see RFC 4408 Sec. 5 for specifics.
  *
  * SPF_RR_A:
  * 	Query A records.
@@ -359,11 +402,11 @@ struct spf_rr {
 
 	union {
 		struct {
-			SPF_HEAD(spf_ip) ips;
+			struct spf_ips ips;
 		} a, mx, ptr;
 
-		struct {
-			SPF_HEAD(spf_term) terms;
+		struct spf_rr_spf {
+			struct spf_terms terms;
 
 			struct {
 				int lc;
@@ -372,7 +415,7 @@ struct spf_rr {
 		} spf;
 	};
 
-	SPF_ENTRY(spf_rr) tqe;
+	SPF_LIST_ENTRY(spf_rr) cqe;
 }; /* struct spf_rr */
 
 struct spf_rr *spf_rr_open(const char *qname, enum spf_rr_type qtype, int *error);

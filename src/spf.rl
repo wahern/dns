@@ -516,6 +516,48 @@ size_t spf_ntop(char *dst, size_t lim, int af, const void *ip, int flags) {
 } /* spf_ntop() */
 
 
+int spf_6cmp(const struct in6_addr *a, const struct in6_addr *b, unsigned prefix) {
+	unsigned i, n;
+	int cmp;
+
+	for (i = 0; i < prefix / 8 && i < 16; i++) {
+		if ((cmp = a->s6_addr[i] - b->s6_addr[i]))
+			return cmp;
+	}
+
+	if ((prefix % 8) && i < 16) {
+		n = (8 - (prefix % 8));
+
+		if ((cmp = (a->s6_addr[i] >> n) - (b->s6_addr[i] >> n)))
+			return cmp;
+	}
+
+	return 0;
+} /* spf_6cmp() */
+
+
+int spf_4cmp(const struct in_addr *a,  const struct in_addr *b, unsigned prefix) {
+	unsigned long x = ntohl(a->s_addr), y = ntohl(b->s_addr);
+
+	if (!prefix) {
+		return 0;
+	} if (prefix < 32) {
+		x >>= 32 - (prefix % 32);
+		y >>= 32 - (prefix % 32);
+	}
+
+	return (x < y)? -1 : (x > y)? 1 : 0;
+} /* spf_4cmp() */
+
+
+int spf_inetcmp(int af, const void *a, const void *b, unsigned prefix) {
+	if (af == AF_INET6)
+		return spf_6cmp(a, b, prefix);
+	else
+		return spf_4cmp(a, b, prefix);
+} /* spf_inetcmp() */
+
+
 struct spf_sbuf {
 	unsigned end;
 
@@ -606,8 +648,6 @@ const char *spf_strtype(int type) {
 		return "[[[error]]]";
 	}
 } /* spf_strtype() */
-
-
 
 
 static const struct spf_all all_initializer =
@@ -828,7 +868,7 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 
 			*term_ = term;
 
-			SPF_INSERT_TAIL(&rr->spf.terms, term_);
+			SPF_LIST_INSERT_TAIL(&rr->spf.terms, term_);
 		}
 	}
 
@@ -1048,7 +1088,7 @@ struct spf_rr *spf_rr_open(const char *qname, enum spf_rr_type qtype, int *error
 	case SPF_RR_TXT:
 		/* FALL THROUGH */
 	case SPF_RR_SPF:
-		SPF_INIT(&rr->spf.terms);
+		SPF_LIST_INIT(&rr->spf.terms);
 
 		break;
 	case SPF_RR_PTR:
@@ -1056,7 +1096,7 @@ struct spf_rr *spf_rr_open(const char *qname, enum spf_rr_type qtype, int *error
 	case SPF_RR_MX:
 		/* FALL THROUGH */
 	case SPF_RR_A:
-		SPF_INIT(&rr->a.ips);
+		SPF_LIST_INIT(&rr->a.ips);
 
 		break;
 	} /* switch() */
@@ -1086,8 +1126,8 @@ void spf_rr_close(struct spf_rr *rr) {
 	case SPF_RR_TXT:
 		/* FALL THROUGH */
 	case SPF_RR_SPF:
-		while ((term = SPF_FIRST(&rr->spf.terms))) {
-			SPF_REMOVE(&rr->spf.terms, term);
+		while (SPF_LIST_END(&rr->spf.terms) != (term = SPF_LIST_FIRST(&rr->spf.terms))) {
+			SPF_LIST_REMOVE(&rr->spf.terms, term);
 			free(term);
 		}
 
@@ -1097,8 +1137,8 @@ void spf_rr_close(struct spf_rr *rr) {
 	case SPF_RR_MX:
 		/* FALL THROUGH */
 	case SPF_RR_A:
-		while ((ip = SPF_FIRST(&rr->a.ips))) {
-			SPF_REMOVE(&rr->a.ips, ip);
+		while (SPF_LIST_END(&rr->a.ips) != (ip = SPF_LIST_FIRST(&rr->a.ips))) {
+			SPF_LIST_REMOVE(&rr->a.ips, ip);
 			free(ip);
 		}
 
@@ -1386,7 +1426,7 @@ struct spf_policy {
 	struct spf_env env;
 	struct spf_limits limits;
 
-	SPF_HEAD(spf_rr) records;
+	SPF_LIST_HEAD(, spf_rr) rdata;
 
 	enum spf_result result;
 	char qlast[SPF_MAXDN + 1];
@@ -1401,8 +1441,9 @@ struct spf_policy {
 	struct spf_frame {
 		char target[SPF_MAXDN + 1];
 
-		struct spf_rr *rules;
-		struct spf_term *term, *next;
+		struct spf_rr *data;
+
+		struct spf_term *next;
 
 		enum spf_result (*resume)(struct spf_policy *, struct spf_frame *);
 		int state;
@@ -1417,7 +1458,7 @@ static struct spf_rr *spf_lookup(struct spf_policy *spf, const char *domain, enu
 	spf_fixdn(a, domain, sizeof a, SPF_DN_CHOMP);
 	spf_tolower(a);
 
-	SPF_FOREACH(rr, &spf->records) {
+	SPF_LIST_FOREACH(rr, &spf->rdata) {
 		if (rr->qtype == type) {
 			spf_fixdn(b, rr->qname, sizeof b, SPF_DN_CHOMP);
 			spf_tolower(b);
@@ -1460,7 +1501,7 @@ static size_t spf_findptr(char *dst, size_t lim, struct spf_policy *spf) {
 	spf_strlcpy(tmp, spf->env.i, sizeof tmp);
 	spf_tolower(tmp);
 
-	SPF_FOREACH(ip, &rr->ptr.ips) {
+	SPF_LIST_FOREACH(ip, &rr->ptr.ips) {
 		spf_ntop(ipstr, sizeof ipstr, ip->af, &ip->ip4, SPF_6TOP_NYBBLE);
 		spf_tolower(ipstr);
 
@@ -1475,17 +1516,9 @@ static size_t spf_findptr(char *dst, size_t lim, struct spf_policy *spf) {
 static _Bool spf_needptr(spf_macros_t macros, const struct spf_env *env)
 	{ return (spf_used(macros, 'p') && !*env->p); }
 
-static enum spf_result spf_target(char *dst, size_t lim, const char *src, struct spf_policy *spf) {
+static enum spf_result spf_target(char *dst, size_t lim, const char *src, spf_macros_t macros, struct spf_policy *spf, int *error) {
 	char tmp[2048];
 	size_t len;
-	spf_macros_t macros;
-	int error;
-
-expand:
-
-	macros = 0;
-
-	len = spf_expand(tmp, sizeof tmp, &macros, src, &spf->env, &error);
 
 	if (spf_needptr(macros, &spf->env)) {
 		if (spf_findptr(spf->env.d, sizeof spf->env.d, spf))
@@ -1494,206 +1527,66 @@ expand:
 			return SPF_QUERY;
 	}
 
-	if (!len) {
-		spf->error = (error)? error : EINVAL;
+	len = spf_expand(tmp, sizeof tmp, &macros, src, &spf->env, error);
 
-		return SPF_ERROR;
+	if (!len) {
+		if (!*error)
+			*error = EINVAL;
+
+		return SPF_SYSERR;
 	}
 
 	if (len >= sizeof tmp) {
-		spf->error = ENAMETOOLONG;
+		*error = ENAMETOOLONG;
 
-		return SPF_ERROR;
+		return SPF_SYSERR;
 	}
 
 	if (!(len = spf_fixdn(dst, tmp, lim, SPF_DN_TRUNC))) {
-		spf->error = EFAULT; /** shouldn't happen. */
+		/*
+		 * shouldn't happen, because spf_fixdn() should return the
+		 * shortest minimum (regardless of buffer size).
+		 */
+		*error = EFAULT;
 
-		return SPF_ERROR;
+		return SPF_SYSERR;
 	}
 
 	if (len >= lim) {
-		spf->error = ENAMETOOLONG;
+		*error = ENAMETOOLONG;
 
-		return SPF_ERROR;
+		return SPF_SYSERR;
 	}
 
-	return SPF_NONE; /** meaningless (must be greater than or equal to 0) */
+	return SPF_OK;
 } /* spf_target() */
 
 
-static enum spf_result spf_call_(struct spf_policy *spf, struct spf_frame *frame) {
-	enum spf_result result;
+static enum spf_result spf_curterm(struct spf_term **term, struct spf_policy *spf) {
+	if (SPF_LIST_END() == (*term = frame->next))
+		return 0;
 
-	if ((frame = &spf->frame[1]) >= spf_endof(spf->stack)) {
-		spf->error = SPF_TRACE(EFAULT, "stack overflow");
+	if (spf_needptr((*term)->macros, &spf->env)
+	&&  !spf_findptr(0, 0, spf))
+		return SPF_RESULT;
 
-		return SPF_ERROR;
-	}
+	return SPF_OK;
+} /* spf_curterm() */
 
-	memset(frame, 0, sizeof *frame);
-
-	if (0 > (result = spf_target(frame->target, sizeof frame->target, spf->call.target, spf)))
-		return result;
-
-	frame->resume = spf->call.resume;
-
-	spf->frame++;
-
-	return SPF_RESUME;
-} /* spf_call_() */
-
-
-static enum spf_result spf_call(struct spf_policy *spf, enum spf_result (*resume)(), const char *target) {
-	spf->call.target = target;
-	spf->call.resume = resume;
-
-	return spf_call_(spf, 0);
-} /* spf_call() */
-
-
-#define SPF_RESUME(frame) switch ((frame)->state) { case 0:
-
-#define SPF_YIELD(frame, result) do { \
-	(frame)->state = __LINE__; \
-	return (result); \
-	case __LINE__: (frame)->state = __LINE__; \
-} while (0)
-
-#define SPF_CALL(spf, resume, target) do { \
-	(spf)->frame->state = __LINE__; \
-	return spf_call((spf), (resume), (target)); \
-	case __LINE__: (spf)->frame->state = __LINE__; \
-} while (0)
-
-
-static _Bool spf_match_6(struct in6_addr *a,  struct in6_addr *b, unsigned prefix) {
-	unsigned i, bits;
-
-	for (i = 0; i < prefix / 8; i++) {
-		if (a->s6_addr[i] != b->s6_addr[i])
-			return 0;
-	}
-
-	if ((prefix % 8) && i < 16) {
-		if ((a->s6_addr[i] >> (8 - (prefix % 8))) != (b->s6_addr[i] >> (8 - (prefix % 8))))
-			return 0;
-	}
-
-	return 1;
-} /* spf_match_6() */
-
-static _Bool spf_match_4(struct in_addr *a,  struct in_addr *b, unsigned prefix) {
-	unsigned x = ntohl(a->s_addr), y = ntohl(b->s_addr);
-
-	if (!prefix) {
-		return 1;
-	} if (prefix < 32) {
-		x >>= 32 - (prefix % 32);
-		y >>= 32 - (prefix % 32);
-	}
-
-	return x == y;
-} /* spf_match_4() */
-
-static enum spf_result spf_match_a(struct spf_policy *spf, struct spf_frame *frame) {
-	struct spf_a *a = &frame[-1].term->a;
-	struct spf_rr *rr;
-	struct spf_ip *ip;
-	union { struct in_addr ip4; struct in6_addr ip6; } u;
-	char v[sizeof spf->env.v];
-	int af, prefix;
-	_Bool (*match)();
-
-	if (!(rr = spf_lookup(spf, frame->target, SPF_RR_A)))
-		return SPF_QUERY;
-
-	spf_strlcpy(v, spf->env.v, sizeof v);
-	spf_tolower(v);
-
-	if (!strcmp(v, "ip6")) {
-		af = AF_INET6;
-		spf_pto6(&u.ip6, spf->env.i);
-		prefix = a->prefix6;
-		match = &spf_match_6;
-	} else {
-		af = AF_INET;
-		spf_pto4(&u.ip4, spf->env.i);
-		prefix = a->prefix4;
-		match = &spf_match_4;
-	}
-
-	SPF_FOREACH(ip, &rr->a.ips) {
-		if (af != ip->af)
-			continue;
-		if (match(&u, &ip->ip4, prefix))
-			return frame[-1].term->result;
-	}
-
-	return SPF_NONE;
-} /* spf_match_a() */
-
-
-/** a shim function to dispatch to the proper routine */
-static enum spf_result spf_match(struct spf_policy *spf, struct spf_frame *frame) {
-	struct spf_term *term = frame[-1].term;
-
-	switch (term->type) {
-	case SPF_ALL:
-		return term->result;
-	case SPF_A:
-		frame->resume = &spf_match_a;
-		return SPF_RESUME;
-	case SPF_MX:
-//		frame->resume = &spf_match_mx;
-		return SPF_RESUME;
-	case SPF_PTR:
-//		frame->resume = &spf_match_ptr;
-		return SPF_RESUME;
-	case SPF_IP4:
-//		frame->resume = &spf_match_ip4;
-		return SPF_RESUME;
-	case SPF_IP6:
-//		frame->resume = &spf_match_ip6;
-		return SPF_RESUME;
-	case SPF_EXISTS:
-//		frame->resume = &spf_match_exists;
-		return SPF_RESUME;
-	} /* switch () */
-
-	return SPF_NONE;
-} /* spf_match() */
+static void spf_skipterm(struct spf_frame *frame) {
+	if (frame->next)
+		frame->next = SPF_LIST_NEXT(frame->next);
+} /* spf_skipterm() */
 
 
 static enum spf_result spf_include(struct spf_policy *spf, struct spf_frame *frame) {
-	SPF_RESUME(frame) {
-		while (!(frame->rules = spf_lookup(spf, frame->target, SPF_RR_SPF)))
-			SPF_YIELD(frame, SPF_QUERY);
-
-		frame->next = SPF_FIRST(&frame->rules->spf.terms);
-
-		while ((frame->term = frame->next)) {
-			frame->next = SPF_NEXT(frame->term);
-
-			switch (frame->term->type) {
-			case SPF_ALL:
-				return frame->term->result;
-			case SPF_A:
-				SPF_CALL(spf, &spf_match, frame->term->a.domain);
-
-				break;
-			} /* switch() */
-
-		} /* while() */
-	}}
-
-	return SPF_NONE;
+	return 0;
 } /* spf_include() */
 
 
-static struct spf_frame *spf_return(struct spf_policy *spf) {
+static struct spf_frame *spf_popframe(struct spf_policy *spf) {
 	return (spf->frame > &spf->stack[0])? &spf->frame[-1] : 0;
-} /* spf_return() */
+} /* spf_popframe() */
 
 static enum spf_result spf_exec(struct spf_policy *spf) {
 	enum spf_result result;
@@ -1707,7 +1600,7 @@ static enum spf_result spf_exec(struct spf_policy *spf) {
 			return result;
 
 		spf->result = result;
-	} while ((spf->frame = spf_return(spf)));
+	} while ((spf->frame = spf_popframe(spf)));
 
 	return result;
 } /* spf_exec() */
@@ -1724,7 +1617,7 @@ struct spf_policy *spf_open(const struct spf_env *env, const struct spf_limits *
 	spf->env    = *env;
 	spf->limits = *limits;
 
-	SPF_INIT(&spf->records);
+	SPF_INIT(&spf->rdata);
 
 	memset(spf->stack, 0, sizeof spf->stack);
 
@@ -1748,8 +1641,8 @@ void spf_close(struct spf_policy *spf) {
 	if (!spf)
 		return;
 
-	while ((rr = SPF_FIRST(&spf->records))) {
-		SPF_REMOVE(&spf->records, rr);
+	while ((rr = SPF_FIRST(&spf->rdata))) {
+		SPF_REMOVE(&spf->rdata, rr);
 		spf_rr_close(rr);
 	}
 
@@ -1759,7 +1652,7 @@ void spf_close(struct spf_policy *spf) {
 
 enum spf_result spf_check(struct spf_policy *spf, const char **qname, enum spf_rr_type *qtype, int *error) {
 	if ((*error = spf_exec(spf)))
-		return SPF_ERROR;
+		return SPF_SYSERR;
 
 	if (spf->result == SPF_QUERY) {
 		*qname = spf->qlast;
@@ -1774,7 +1667,7 @@ enum spf_result spf_check(struct spf_policy *spf, const char **qname, enum spf_r
 
 
 void spf_addrr(struct spf_policy *spf, struct spf_rr *rr) {
-	SPF_INSERT_HEAD(&spf->records, rr);
+	SPF_INSERT_HEAD(&spf->rdata, rr);
 } /* spf_addrr() */
 
 
