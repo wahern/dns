@@ -1378,10 +1378,10 @@ spf_macros_t spf_macros(const char *src, const struct spf_env *env) {
 enum vm_type {
 	T_NIL,
 	T_INT = 0x01,
-	T_PTR = 0x02,
+	T_REF = 0x02,
 	T_MEM = 0x04,
 
-	T_ANY = T_INT|T_PTR|T_MEM,
+	T_ANY = T_INT|T_REF|T_MEM,
 }; /* enum vm_type */
 
 enum vm_opcode {
@@ -1399,7 +1399,7 @@ enum vm_opcode {
 	OP_I8,		/* 0/1 Decode next op and push as T_INT */ 
 	OP_I16,		/* 0/1 Decode next 2 ops and push as T_INT */ 
 	OP_I32,		/* 0/1 Decode next 4 ops and push as T_INT */
-	OP_PTR,		/* 0/1 Decode next sizeof(intptr_t) opts and push as T_PTR */
+	OP_REF,		/* 0/1 Decode next sizeof(intptr_t) opts and push as T_REF */
 	OP_MEM,		/* 0/1 Decode next sizeof(intptr_t) ops and push as T_MEM */
 
 	OP_DEC,		/* 1/1 Decrement S(-1) */
@@ -1412,7 +1412,8 @@ enum vm_opcode {
 	OP_GOTO,	/* 2/0 If S(-2) is non-zero, goto I(S(-1)) */
 
 	OP_POP,		/* 0/0 Pop item from stack */
-	OP_LOAD,	/* 1/1 Push a copy of S(S(-1)) onto stack (changes T_MEM to T_PTR) */
+	OP_DUP,		/* 1/2 Dup item at top of stack */
+	OP_LOAD,	/* 1/1 Push a copy of S(S(-1)) onto stack (changes T_MEM to T_REF) */
 	OP_STORE,	/* 2/0 Pop index and item and store at index (index computed after popping). */
 	OP_MOVE,	/* 1/1 Move S(S(-1)) to top of stack, shifting everything else down. */
 	OP_SWAP,	/* 0/0 Swap top two items. */
@@ -1434,13 +1435,16 @@ enum vm_opcode {
 	OP_INCLUDE  = SPF_INCLUDE,
 	OP_A        = SPF_A,
 	OP_MX       = SPF_MX,
-	OP_PTR_     = SPF_PTR,
+	OP_PTR      = SPF_PTR,
 	OP_IP4      = SPF_IP4,
 	OP_IP6      = SPF_IP6,
 	OP_EXISTS   = SPF_EXISTS,
 
 	OP_REDIRECT = SPF_REDIRECT,
 	OP_EXP      = SPF_EXP,
+
+	OP_PRINTI,
+	OP_PRINTS,
 
 	OP__COUNT,
 }; /* enum vm_opcode */
@@ -1452,7 +1456,7 @@ static const int op_size[OP__COUNT] = {
 	[OP_I8]  = 2,
 	[OP_I16] = 3,
 	[OP_I32] = 5,
-	[OP_PTR] = 1 + sizeof (uintptr_t),
+	[OP_REF] = 1 + sizeof (uintptr_t),
 	[OP_MEM] = 1 + sizeof (uintptr_t),
 };
 
@@ -1491,16 +1495,17 @@ struct spf_resolver {
 }; /* struct spf_resolver */
 
 
-#define SPF_VAR_REVMAP 0
+#define VM_VAR_REVMAP 0
 
 static void vm_initvars(struct spf_resolver *spf) {
-	/* 0(SPF_VAR_REVMAP) */
+	/* 0(VM_VAR_REVMAP) */
 	spf->vm.type[spf->vm.sp]  = T_INT;
 	spf->vm.stack[spf->vm.sp] = 0;
 	spf->vm.sp++;
 } /* vm_initvars() */
 
 
+static void vm_throw() __attribute__((__noreturn__));
 static void vm_throw(struct spf_resolver *spf, int error) {
 	longjmp(*spf->trap, (error)? error : EINVAL);
 } /* vm_throw() */
@@ -1532,6 +1537,10 @@ static enum vm_type vm_typeof(struct spf_resolver *spf, int p) {
 
 static void t_free(struct spf_resolver *spf, enum vm_type t, intptr_t v) {
 	switch (t) {
+	case T_INT:
+		/* FALL THROUGH */
+	case T_REF:
+		break;
 	case T_MEM:
 		free((void *)v);
 
@@ -1589,17 +1598,17 @@ static intptr_t vm_move(struct spf_resolver *spf, int p) {
 	i = p;
 
 	/*
-	 * DO NOT move a T_MEM item over an equivalent T_PTR, because that
+	 * DO NOT move a T_MEM item over an equivalent T_REF, because that
 	 * breaks garbage-collection. Instead, swap types with the first
-	 * equivalent T_PTR found. (WARNING: This breaks if T_PTR points
+	 * equivalent T_REF found. (WARNING: This breaks if T_REF points
 	 * into a T_MEM object. Just don't do that--nest pointers and swap
 	 * stack positions.)
 	 */
 	if (v == T_MEM) {
 		for (; i < spf->vm.sp - 1; i++) {
-			if (spf->vm.type[i + 1] == T_PTR && spf->vm.stack[i + 1] == v) {
+			if (spf->vm.type[i + 1] == T_REF && spf->vm.stack[i + 1] == v) {
 				spf->vm.type[i + 1] = T_MEM;
-				t = T_PTR;
+				t = T_REF;
 
 				break;
 			}
@@ -1662,6 +1671,13 @@ static intptr_t vm_poke(struct spf_resolver *spf, int p, enum vm_type t, intptr_
 } /* vm_poke() */
 
 
+static int vm_opcode(struct spf_resolver *spf) {
+	vm_assert(spf, spf->vm.pc >= 0 && spf->vm.pc < spf->vm.end, EFAULT);
+
+	return spf->vm.code[spf->vm.pc];
+} /* vm_opcode() */
+
+
 #define vm_emit_(spf, code, v, ...) vm_emit((spf), (code), (v))
 #define vm_emit(spf, ...) vm_emit_((spf), __VA_ARGS__, 0)
 
@@ -1680,7 +1696,7 @@ static unsigned (vm_emit)(struct spf_resolver *spf, enum vm_opcode code, intptr_
 		n = 2; goto copy;
 	case OP_I32:
 		n = 4; goto copy;
-	case OP_PTR:
+	case OP_REF:
 		/* FALL THROUGH */
 	case OP_MEM:
 		n = sizeof (uintptr_t);
@@ -1711,14 +1727,14 @@ static void vm_emit_revmap(struct spf_resolver *spf) {
 	spf->vm.sub.revmap = spf->vm.end;
 
 	/*
-	 * Check SPF_VAR_REVMAP. If TRUE then just return; we've already
+	 * Check VM_VAR_REVMAP. If TRUE then just return; we've already
 	 * completed this work.
 	 */
-	vm_emit(spf, OP_I8, SPF_VAR_REVMAP);
+	vm_emit(spf, OP_I8, VM_VAR_REVMAP);
 	vm_emit(spf, OP_LOAD);
 	vm_emit(spf, OP_NOT);
 	vm_emit(spf, OP_I8, 4);
-	vm_emit(spf, OP_JMP);   /* jump to body if !SPF_VAR_REVMAP */
+	vm_emit(spf, OP_JMP);   /* jump to body if !VM_VAR_REVMAP */
 	vm_emit(spf, OP_TRUE);  /* conditional */
 	vm_emit(spf, OP_SWAP);  /* swap conditional and address */
 	vm_emit(spf, OP_GOTO);
@@ -1727,7 +1743,7 @@ static void vm_emit_revmap(struct spf_resolver *spf) {
 	/*
 	 * REVMAP begin.
 	 */
-	vm_emit(spf, OP_PTR, (intptr_t)"%{ir}.%{v}.arpa.");
+	vm_emit(spf, OP_REF, (intptr_t)"%{ir}.%{v}.arpa.");
 	vm_emit(spf, OP_EXPAND);
 	vm_emit(spf, OP_I8, DNS_T_PTR);
 	vm_emit(spf, OP_SUBMIT);
@@ -1736,7 +1752,7 @@ static void vm_emit_revmap(struct spf_resolver *spf) {
 	vm_emit(spf, OP_I8, DNS_S_AN);
 	vm_emit(spf, OP_I8, DNS_T_PTR);
 	vm_emit(spf, OP_GREP);
-	/* #ops = OP_PTR + 11 */
+	/* #ops = OP_REF + 11 */
 
 	/*
 	 * REVMAP loop. At this point we have three items on the stack.
@@ -1782,7 +1798,7 @@ static void vm_emit_revmap(struct spf_resolver *spf) {
 	vm_emit(spf, OP_POP);   /* pop iterator */
 	vm_emit(spf, OP_POP);   /* pop packet */
 	vm_emit(spf, OP_TRUE);
-	vm_emit(spf, OP_I8, SPF_VAR_REVMAP);
+	vm_emit(spf, OP_I8, VM_VAR_REVMAP);
 	vm_emit(spf, OP_STORE);
 	vm_emit(spf, OP_TRUE);  /* conditional */
 	vm_emit(spf, OP_SWAP);  /* swap conditional and address */
@@ -1868,7 +1884,7 @@ static void vm_emit_check(struct spf_resolver *spf, struct spf_rr *rr) {
 		if (spf_used(term->macros, 'p') || term->type == SPF_PTR)
 			vm_emit(spf, OP_REVMAP);
 
-		vm_emit(spf, OP_PTR, (intptr_t)term);
+		vm_emit(spf, OP_REF, (intptr_t)term);
 		vm_emit(spf, term->type);
 	} /* SPF_LIST_FOREACH() */
 
@@ -1876,7 +1892,7 @@ static void vm_emit_check(struct spf_resolver *spf, struct spf_rr *rr) {
 		if (spf_used(redir->macros, 'p'))
 			vm_emit_revmap(spf);
 
-		vm_emit(spf, OP_PTR, (intptr_t)redir);
+		vm_emit(spf, OP_REF, (intptr_t)redir);
 		vm_emit(spf, SPF_REDIRECT);
 	}
 
@@ -1906,6 +1922,20 @@ static void op_pop(struct spf_resolver *spf, enum vm_opcode code) {
 } /* op_pop() */
 
 
+static void op_dup(struct spf_resolver *spf, enum vm_opcode code) {
+	intptr_t v;
+	int t;
+
+	v = vm_peek(spf, -1, T_ANY);
+	t = vm_typeof(spf, -1);
+
+	/* convert memory to pointer to prevent double free's */
+	vm_push(spf, (t & (T_MEM))? T_REF : t, v);
+
+	spf->vm.pc++;
+} /* op_dup() */
+
+
 static void op_load(struct spf_resolver *spf, enum vm_opcode code) {
 	int p, t;
 
@@ -1913,7 +1943,9 @@ static void op_load(struct spf_resolver *spf, enum vm_opcode code) {
 	t = vm_typeof(spf, p);
 
 	/* convert memory to pointer to prevent double free's */
-	vm_push(spf, (t & (T_MEM))? T_PTR : t, vm_peek(spf, p, T_ANY));
+	vm_push(spf, (t & (T_MEM))? T_REF : t, vm_peek(spf, p, T_ANY));
+
+	spf->vm.pc++;
 } /* op_load() */
 
 
@@ -1929,11 +1961,13 @@ static void op_store(struct spf_resolver *spf, enum vm_opcode code) {
 
 static void op_move(struct spf_resolver *spf, enum vm_opcode code) {
 	vm_move(spf, vm_pop(spf, T_INT));
+	spf->vm.pc++;
 } /* op_move() */
 
 
 static void op_swap(struct spf_resolver *spf, enum vm_opcode code) {
 	vm_swap(spf);
+	spf->vm.pc++;
 } /* op_swap() */
 
 
@@ -1998,7 +2032,7 @@ static void op_const(struct spf_resolver *spf, enum vm_opcode code) {
 		v = (code - OP_ZERO);
 		break;
 	default:
-		vm_assert(spf, 0, EFAULT);
+		vm_throw(spf, EFAULT);
 	} /* switch() */
 
 	vm_push(spf, T_INT, v);
@@ -2024,16 +2058,16 @@ static void op_var(struct spf_resolver *spf, enum vm_opcode code) {
 		n = 4;
 		t = T_INT;
 		break;
-	case OP_PTR:
+	case OP_REF:
 		n = sizeof (uintptr_t);
-		t = T_PTR;
+		t = T_REF;
 		break;
 	case OP_MEM:
 		n = sizeof (uintptr_t);
 		t = T_MEM;
 		break;
 	default:
-		vm_assert(spf, 0, EINVAL);
+		vm_throw(spf, EINVAL);
 	} /* switch () */
 
 	v = 0;
@@ -2052,31 +2086,36 @@ static void op_var(struct spf_resolver *spf, enum vm_opcode code) {
 
 static void op_dec(struct spf_resolver *spf, enum vm_opcode code) {
 	vm_poke(spf, -1, T_INT, vm_peek(spf, -1, T_INT) - 1);
+	spf->vm.pc++;
 } /* op_dec() */
 
 
 static void op_inc(struct spf_resolver *spf, enum vm_opcode code) {
 	vm_poke(spf, -1, T_INT, vm_peek(spf, -1, T_INT) + 1);
+	spf->vm.pc++;
 } /* op_inc() */
 
 
 static void op_neg(struct spf_resolver *spf, enum vm_opcode code) {
 	vm_poke(spf, -1, T_INT, -vm_peek(spf, -1, T_ANY));
+	spf->vm.pc++;
 } /* op_neg() */
 
 
 static void op_add(struct spf_resolver *spf, enum vm_opcode code) {
 	vm_push(spf, T_INT, vm_pop(spf, T_INT) + vm_pop(spf, T_INT));
+	spf->vm.pc++;
 } /* op_add() */
 
 
 static void op_not(struct spf_resolver *spf, enum vm_opcode code) {
 	vm_poke(spf, -1, T_INT, !vm_peek(spf, -1, T_ANY));
+	spf->vm.pc++;
 } /* op_not() */
 
 
 static void op_submit(struct spf_resolver *spf, enum vm_opcode code) {
-	void *qname = (void *)vm_peek(spf, -2, T_PTR|T_MEM);
+	void *qname = (void *)vm_peek(spf, -2, T_REF|T_MEM);
 	int qtype   = vm_peek(spf, -1, T_INT);
 	int error;
 
@@ -2110,7 +2149,7 @@ static void op_qname(struct spf_resolver *spf, enum vm_opcode code) {
 	char qname[DNS_D_MAXNAME + 1];
 	int error;
 
-	pkt = (void *)vm_peek(spf, -1, T_PTR|T_MEM);
+	pkt = (void *)vm_peek(spf, -1, T_REF|T_MEM);
 
 	if (!dns_d_expand(qname, sizeof qname, 12, pkt, &error))
 		vm_throw(spf, error);
@@ -2133,8 +2172,8 @@ static void op_grep(struct spf_resolver *spf, enum vm_opcode code) {
 	struct vm_grep *grep;
 	int sec, type, error;
 
-	pkt  = (void *)vm_peek(spf, -4, T_PTR|T_MEM);
-	name = (void *)vm_peek(spf, -3, T_PTR|T_MEM);
+	pkt  = (void *)vm_peek(spf, -4, T_REF|T_MEM);
+	name = (void *)vm_peek(spf, -3, T_REF|T_MEM);
 	sec  = vm_peek(spf, -2, T_INT);
 	type = vm_peek(spf, -1, T_INT);
 
@@ -2144,7 +2183,7 @@ static void op_grep(struct spf_resolver *spf, enum vm_opcode code) {
 	memset(&grep->iterator, 0, sizeof grep->iterator);
 	spf_strlcpy(grep->name, name, sizeof grep->name);
 
-	grep->iterator.name    = name;
+	grep->iterator.name    = (name && *name)? name : 0;
 	grep->iterator.section = sec;
 	grep->iterator.type    = type;
 	dns_rr_i_init(&grep->iterator, pkt);
@@ -2162,8 +2201,8 @@ static void op_next(struct spf_resolver *spf, enum vm_opcode code) {
 	struct dns_rr rr;
 	int error;
 
-	pkt  = (void *)vm_peek(spf, -2, T_PTR|T_MEM);
-	grep = (void *)vm_peek(spf, -1, T_PTR|T_MEM);
+	pkt  = (void *)vm_peek(spf, -2, T_REF|T_MEM);
+	grep = (void *)vm_peek(spf, -1, T_REF|T_MEM);
 
 	if (dns_rr_grep(&rr, 1, &grep->iterator, pkt, &error)) {
 		union dns_any any;
@@ -2175,12 +2214,12 @@ static void op_next(struct spf_resolver *spf, enum vm_opcode code) {
 		if (!dns_any_print(rd, sizeof rd, &any, rr.type))
 			goto none;
 
-		vm_pop(spf, T_ANY);
+//		vm_pop(spf, T_ANY);
 		vm_strdup(spf, rd);
 	} else {
 none:
-		vm_pop(spf, T_ANY);
-		vm_push(spf, T_NIL, 0);
+//		vm_pop(spf, T_ANY);
+		vm_push(spf, T_INT, 0);
 	}
 
 	spf->vm.pc++;
@@ -2192,7 +2231,7 @@ static void op_expand(struct spf_resolver *spf, enum vm_opcode code) {
 	char dst[512];
 	int error;
 
-	if (!spf_expand(dst, sizeof dst, &macros, (void *)vm_peek(spf, -1, T_PTR|T_MEM), spf->env, &error))
+	if (!spf_expand(dst, sizeof dst, &macros, (void *)vm_peek(spf, -1, T_REF|T_MEM), spf->env, &error))
 		vm_throw(spf, error);
 
 	vm_pop(spf, T_ANY);
@@ -2206,7 +2245,7 @@ static void op_hasvar(struct spf_resolver *spf, enum vm_opcode code) {
 	spf_macros_t macros = 0;
 	int error, macro;
 
-	if (!spf_expand(0, 0, &macros, (void *)vm_peek(spf, -2, T_PTR|T_MEM), spf->env, &error))
+	if (!spf_expand(0, 0, &macros, (void *)vm_peek(spf, -2, T_REF|T_MEM), spf->env, &error))
 		vm_throw(spf, error);
 
 	vm_push(spf, T_INT, !!spf_used(macros, vm_pop(spf, T_INT)));
@@ -2222,7 +2261,7 @@ static void op_verify(struct spf_resolver *spf, enum vm_opcode code) {
 	struct in_addr a, b;
 	int error;
 
-	pkt = (void *)vm_peek(spf, -1, T_PTR|T_MEM);
+	pkt = (void *)vm_peek(spf, -1, T_REF|T_MEM);
 
 	if (!dns_d_expand(qname, sizeof qname, 12, pkt, &error))
 		vm_throw(spf, error);
@@ -2261,6 +2300,92 @@ static void op_exp(struct spf_resolver *spf, enum vm_opcode code) {
 } /* op_exp() */
 
 
+static void op_printi(struct spf_resolver *spf, enum vm_opcode code) {
+	printf("%ld\n", (long)vm_pop(spf, T_ANY));
+	spf->vm.pc++;
+} /* op_printi() */
+
+
+static void op_prints(struct spf_resolver *spf, enum vm_opcode code) {
+	printf("%s\n", (char *)vm_peek(spf, -1, T_REF|T_MEM));
+	vm_pop(spf, T_ANY);
+	spf->vm.pc++;
+} /* op_prints() */
+
+
+static const struct {
+	const char *name;
+	void (*exec)(struct spf_resolver *, enum vm_opcode);
+} vm_op[] = {
+	[OP_HALT]  = { "halt", 0 },
+	[OP_PC]    = { "pc", &op_pc, },
+	[OP_CALL]  = { "call", &op_call, },
+
+	[OP_TRUE]  = { "true", &op_const, },
+	[OP_FALSE] = { "false", &op_const, },
+	[OP_ZERO]  = { "zero", &op_const, },
+	[OP_ONE]   = { "one", &op_const, },
+	[OP_TWO]   = { "two", &op_const, },
+	[OP_THREE] = { "three", &op_const, },
+
+	[OP_I8]    = { "i8", &op_var, },
+	[OP_I16]   = { "i16", &op_var, },
+	[OP_I32]   = { "i32", &op_var, },
+	[OP_REF]   = { "ref", &op_var, },
+	[OP_MEM]   = { "mem", &op_var, },
+
+	[OP_DEC]   = { "dec", &op_dec, },
+	[OP_INC]   = { "inc", &op_inc, },
+	[OP_NEG]   = { "neg", &op_neg, },
+	[OP_ADD]   = { "add", &op_add, },
+	[OP_NOT]   = { "not", &op_not, },
+
+	[OP_JMP]   = { "jmp", &op_jmp, },
+	[OP_GOTO]  = { "goto", &op_goto, },
+
+	[OP_POP]   = { "pop", &op_pop, },
+	[OP_DUP]   = { "dup", &op_dup, },
+	[OP_LOAD]  = { "load", &op_load, },
+	[OP_STORE] = { "store", &op_store, },
+	[OP_MOVE]  = { "move", &op_move, },
+	[OP_SWAP]  = { "swap", &op_swap, },
+
+	[OP_EXPAND] = { "expand", &op_expand, },
+	[OP_HASVAR] = { "hasvar", &op_hasvar, },
+
+	[OP_SUBMIT] = { "submit", &op_submit, },
+	[OP_FETCH]  = { "fetch", &op_fetch, },
+	[OP_QNAME]  = { "qname", &op_qname, },
+	[OP_GREP]   = { "grep", &op_grep, },
+	[OP_NEXT]   = { "next", &op_next, },
+
+	[OP_VERIFY] = { "verify", &op_verify, },
+	[OP_REVMAP] = { "revmap", &op_revmap, },
+
+	[OP_PRINTI] = { "printi", &op_printi, },
+	[OP_PRINTS] = { "prints", &op_prints, },
+}; /* vm_op[] */
+
+
+static int vm_exec(struct spf_resolver *spf) {
+	jmp_buf trap;
+	enum vm_opcode code;
+	int error;
+
+	spf->trap = &trap;
+
+	if ((error = setjmp(*spf->trap)))
+		return error;
+
+	while ((code = vm_opcode(spf))) {
+//SPF_SAY("code: %s", vm_op[code].name);
+		vm_op[code].exec(spf, code);
+	}
+
+	return 0;
+} /* vm_exec() */
+
+
 const struct spf_limits spf_safelimits = { .querymax = 10, };
 
 struct spf_resolver *spf_open(const struct spf_env *env, const struct spf_limits *limits, int *error) {
@@ -2269,6 +2394,10 @@ struct spf_resolver *spf_open(const struct spf_env *env, const struct spf_limits
 	if (!(spf = malloc(sizeof *spf)))
 		goto syerr;
 
+	memset(spf, 0, sizeof *spf);
+
+	if (!(spf->res = dns_res_stub(error)))	
+		goto error;
 #if 0
 //	spf->env    = *env;
 //	spf->limits = *limits;
@@ -2287,7 +2416,7 @@ struct spf_resolver *spf_open(const struct spf_env *env, const struct spf_limits
 	return spf;
 syerr:
 	*error = errno;
-
+error:
 	free(spf);
 
 	return 0;
@@ -2344,6 +2473,67 @@ enum spf_result spf_check(struct spf_resolver *spf, const char **qname, enum spf
 	do { fprintf(stderr, fmt "%.1s", (fn), (ln), __VA_ARGS__); _Exit(EXIT_FAILURE); } while (0)
 
 #define panic(...) panic_(__func__, __LINE__, "spf: (%s:%d) " __VA_ARGS__, "\n")
+
+
+static int vm(int argc, char *argv[]) {
+	jmp_buf trap;
+	struct spf_resolver *spf;
+	char line[64], *str, *sp;
+	int code, error;
+
+	assert((spf = spf_open(0, 0, &error)));
+
+	spf->trap = &trap;
+
+	if ((error = setjmp(*spf->trap)))
+		panic("vm_exec: %s", strerror(error));
+
+	while (1 == scanf("%64s", line)) {
+		if (line[0] == '#') {
+			continue;
+		} else if (isdigit((unsigned char)line[0])) {
+			intptr_t i = strtol(line, 0, 10);
+
+			if (i < (1U<<8))
+				vm_emit(spf, OP_I8, i);
+			else if (i < (1U<<16))
+				vm_emit(spf, OP_I16, i);
+			else
+				vm_emit(spf, OP_I32, i);
+		} else if (line[0] == '"') {
+			assert((str = strdup(&line[1])));
+
+			for (sp = str; *sp; sp++) {
+				if (*sp == '+')
+					*sp = ' ';
+			}
+
+			vm_emit(spf, OP_MEM, (intptr_t)str);
+		} else {
+			for (code = 0; code < spf_lengthof(vm_op); code++) {
+				if (!vm_op[code].name)
+					continue;
+
+				if (!strcasecmp(line, vm_op[code].name))
+					vm_emit(spf, code);
+			}
+		}
+	} /* while() */
+
+
+	while ((error = vm_exec(spf))) {
+		switch (error) {
+		case EAGAIN:
+			if ((error = dns_res_poll(spf->res, 5)))
+				panic("poll: %s", strerror(error));
+			break;
+		default:
+			panic("exec: %s", strerror(error));
+		}
+	}
+
+	return 0;
+} /* vm() */
 
 
 static int parse(const char *policy) {
@@ -2612,6 +2802,8 @@ usage:
 		return ip4(argc - 1, &argv[1]);
 	} else if (!strcmp(argv[0], "fixdn") && argc > 1) {
 		return fixdn(argc - 1, &argv[1]);
+	} else if (!strcmp(argv[0], "vm")) {
+		return vm(argc - 1, &argv[1]);
 	} else
 		goto usage;
 
