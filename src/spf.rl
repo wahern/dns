@@ -81,6 +81,8 @@ int spf_debug = SPF_DEBUG - 1;
 
 #define SPF_PASTE(x, y) a##b
 #define SPF_XPASTE(x, y) SPF_PASTE(a, b)
+#define SPF_STRINGIFY_(x) #x
+#define SPF_STRINGIFY(x) SPF_STRINGIFY_(x)
 
 
 static size_t spf_itoa(char *dst, size_t lim, unsigned i) {
@@ -2969,6 +2971,26 @@ int fixdn(int argc, char *argv[]) {
 } /* fixdn() */
 
 
+#define SIZE(x) { SPF_STRINGIFY(x), sizeof (struct x) }
+int sizes(int argc, char *argv[]) {
+	static const struct { const char *name; size_t size; } type[] = {
+		SIZE(spf_env), SIZE(spf_resolver), SIZE(spf_vm), SIZE(vm_sub),
+		SIZE(spf_term), SIZE(spf_all), SIZE(spf_include), SIZE(spf_a),
+		SIZE(spf_mx), SIZE(spf_ptr), SIZE(spf_ip4), SIZE(spf_ip6), 
+		SIZE(spf_exists), SIZE(spf_redirect), SIZE(spf_exp), SIZE(spf_unknown), 
+	};
+	int i, max;
+
+	for (i = 0, max = 0; i < spf_lengthof(type); i++)
+		max = SPF_MAX(max, strlen(type[i].name));
+
+	for (i = 0; i < spf_lengthof(type); i++)
+		printf("%*s : %zu\n", max, type[i].name, type[i].size);
+
+	return 0;
+} /* sizes() */
+
+
 #define USAGE \
 	"spf [-S:L:O:D:I:P:V:H:C:R:T:vh] parse <POLICY> | expand <MACRO> | ip6 <ADDR>\n" \
 	"  -S EMAIL   <sender>\n" \
@@ -3061,6 +3083,8 @@ usage:
 		return fixdn(argc - 1, &argv[1]);
 	} else if (!strcmp(argv[0], "vm")) {
 		return vm(argc - 1, &argv[1]);
+	} else if (!strcmp(argv[0], "sizes")) {
+		return sizes(argc - 1, &argv[1]);
 	} else
 		goto usage;
 
