@@ -382,7 +382,7 @@ size_t spf_env_set(struct spf_env *, int, const char *);
 size_t spf_env_get(char *, size_t, int, const struct spf_env *);
 
 
-_Bool spf_used(spf_macros_t, int);
+_Bool spf_isset(spf_macros_t, int);
 
 size_t spf_expand(char *, size_t, spf_macros_t *, const char *, const struct spf_env *, int *);
 
