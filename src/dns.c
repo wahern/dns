@@ -2551,7 +2551,7 @@ size_t dns_txt_print(void *dst_, size_t lim, struct dns_txt *txt) {
 	while (src.p < src.end) {
 		ch	= src.b[src.p];
 
-		if (0 == (src.p++ % 256)) {
+		if (0 == (src.p++ % 256) && src.p != 1) {
 			dst.p	+= dns__printchar(dst.b, dst.end, dst.p, '"');
 			dst.p	+= dns__printchar(dst.b, dst.end, dst.p, ' ');
 			dst.p	+= dns__printchar(dst.b, dst.end, dst.p, '"');
