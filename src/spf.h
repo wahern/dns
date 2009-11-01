@@ -37,142 +37,11 @@
 #define SPF_MAXDN 255
 
 
-/*
- * SPF queue macros from original BSD queue macros, OpenBSD 4.5 vintage.
- *
- * Copyright (c) 1991, 1993
- *	The Regents of the University of California.  All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. Neither the name of the University nor the names of its contributors
- *    may be used to endorse or promote products derived from this software
- *    without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- */
+const char *spf_strerror(int);
 
-#define SPF_LIST_HEAD(name, type)					\
-struct name {								\
-	struct type *cqh_first;		/* first element */		\
-	struct type *cqh_last;		/* last element */		\
-}
+const char *spf_strterm(int);
 
-#define SPF_LIST_HEAD_INITIALIZER(head)					\
-	{ SPF_LIST_END(&head), SPF_LIST_END(&head) }
-
-#define SPF_LIST_ENTRY(type)						\
-struct {								\
-	struct type *cqe_next;		/* next element */		\
-	struct type *cqe_prev;		/* previous element */		\
-}
-
-#define	SPF_LIST_FIRST(head)		((head)->cqh_first)
-#define	SPF_LIST_LAST(head)		((head)->cqh_last)
-#define	SPF_LIST_END(head)		((void *)(head))
-#define	SPF_LIST_NEXT(elm)		((elm)->cqe.cqe_next)
-#define	SPF_LIST_PREV(elm)		((elm)->cqe.cqe_prev)
-#define	SPF_LIST_EMPTY(head)						\
-	(SPF_LIST_FIRST(head) == SPF_LIST_END(head))
-
-#define SPF_LIST_FOREACH(var, head)					\
-	for((var) = SPF_LIST_FIRST(head);				\
-	    (var) != SPF_LIST_END(head);					\
-	    (var) = SPF_LIST_NEXT(var))
-
-#define SPF_LIST_FOREACH_REVERSE(var, head)				\
-	for((var) = SPF_LIST_LAST(head);					\
-	    (var) != SPF_LIST_END(head);					\
-	    (var) = SPF_LIST_PREV(var))
-
-#define	SPF_LIST_INIT(head) do {						\
-	(head)->cqh_first = SPF_LIST_END(head);				\
-	(head)->cqh_last = SPF_LIST_END(head);				\
-} while (0)
-
-#define SPF_LIST_INSERT_AFTER(head, listelm, elm) do {			\
-	(elm)->cqe.cqe_next = (listelm)->cqe.cqe_next;			\
-	(elm)->cqe.cqe_prev = (listelm);				\
-	if ((listelm)->cqe.cqe_next == SPF_LIST_END(head))		\
-		(head)->cqh_last = (elm);				\
-	else								\
-		(listelm)->cqe.cqe_next->cqe.cqe_prev = (elm);		\
-	(listelm)->cqe.cqe_next = (elm);				\
-} while (0)
-
-#define SPF_LIST_INSERT_BEFORE(head, listelm, elm) do {			\
-	(elm)->cqe.cqe_next = (listelm);				\
-	(elm)->cqe.cqe_prev = (listelm)->cqe.cqe_prev;			\
-	if ((listelm)->cqe.cqe_prev == SPF_LIST_END(head))		\
-		(head)->cqh_first = (elm);				\
-	else								\
-		(listelm)->cqe.cqe_prev->cqe.cqe_next = (elm);		\
-	(listelm)->cqe.cqe_prev = (elm);				\
-} while (0)
-
-#define SPF_LIST_INSERT_HEAD(head, elm) do {				\
-	(elm)->cqe.cqe_next = (head)->cqh_first;			\
-	(elm)->cqe.cqe_prev = SPF_LIST_END(head);			\
-	if ((head)->cqh_last == SPF_LIST_END(head))			\
-		(head)->cqh_last = (elm);				\
-	else								\
-		(head)->cqh_first->cqe.cqe_prev = (elm);		\
-	(head)->cqh_first = (elm);					\
-} while (0)
-
-#define SPF_LIST_INSERT_TAIL(head, elm) do {				\
-	(elm)->cqe.cqe_next = SPF_LIST_END(head);			\
-	(elm)->cqe.cqe_prev = (head)->cqh_last;				\
-	if ((head)->cqh_first == SPF_LIST_END(head))			\
-		(head)->cqh_first = (elm);				\
-	else								\
-		(head)->cqh_last->cqe.cqe_next = (elm);			\
-	(head)->cqh_last = (elm);					\
-} while (0)
-
-#define	SPF_LIST_REMOVE(head, elm) do {					\
-	if ((elm)->cqe.cqe_next == SPF_LIST_END(head))			\
-		(head)->cqh_last = (elm)->cqe.cqe_prev;			\
-	else								\
-		(elm)->cqe.cqe_next->cqe.cqe_prev =			\
-		    (elm)->cqe.cqe_prev;				\
-	if ((elm)->cqe.cqe_prev == SPF_LIST_END(head))			\
-		(head)->cqh_first = (elm)->cqe.cqe_next;		\
-	else								\
-		(elm)->cqe.cqe_prev->cqe.cqe_next =			\
-		    (elm)->cqe.cqe_next;				\
-} while (0)
-
-#define SPF_LIST_REPLACE(head, elm, elm2) do {				\
-	if (((elm2)->cqe.cqe_next = (elm)->cqe.cqe_next) ==		\
-	    SPF_LIST_END(head))						\
-		(head).cqh_last = (elm2);				\
-	else								\
-		(elm2)->cqe.cqe_next->cqe.cqe_prev = (elm2);		\
-	if (((elm2)->cqe.cqe_prev = (elm)->cqe.cqe_prev) ==		\
-	    SPF_LIST_END(head))						\
-		(head).cqh_first = (elm2);				\
-	else								\
-		(elm2)->cqe.cqe_prev->cqe.cqe_next = (elm2);		\
-} while (0)
-
-/** end BSD queue macros */
+const char *spf_strresult(int);
 
 
 #define SPF_ISMECHANISM(type) ((type) & 0x10)
@@ -191,12 +60,12 @@ enum spf_mechanism {
 
 enum spf_result {
 	SPF_NONE      = 0,
-	SPF_TEMPERROR = 'e',
-	SPF_PERMERROR = 'E',
+	SPF_NEUTRAL   = '?',
 	SPF_PASS      = '+',
 	SPF_FAIL      = '-',
 	SPF_SOFTFAIL  = '~',
-	SPF_NEUTRAL   = '?',
+	SPF_TEMPERROR = 'e',
+	SPF_PERMERROR = 'E',
 }; /* enum spf_result */
 
 
@@ -317,47 +186,44 @@ struct spf_unknown {
 }; /* struct spf_unknown */
 
 
-struct spf_term {
-	union {
-		struct {
-			int type;		/* enum spf_mechanism | enum spf_modifier */
-			enum spf_result result;	/* (mechanisms only) */
-			spf_macros_t macros;
-		};
-
-		struct spf_all all;
-		struct spf_include include;
-		struct spf_a a;
-		struct spf_mx mx;
-		struct spf_ptr ptr;
-		struct spf_ip4 ip4;
-		struct spf_ip6 ip6;
-		struct spf_exists exists;
-
-		struct spf_redirect redirect;
-		struct spf_exp exp;
-		struct spf_unknown unknown;
+union spf_term {
+	struct {
+		int type;               /* enum spf_mechanism | enum spf_modifier */
+		enum spf_result result; /* (mechanisms only) */
+		spf_macros_t macros;
 	};
 
-	SPF_LIST_ENTRY(spf_term) cqe;
-}; /* struct spf_term */
+	struct spf_all all;
+	struct spf_include include;
+	struct spf_a a;
+	struct spf_mx mx;
+	struct spf_ptr ptr;
+	struct spf_ip4 ip4;
+	struct spf_ip6 ip6;
+	struct spf_exists exists;
+
+	struct spf_redirect redirect;
+	struct spf_exp exp;
+	struct spf_unknown unknown;
+}; /* union spf_term */
 
 
-struct spf_rr {
-	SPF_LIST_HEAD(spf_terms, spf_term) terms;
-	unsigned count;
+struct spf_parser {
+	const unsigned char *rdata;
+	const unsigned char *p, *pe, *eof;
+	int cs;
 
 	struct {
-		int lc;
+		int lc; /* last character parsed */
+		int lp; /* position of last character in near[] */
+		int rp; /* position of last character in rdata */
 		char near[64];
 	} error;
-}; /* struct spf_rr */
+}; /* struct spf_parser */
 
-void spf_rr_init(struct spf_rr *);
+void spf_parser_init(struct spf_parser *, const void *, size_t);
 
-int spf_rr_parse(struct spf_rr *, const void *, size_t);
-
-void spf_rr_reset(struct spf_rr *);
+int spf_parse(union spf_term *, struct spf_parser *, int *);
 
 
 struct spf_env {
@@ -377,9 +243,9 @@ struct spf_env {
 
 int spf_env_init(struct spf_env *, int, const void *, const char *, const char *);
 
-size_t spf_env_set(struct spf_env *, int, const char *);
+size_t spf_setenv(struct spf_env *, int, const char *);
 
-size_t spf_env_get(char *, size_t, int, const struct spf_env *);
+size_t spf_getenv(char *, size_t, int, const struct spf_env *);
 
 
 _Bool spf_isset(spf_macros_t, int);
@@ -398,11 +264,23 @@ struct spf_limits {
 
 extern const struct spf_limits spf_safelimits;
 
-struct spf_resolver *spf_res_open(const struct spf_env *, const struct spf_limits *, int *);
+struct spf_resolver *spf_open(const struct spf_env *, const struct spf_limits *, int *);
 
-void spf_res_close(struct spf_resolver *);
+void spf_close(struct spf_resolver *);
 
-enum spf_result spf_res_check(struct spf_resolver *, int *);
+int spf_check(struct spf_resolver *);
+
+enum spf_result spf_result(struct spf_resolver *);
+
+const char *spf_exp(struct spf_resolver *);
+
+int spf_elapsed(struct spf_resolver *);
+
+int spf_events(struct spf_resolver *);
+
+int spf_pollfd(struct spf_resolver *);
+
+int spf_poll(struct spf_resolver *, int);
 
 
 #endif /* SPF_H */

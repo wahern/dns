@@ -24,7 +24,7 @@
  * ==========================================================================
  */
 #include <stddef.h>	/* size_t */
-#include <stdlib.h>	/* malloc(3) free(3) */
+#include <stdlib.h>	/* malloc(3) free(3) abs(3) */
 
 #include <ctype.h>	/* isgraph(3) isdigit(3) tolower(3) */
 
@@ -46,6 +46,9 @@
 
 #include "dns.h"
 #include "spf.h"
+
+
+#define SPF_DEFEXP "%{i} is not one of %{d}'s designated mail servers."
 
 
 #if SPF_DEBUG
@@ -515,6 +518,11 @@ struct in6_addr *spf_pto6(struct in6_addr *ip, const char *src) {
 } /* spf_pto6() */
 
 
+void *spf_pton(void *dst, int af, const char *src) {
+	return (af == AF_INET6)? (void *)spf_pto6(dst, src) : (void *)spf_pto4(dst, src);
+} /* spf_pton() */
+
+
 size_t spf_ntop(char *dst, size_t lim, int af, const void *ip, int flags) {
 	if (af == AF_INET6)
 		return spf_6top(dst, lim, ip, flags);
@@ -565,6 +573,74 @@ int spf_inetcmp(int af, const void *a, const void *b, unsigned prefix) {
 } /* spf_inetcmp() */
 
 
+const char *spf_strerror(int error) {
+	switch (error) {
+	case DNS_ENOBUFS:
+		return "DNS no buffer space";
+	case DNS_EILLEGAL:
+		return "DNS illegal data";
+	case DNS_EUNKNOWN:
+		return "DNS unknown";
+	default:
+		return strerror(error);
+	}
+} /* spf_strerror() */
+
+
+const char *spf_strterm(int term) {
+	switch (term) {
+	case SPF_ALL:
+		return "all";
+	case SPF_INCLUDE:
+		return "include";
+	case SPF_A:
+		return "a";
+	case SPF_MX:
+		return "mx";
+	case SPF_PTR:
+		return "ptr";
+	case SPF_IP4:
+		return "ip4";
+	case SPF_IP6:
+		return "ip6";
+	case SPF_EXISTS:
+		return "exists";
+	case SPF_REDIRECT:
+		return "redirect";
+	case SPF_EXP:
+		return "exp";
+	case SPF_UNKNOWN:
+		/* FALL THROUGH */
+	default:
+		return "unknown";
+	}
+} /* spf_strterm() */
+
+
+const char *spf_strresult(int result) {
+	switch (result) {
+	case SPF_NONE:
+		return "None";
+	case SPF_NEUTRAL:
+		return "Neutral";
+	case SPF_PASS:
+		return "Pass";
+	case SPF_FAIL:
+		return "Fail";
+	case SPF_SOFTFAIL:
+		return "SoftFail";
+	case SPF_TEMPERROR:
+		return "TempError";
+	case SPF_PERMERROR:
+		return "PermError";
+	default:
+		return "Unknown";
+	}
+} /* spf_strresult() */
+
+
+#define SBUF_INIT(sbuf) { 0 }
+
 struct spf_sbuf {
 	unsigned end;
 
@@ -573,8 +649,8 @@ struct spf_sbuf {
 	char str[512];
 }; /* struct spf_sbuf */
 
-static void sbuf_init(struct spf_sbuf *sbuf) {
-	memset(sbuf, 0, sizeof *sbuf);
+static struct spf_sbuf *sbuf_init(struct spf_sbuf *sbuf) {
+	return memset(sbuf, 0, sizeof *sbuf);
 } /* sbuf_init() */
 
 static _Bool sbuf_putc(struct spf_sbuf *sbuf, int ch) {
@@ -629,34 +705,6 @@ static _Bool sbuf_put6(struct spf_sbuf *sbuf, const struct in6_addr *ip) {
 } /* sbuf_put6() */
 
 
-const char *spf_strtype(int type) {
-	switch (type) {
-	case SPF_ALL:
-		return "all";
-	case SPF_INCLUDE:
-		return "include";
-	case SPF_A:
-		return "a";
-	case SPF_MX:
-		return "mx";
-	case SPF_PTR:
-		return "ptr";
-	case SPF_IP4:
-		return "ip4";
-	case SPF_IP6:
-		return "ip6";
-	case SPF_EXISTS:
-		return "exists";
-	case SPF_REDIRECT:
-		return "redirect";
-	case SPF_EXP:
-		return "exp";
-	default:
-		return "[[[error]]]";
-	}
-} /* spf_strtype() */
-
-
 static const struct spf_all all_initializer =
 	{ .type = SPF_ALL, .result = SPF_PASS };
 
@@ -664,10 +712,6 @@ static void all_comp(struct spf_sbuf *sbuf, struct spf_all *all) {
 	sbuf_putc(sbuf, all->result);
 	sbuf_puts(sbuf, "all");
 } /* all_comp() */
-
-static _Bool all_match(struct spf_all *all, struct spf_env *env) {
-	return 1;
-} /* all_match() */
 
 
 static const struct spf_include include_initializer =
@@ -679,14 +723,6 @@ static void include_comp(struct spf_sbuf *sbuf, struct spf_include *include) {
 	sbuf_putc(sbuf, ':');
 	sbuf_puts(sbuf, include->domain);
 } /* include_comp() */
-
-static _Bool include_match(struct spf_include *include, struct spf_env *env) {
-	return 0; /* should be treated specially */
-} /* include_match() */
-
-static char *include_target(struct spf_include *inc) {
-	return inc->domain;
-} /* include_target() */
 
 
 static const struct spf_a a_initializer =
@@ -703,10 +739,6 @@ static void a_comp(struct spf_sbuf *sbuf, struct spf_a *a) {
 	sbuf_puti(sbuf, a->prefix6);
 } /* a_comp() */
 
-static _Bool a_match(struct spf_a *a, struct spf_env *env) {
-	return 0;
-} /* a_match() */
-
 
 static const struct spf_mx mx_initializer =
 	{ .type = SPF_MX, .result = SPF_PASS, .domain = "%{d}", .prefix4 = 32, .prefix6 = 128 };
@@ -722,10 +754,6 @@ static void mx_comp(struct spf_sbuf *sbuf, struct spf_mx *mx) {
 	sbuf_puti(sbuf, mx->prefix6);
 } /* mx_comp() */
 
-static char *mx_target(struct spf_mx *mx) {
-	return mx->domain;
-} /* mx_target() */
-
 
 static const struct spf_ptr ptr_initializer =
 	{ .type = SPF_PTR, .result = SPF_PASS, .domain = "%{d}" };
@@ -736,10 +764,6 @@ static void ptr_comp(struct spf_sbuf *sbuf, struct spf_ptr *ptr) {
 	sbuf_putc(sbuf, ':');
 	sbuf_puts(sbuf, ptr->domain);
 } /* ptr_comp() */
-
-static char *ptr_target(struct spf_ptr *ptr) {
-	return ptr->domain;
-} /* ptr_target() */
 
 
 static const struct spf_ip4 ip4_initializer =
@@ -778,10 +802,6 @@ static void exists_comp(struct spf_sbuf *sbuf, struct spf_exists *exists) {
 	sbuf_puts(sbuf, exists->domain);
 } /* exists_comp() */
 
-static char *exists_target(struct spf_exists *exists) {
-	return exists->domain;
-} /* exists_target() */
-
 
 static const struct spf_redirect redirect_initializer =
 	{ .type = SPF_REDIRECT };
@@ -792,10 +812,6 @@ static void redirect_comp(struct spf_sbuf *sbuf, struct spf_redirect *redirect) 
 	sbuf_puts(sbuf, redirect->domain);
 } /* redirect_comp() */
 
-static char *redirect_target(struct spf_redirect *redir) {
-	return redir->domain;
-} /* redirect_target() */
-
 
 static const struct spf_exp exp_initializer =
 	{ .type = SPF_EXP };
@@ -805,10 +821,6 @@ static void exp_comp(struct spf_sbuf *sbuf, struct spf_exp *exp) {
 	sbuf_putc(sbuf, '=');
 	sbuf_puts(sbuf, exp->domain);
 } /* exp_comp() */
-
-static char *exp_target(struct spf_exp *exp) {
-	return exp->domain;
-} /* exp_target() */
 
 
 static const struct spf_unknown unknown_initializer =
@@ -821,65 +833,60 @@ static void unknown_comp(struct spf_sbuf *sbuf, struct spf_unknown *unknown) {
 } /* unknown_comp() */
 
 
-static char *no_target(struct spf_term *term) {
-	return 0;
-} /* no_target() */
-
-
 static const struct {
-	const void *initializer;
-	size_t size;
 	void (*comp)();
-	_Bool (*match)();
-	char *(*target)();
 } spf_term[] = {
-	[SPF_ALL]     = { &all_initializer, sizeof all_initializer, &all_comp, 0, &no_target },
-	[SPF_INCLUDE] = { &include_initializer, sizeof include_initializer, &include_comp, 0, &include_target },
-	[SPF_A]       = { &a_initializer, sizeof a_initializer, &a_comp, 0, &no_target },
-	[SPF_MX]      = { &mx_initializer, sizeof mx_initializer, &mx_comp, 0, &mx_target },
-	[SPF_PTR]     = { &ptr_initializer, sizeof ptr_initializer, &ptr_comp, 0, &ptr_target },
-	[SPF_IP4]     = { &ip4_initializer, sizeof ip4_initializer, &ip4_comp, 0, &no_target },
-	[SPF_IP6]     = { &ip6_initializer, sizeof ip6_initializer, &ip6_comp, 0, &no_target },
-	[SPF_EXISTS]  = { &exists_initializer, sizeof exists_initializer, &exists_comp, 0, &exists_target },
+	[SPF_ALL]     = { &all_comp },
+	[SPF_INCLUDE] = { &include_comp },
+	[SPF_A]       = { &a_comp },
+	[SPF_MX]      = { &mx_comp },
+	[SPF_PTR]     = { &ptr_comp },
+	[SPF_IP4]     = { &ip4_comp },
+	[SPF_IP6]     = { &ip6_comp },
+	[SPF_EXISTS]  = { &exists_comp },
 
-	[SPF_REDIRECT] = { &redirect_initializer, sizeof redirect_initializer, &redirect_comp, 0, &redirect_target },
-	[SPF_EXP]      = { &exp_initializer, sizeof exp_initializer, &exp_comp, 0, &exp_target },
-	[SPF_UNKNOWN]  = { &unknown_initializer, sizeof unknown_initializer, &unknown_comp, 0, &no_target },
+	[SPF_REDIRECT] = { &redirect_comp },
+	[SPF_EXP]      = { &exp_comp },
+	[SPF_UNKNOWN]  = { &unknown_comp },
 }; /* spf_term[] */
 
 static char *term_comp(struct spf_sbuf *sbuf, void *term) {
-	spf_term[((struct spf_term *)term)->type].comp(sbuf, term);
+	spf_term[((union spf_term *)term)->type].comp(sbuf, term);
 
 	return sbuf->str;
 } /* term_comp() */
-
-static char *term_target(void *term) {
-	return spf_term[((struct spf_term *)term)->type].target(term);
-} /* term_target() */
 
 
 %%{
 	machine spf_grammar;
 	alphtype unsigned char;
 
+	access parser->;
+	variable p parser->p;
+	variable pe parser->pe;
+	variable eof parser->eof;
+
 	action oops {
 		const unsigned char *part;
 
-		rr->error.lc = fc;
+		parser->error.lc = fc;
 
-		if (p - (unsigned char *)rdata >= (sizeof rr->error.near / 2))
-			part = p - (sizeof rr->error.near / 2);
+		if (fpc - parser->rdata >= (sizeof parser->error.near / 2))
+			part = fpc - (sizeof parser->error.near / 2);
 		else
-			part = rdata;
+			part = parser->rdata;
 
-		memset(rr->error.near, 0, sizeof rr->error.near);
-		memcpy(rr->error.near, part, SPF_MIN(sizeof rr->error.near - 1, pe - part));
+		parser->error.lp = fpc - part;
+		parser->error.rp = fpc - parser->rdata;
+
+		memset(parser->error.near, 0, sizeof parser->error.near);
+		memcpy(parser->error.near, part, SPF_MIN(sizeof parser->error.near - 1, parser->pe - part));
 
 		if (SPF_DEBUG(1)) {
-			if (isgraph(rr->error.lc))
-				SPF_SAY("`%c' invalid near `%s'", rr->error.lc, rr->error.near);
+			if (isgraph(parser->error.lc))
+				SPF_SAY("`%c' invalid near offset %d of `%s'", parser->error.lc, parser->error.lp, parser->error.near);
 			else
-				SPF_SAY("error near `%s'", rr->error.near);
+				SPF_SAY("error near offset %d of `%s'", parser->error.lp, parser->error.near);
 		}
 
 		error = EINVAL;
@@ -889,143 +896,136 @@ static char *term_target(void *term) {
 
 	action term_begin {
 		result = SPF_PASS;
-		memset(&term, 0, sizeof term);
+		memset(term, 0, sizeof *term);
 		sbuf_init(&domain);
 		prefix4 = 32; prefix6 = 128;
 	}
 
 	action term_macro {
-		term.macros |= 1U << ((tolower((unsigned char)fc)) - 'a');
+		term->macros |= 1U << ((tolower((unsigned char)fc)) - 'a');
 	}
 
 	action term_end {
-		if (term.type) {
-			struct spf_term *tmp;
-
-			SPF_TRACE(0, "term -> %s", term_comp(&(struct spf_sbuf){ 0 }, &term));
-
-			if (!(tmp = malloc(sizeof *tmp)))
-				{ error = errno; goto error; }
-
-			*tmp = term;
-
-			SPF_LIST_INSERT_TAIL(&rr->terms, tmp);
-			rr->count++;
+		if (term->type) {
+			//SPF_TRACE(1, "term -> %s", term_comp(&(struct spf_sbuf){ 0 }, term));
+			fbreak;
 		}
 	}
 
 	action all_begin {
-		term.all    = all_initializer;
-		term.result = result;
+		term->all    = all_initializer;
+		term->result = result;
 	}
 
 	action all_end {
 	}
 
 	action include_begin {
-		term.include = include_initializer;
-		term.result  = result;
+		term->include = include_initializer;
+		term->result  = result;
 	}
 
 	action include_end {
 		if (*domain.str)
-			spf_fixdn(term.include.domain, domain.str, sizeof term.include.domain, SPF_DN_TRUNC);
+			spf_fixdn(term->include.domain, domain.str, sizeof term->include.domain, SPF_DN_TRUNC);
 	}
 
 	action a_begin {
-		term.a      = a_initializer;
-		term.result = result;
+		term->a      = a_initializer;
+		term->result = result;
 	}
 
 	action a_end {
 		if (*domain.str)
-			spf_fixdn(term.a.domain, domain.str, sizeof term.a.domain, SPF_DN_TRUNC);
+			spf_fixdn(term->a.domain, domain.str, sizeof term->a.domain, SPF_DN_TRUNC);
 
-		term.a.prefix4 = prefix4;
-		term.a.prefix6 = prefix6;
+		term->a.prefix4 = prefix4;
+		term->a.prefix6 = prefix6;
 	}
 
 	action mx_begin {
-		term.mx    = mx_initializer;
-		term.result = result;
+		term->mx     = mx_initializer;
+		term->result = result;
 	}
 
 	action mx_end {
 		if (*domain.str)
-			spf_fixdn(term.mx.domain, domain.str, sizeof term.mx.domain, SPF_DN_TRUNC);
+			spf_fixdn(term->mx.domain, domain.str, sizeof term->mx.domain, SPF_DN_TRUNC);
 
-		term.mx.prefix4 = prefix4;
-		term.mx.prefix6 = prefix6;
+		term->mx.prefix4 = prefix4;
+		term->mx.prefix6 = prefix6;
 	}
 
 	action ptr_begin {
-		term.ptr    = ptr_initializer;
-		term.result = result;
+		term->ptr    = ptr_initializer;
+		term->result = result;
 	}
 
 	action ptr_end {
 		if (*domain.str)
-			spf_fixdn(term.ptr.domain, domain.str, sizeof term.ptr.domain, SPF_DN_TRUNC);
+			spf_fixdn(term->ptr.domain, domain.str, sizeof term->ptr.domain, SPF_DN_TRUNC);
 	}
 
 	action ip4_begin {
-		term.ip4    = ip4_initializer;
-		term.result = result;
+		term->ip4    = ip4_initializer;
+		term->result = result;
 	}
 
 	action ip4_end {
-		spf_pto4(&term.ip4.addr, domain.str);
-		term.ip4.prefix = prefix4;
+		spf_pto4(&term->ip4.addr, domain.str);
+		term->ip4.prefix = prefix4;
 	}
 
 	action ip6_begin {
-		term.ip6    = ip6_initializer;
-		term.result = result;
+		term->ip6    = ip6_initializer;
+		term->result = result;
 	}
 
 	action ip6_end {
-		spf_pto6(&term.ip6.addr, domain.str);
-		term.ip6.prefix = prefix6;
+		spf_pto6(&term->ip6.addr, domain.str);
+		term->ip6.prefix = prefix6;
 	}
 
 	action exists_begin {
-		term.exists = exists_initializer;
-		term.result = result;
+		term->exists = exists_initializer;
+		term->result = result;
 	}
 
 	action exists_end {
 		if (*domain.str)
-			spf_fixdn(term.exists.domain, domain.str, sizeof term.exists.domain, SPF_DN_TRUNC);
+			spf_fixdn(term->exists.domain, domain.str, sizeof term->exists.domain, SPF_DN_TRUNC);
 	}
 
 	action redirect_begin {
-		term.redirect = redirect_initializer;
+		term->redirect = redirect_initializer;
 	}
 
 	action redirect_end {
 		if (*domain.str)
-			spf_fixdn(term.redirect.domain, domain.str, sizeof term.redirect.domain, SPF_DN_TRUNC);
+			spf_fixdn(term->redirect.domain, domain.str, sizeof term->redirect.domain, SPF_DN_TRUNC);
 	}
 
 	action exp_begin {
-		term.exp = exp_initializer;
+		term->exp = exp_initializer;
 	}
 
 	action exp_end {
 		if (*domain.str)
-			spf_fixdn(term.exp.domain, domain.str, sizeof term.exp.domain, SPF_DN_TRUNC);
+			spf_fixdn(term->exp.domain, domain.str, sizeof term->exp.domain, SPF_DN_TRUNC);
 	}
 
 	action unknown_begin {
+		term->unknown = unknown_initializer;
+
 		sbuf_init(&name);
 		sbuf_init(&value);
 	}
 
 	action unknown_end {
-		term.unknown = unknown_initializer;
-
-		spf_strlcpy(term.unknown.name, name.str, sizeof term.unknown.name);
-		spf_strlcpy(term.unknown.value, value.str, sizeof term.unknown.value);
+		if (term->type == SPF_UNKNOWN) {
+			spf_strlcpy(term->unknown.name, name.str, sizeof term->unknown.name);
+			spf_strlcpy(term->unknown.value, value.str, sizeof term->unknown.value);
+		}
 	}
 
 	#
@@ -1048,10 +1048,10 @@ static char *term_target(void *term) {
 	domain_macro   = (macro_expand | domain_literal)*;
 	domain_spec    = (domain_macro domain_end) ${ sbuf_putc(&domain, fc); };
 
-	qnum        = ("0" | ("3" .. "9"))
+	qnum        = ("0" | (("3" .. "9") digit?))
 	            | ("1" digit{0,2})
 	            | ("2" ( ("0" .. "4" digit?)?
-	                   | ("5" ("0" .. "4")?)?
+	                   | ("5" ("0" .. "5")?)?
 	                   | ("6" .. "9")?
 	                   )
 	              );
@@ -1087,48 +1087,41 @@ static char *term_target(void *term) {
 	record    = version term* blank*;
 
 	main      := record $!oops;
+
+	write data;
 }%%
 
 
-int spf_rr_parse(struct spf_rr *rr, const void *rdata, size_t rdlen) {
+int spf_parse(union spf_term *term, struct spf_parser *parser, int *error_) {
 	enum spf_result result = 0;
-	struct spf_term term;
 	struct spf_sbuf domain, name, value;
 	unsigned prefix4 = 0, prefix6 = 0;
-	const unsigned char *p, *pe, *eof;
-	int cs, error;
+	int error;
 
-	%% write data;
+	term->type = 0;
 
-	p   = rdata;
-	pe  = p + rdlen;
-	eof = pe;
-
-	%% write init;
-	%% write exec;
-
-	return 0;
-error:
-	return error;
-} /* spf_rr_parse() */
-
-
-void spf_rr_init(struct spf_rr *rr) {
-	memset(rr, 0, sizeof *rr);
-	SPF_LIST_INIT(&rr->terms);
-} /* spf_rr_init() */
-
-
-void spf_rr_reset(struct spf_rr *rr) {
-	struct spf_term *term;
-
-	while (SPF_LIST_END(&rr->terms) != (term = SPF_LIST_FIRST(&rr->terms))) {
-		SPF_LIST_REMOVE(&rr->terms, term);
-		free(term);
+	if (parser->p < parser->pe) {
+		%% write exec;
 	}
 
-	spf_rr_init(rr);
-} /* spf_rr_reset() */
+	*error_ = 0;
+
+	return term->type;
+error:
+	*error_ = error;
+
+	return 0;
+} /* spf_parse() */
+
+
+void spf_parser_init(struct spf_parser *parser, const void *rdata, size_t rdlen) {
+	parser->rdata = rdata;
+	parser->p     = rdata;
+	parser->pe    = parser->p + rdlen;
+	parser->eof   = parser->pe;
+
+	%% write init;
+} /* spf_parser_init() */
 
 
 int spf_env_init(struct spf_env *env, int af, const void *ip, const char *domain, const char *sender) {
@@ -1154,7 +1147,7 @@ int spf_env_init(struct spf_env *env, int af, const void *ip, const char *domain
 } /* spf_env_init() */
 
 
-static size_t spf_env_get_(char **field, int which, struct spf_env *env) {
+static size_t spf_getenv_(char **field, int which, struct spf_env *env) {
 	switch (tolower((unsigned char)which)) {
 	case 's':
 		*field = env->s;
@@ -1193,30 +1186,30 @@ static size_t spf_env_get_(char **field, int which, struct spf_env *env) {
 		*field = 0;
 		return 0;
 	}
-} /* spf_env_get_() */
+} /* spf_getenv_() */
 
 
-size_t spf_env_get(char *dst, size_t lim, int which, const struct spf_env *env) {
+size_t spf_getenv(char *dst, size_t lim, int which, const struct spf_env *env) {
 	char *src;
 
-	if (!spf_env_get_(&src, which, (struct spf_env *)env))
+	if (!spf_getenv_(&src, which, (struct spf_env *)env))
 		return 0;
 
 	return spf_strlcpy(dst, src, lim);
-} /* spf_env_get() */
+} /* spf_getenv() */
 
 
-size_t spf_env_set(struct spf_env *env, int which, const char *src) {
+size_t spf_setenv(struct spf_env *env, int which, const char *src) {
 	size_t lim, len;
 	char *dst;
 
-	if (!(lim = spf_env_get_(&dst, which, (struct spf_env *)env)))
+	if (!(lim = spf_getenv_(&dst, which, (struct spf_env *)env)))
 		return strlen(src);
 
 	len = spf_strlcpy(dst, src, lim);
 
 	return SPF_MIN(lim - 1, len);
-} /* spf_env_set() */
+} /* spf_setenv() */
 
 
 static size_t spf_expand_(char *dst, size_t lim, const char *src, const struct spf_env *env, int *error) {
@@ -1245,7 +1238,7 @@ static size_t spf_expand_(char *dst, size_t lim, const char *src, const struct s
 		tr = 1;
 	}
 
-	if (!(len = spf_env_get(field, sizeof field, macro, env)))
+	if (!(len = spf_getenv(field, sizeof field, macro, env)))
 		return 0;
 	else if (len >= sizeof field)
 		goto toolong;
@@ -1378,7 +1371,6 @@ spf_macros_t spf_macros(const char *src, const struct spf_env *env) {
 
 
 enum vm_type {
-	T_NIL,
 	T_INT = 0x01,
 	T_REF = 0x02,
 	T_MEM = 0x04,
@@ -1398,21 +1390,25 @@ enum vm_opcode {
 
 	OP_TRUE,	/* 0/1 Push true. */
 	OP_FALSE,	/* 0/1 Push false. */
-	OP_ZERO,	/* 0/1 Push zero. */
+	OP_ZERO,	/* 0/1 Push 0. */
 	OP_ONE,		/* 0/1 Push 1 */
 	OP_TWO,		/* 0/1 Push 2 */
 	OP_THREE,	/* 0/1 Push 3 */
 	OP_I8,		/* 0/1 Decode next op and push as T_INT */ 
 	OP_I16,		/* 0/1 Decode next 2 ops and push as T_INT */ 
 	OP_I32,		/* 0/1 Decode next 4 ops and push as T_INT */
+	OP_NIL,		/* 0/1 Push 0 as T_REF */
 	OP_REF,		/* 0/1 Decode next sizeof(intptr_t) opts and push as T_REF */
 	OP_MEM,		/* 0/1 Decode next sizeof(intptr_t) ops and push as T_MEM */
+	OP_STR,		/* 0/1 Decode until next NUL, allocate and push as T_MEM. */
 
 	OP_DEC,		/* 1/1 Decrement S(-1) */
 	OP_INC,		/* 1/1 Increment S(-1) */
 	OP_NEG,		/* 1/1 Arithmetically negate S(-1) (changes type to T_INT) */
 	OP_ADD,		/* 2/1 Push S(-2) + S(-1). */
 	OP_NOT,		/* 1/1 Logically Negate S(-1) (changes type to T_INT)  */
+
+	OP_EQ,		/* 2/1 Push S(-1) == S(-2) */
 
 	OP_JMP,		/* 2/0 If S(-2) is non-zero, jump S(-1) instruction */
 	OP_GOTO,	/* 2/0 If S(-2) is non-zero, goto I(S(-1)) */
@@ -1424,8 +1420,11 @@ enum vm_opcode {
 	OP_MOVE,	/* 1/1 Move S(S(-1)) to top of stack, shifting everything else down. */
 	OP_SWAP,	/* 0/0 Swap top two items. */
 
+	OP_GETENV,	/* 1/1 Push spf_getenv(S(-1)) */
+	OP_SETENV,	/* 2/0 Do spf_setenv(S(-1), S(-2)) */
+
 	OP_EXPAND,	/* 1/1 Push spf_expand(S(-1)). */
-	OP_ISSET,	/* 2/1 */
+	OP_ISSET,	/* 2/1 Check for macro S(-1) in S(-2). */
 
 	OP_SUBMIT,	/* 2/0 dns_res_submit(). in: 2(qtype, qname) out: 0 */
 	OP_FETCH,	/* 0/1 dns_res_fetch(). in: 0 out: 1(struct dns_packet) */
@@ -1433,50 +1432,44 @@ enum vm_opcode {
 	OP_GREP,	/* 3/1 Push iterator. Takes QNAME, section and type. */
 	OP_NEXT,	/* 1/2 Push next stringized RR data. */
 
-//	OP_VERIFY,	/* 1/0 */
-	OP_REVMAP,
+	OP_ADDRINFO,	/* 3/0 dns_ai_open(). */
+	OP_NEXTENT,	/* 0/1 dns_ai_nextent(). */
+
+	OP_CHECK,	/* 1/2 Pop target domain, push exp and result. */
+	OP_COMP,	/* 1/1 Compile S(-1), push code address or 0 if invalid policy. */
 
 	OP_FCRD,	/* 0/0 Forward-confirmed Reverse DNS */
-	OP_VERIFY,	/* 1/0 Pops packet and matches A/AAAA records with {ip}. If match, add QNAME as FCRD */
+	OP_FCRDx,	/* 1/0 Pop addrinfo; if A/AAAA matches ${i}, add .ai_canonname as FCRD */
 
+	OP_SLEEP,	/* 1/0 Sleep */
+
+	OP_STRCAT,
 	OP_PRINTI,
 	OP_PRINTS,
 	OP_PRINTP,
+	OP_PRINTAI,
 
-	OP_ALL      = SPF_ALL,
-	OP_INCLUDE  = SPF_INCLUDE,
-	OP_A        = SPF_A,
-	OP_MX       = SPF_MX,
-	OP_PTR      = SPF_PTR,
-	OP_IP4      = SPF_IP4,
-	OP_IP6      = SPF_IP6,
-	OP_EXISTS   = SPF_EXISTS,
-
-	OP_REDIRECT = SPF_REDIRECT,
-	OP_EXP      = SPF_EXP,
+	OP_INCLUDE,
+	OP_A,
+	OP_MX,
+	OP_A_MXv,
+	OP_PTR,
+	OP_IP4,
+	OP_IP6,
+	OP_EXISTS,
+	OP_EXP,
 
 	OP__COUNT,
 }; /* enum vm_opcode */
 
-#define op_sizeof(opcode) op_size[(opcode)];
 
-static const int op_size[OP__COUNT] = {
-	[0 ... OP__COUNT - 1] = 1,
-	[OP_I8]  = 2,
-	[OP_I16] = 3,
-	[OP_I32] = 5,
-	[OP_REF] = 1 + sizeof (uintptr_t),
-	[OP_MEM] = 1 + sizeof (uintptr_t),
-};
-
-
-#define VM_MAXCODE  256
+#define VM_MAXCODE  1024
 #define VM_MAXSTACK 64
 
 struct spf_resolver;
 
 struct spf_vm {
-	unsigned code[VM_MAXCODE];
+	unsigned char code[VM_MAXCODE];
 	unsigned pc, end;
 
 	unsigned char type[VM_MAXSTACK];
@@ -1494,11 +1487,12 @@ static void vm_init(struct spf_vm *vm, struct spf_resolver *spf) {
 
 
 struct spf_resolver {
-	struct spf_env *env;
+	struct spf_env env;
 
 	struct spf_vm vm;
 
 	struct dns_resolver *res;
+	struct dns_addrinfo *ai;
 
 	struct {
 		_Bool done;
@@ -1510,7 +1504,7 @@ struct spf_resolver {
 	} fcrd;
 
 	enum spf_result result;
-	struct spf_sbuf sbuf;
+	const char *exp;
 }; /* struct spf_resolver */
 
 
@@ -1519,10 +1513,21 @@ static void vm_throw(struct spf_vm *vm, int error) {
 	longjmp(vm->trap, (error)? error : EINVAL);
 } /* vm_throw() */
 
-static void vm_assert(struct spf_vm *vm, int cond, int error) {
-	if (!cond)
-		vm_throw(vm, error);
-} /* vm_assert() */
+/*
+ * NOTE: Using a macro because it delays evaluation of `error' to allow
+ * code like:
+ *
+ * 	vm_assert(vm, !(error = do_something()), error)
+ * 	vm_assert(vm, (rval = do_something(&error)), error)
+ * 	vm_assert(vm, (p = malloc()), errno)
+ */
+#define vm_assert(vm, cond, error) do { \
+	if (!(cond)) { \
+		SPF_SAY("fail: %s", SPF_STRINGIFY(cond)); \
+		vm_throw((vm), (error)); \
+	} \
+} while (0)
+
 
 static void vm_extend(struct spf_vm *vm, unsigned n) {
 	vm_assert(vm, spf_lengthof(vm->stack) - vm->sp >= n, EFAULT);
@@ -1568,7 +1573,7 @@ static intptr_t vm_pop(struct spf_vm *vm, enum vm_type t) {
 	t = vm->type[vm->sp];
 	v = vm->stack[vm->sp];
 	t_free(vm, t, v);
-	vm->type[vm->sp]  = T_NIL;
+	vm->type[vm->sp]  = 0;
 	vm->stack[vm->sp] = 0;
 	return v;
 } /* vm_pop() */
@@ -1643,8 +1648,7 @@ static intptr_t vm_strdup(struct spf_vm *vm, void *s) {
 	void *v;
 
 	vm_extend(vm, 1);
-	v = strdup(s);
-	vm_assert(vm, !!v, errno);
+	vm_assert(vm, (v = strdup(s)), errno);
 	vm_push(vm, T_MEM, (intptr_t)v);
 
 	return (intptr_t)v;
@@ -1655,10 +1659,8 @@ static intptr_t vm_memdup(struct spf_vm *vm, void *p, size_t len) {
 	void *v;
 
 	vm_extend(vm, 1);
-	v = malloc(len);
-	vm_assert(vm, !!v, errno);
-	memcpy(v, p, len);
-	vm_push(vm, T_MEM, (intptr_t)v);
+	vm_assert(vm, (v = malloc(len)), errno);
+	vm_push(vm, T_MEM, (intptr_t)memcpy(v, p, len));
 
 	return (intptr_t)v;
 } /* vm_memdup() */
@@ -1692,6 +1694,7 @@ static int vm_opcode(struct spf_vm *vm) {
 
 static unsigned (vm_emit)(struct spf_vm *vm, enum vm_opcode code, intptr_t v_) {
 	uintptr_t v;
+	char *s;
 	unsigned i, n;
 
 	vm_assert(vm, vm->end < spf_lengthof(vm->code), ENOMEM);
@@ -1716,16 +1719,74 @@ copy:
 		for (i = 0; i < n; i++)
 			vm->code[++vm->end] = 0xffU & (v >> (8U * ((n-i)-1)));
 
-		break;
-	default:
-		break;
-	} /* switch() */
+		return vm->end++;
+	case OP_STR:
+		s = (char *)v_;
+		n = strlen(s) + 1;
 
-	return vm->end++;
+		vm_assert(vm, spf_lengthof(vm->code) - (vm->end + 1) >= n, ENOMEM);
+		memcpy(&vm->code[++vm->end], s, n);
+		vm->end += n;
+
+		return vm->end - 1;
+	default:
+		return vm->end++;
+	} /* switch() */
 } /* vm_emit() */
 
 
-#define SUB_MAXJUMP  10
+#define HALT(sub)   sub_emit((sub), OP_HALT)
+#define TRAP(sub)   sub_emit((sub), OP_TRAP)
+#define NOOP(sub)   sub_emit((sub), OP_NOOP)
+#define PC(sub)     sub_emit((sub), OP_PC)
+#define CALL(sub)   sub_emit((sub), OP_CALL)
+#define RET(sub)    sub_emit((sub), OP_RET)
+#define EXIT(sub)   sub_emit((sub), OP_EXIT)
+#define TRUE(sub)   sub_emit((sub), OP_TRUE)
+#define FALSE(sub)  sub_emit((sub), OP_FALSE)
+#define ZERO(sub)   sub_emit((sub), OP_ZERO)
+#define ONE(sub)    sub_emit((sub), OP_ONE)
+#define TWO(sub)    sub_emit((sub), OP_TWO)
+#define THREE(sub)  sub_emit((sub), OP_THREE)
+#define I8(sub,v)   sub_emit((sub), OP_I8, (v))
+#define I16(sub,v)  sub_emit((sub), OP_I16, (v))
+#define I32(sub,v)  sub_emit((sub), OP_I32, (v))
+#define NIL(sub)    sub_emit((sub), OP_NIL)
+#define REF(sub,v)  sub_emit((sub), OP_REF, (v))
+#define MEM(sub,v)  sub_emit((sub), OP_MEM, (v))
+#define STR(sub,v)  sub_emit((sub), OP_STR, (v))
+#define DEC(sub)    sub_emit((sub), OP_DEC)
+#define INC(sub)    sub_emit((sub), OP_INC)
+#define NEG(sub)    sub_emit((sub), OP_NEG)
+#define ADD(sub)    sub_emit((sub), OP_ADD)
+#define NOT(sub)    sub_emit((sub), OP_NOT)
+#define EQ(sub)     sub_emit((sub), OP_EQ)
+#define POP(sub)    sub_emit((sub), OP_POP)
+#define DUP(sub)    sub_emit((sub), OP_DUP)
+#define LOAD(sub)   sub_emit((sub), OP_LOAD)
+#define STORE(sub)  sub_emit((sub), OP_STORE)
+#define MOVE(sub)   sub_emit((sub), OP_MOVE)
+#define SWAP(sub)   sub_emit((sub), OP_SWAP)
+#define GOTO(sub)   sub_emit((sub), OP_GOTO)
+#define GETENV(sub) sub_emit((sub), OP_GETENV)
+#define SETENV(sub) sub_emit((sub), OP_SETENV)
+#define EXPAND(sub) sub_emit((sub), OP_EXPAND)
+#define ISSET(sub)  sub_emit((sub), OP_ISSET)
+#define SUBMIT(sub) sub_emit((sub), OP_SUBMIT)
+#define FETCH(sub)  sub_emit((sub), OP_FETCH)
+#define QNAME(sub)  sub_emit((sub), OP_QNAME)
+#define GREP(sub)   sub_emit((sub), OP_GREP)
+#define NEXT(sub)   sub_emit((sub), OP_NEXT)
+#define CHECK(sub)  sub_emit((sub), OP_CHECK)
+#define COMP(sub)   sub_emit((sub), OP_COMP)
+#define FCRD(sub)   sub_emit((sub), OP_FCRD)
+#define FCRDx(sub)  sub_emit((sub), OP_FCRDx)
+#define STRCAT(sub) sub_emit((sub), OP_STRCAT)
+#define PRINTI(sub) sub_emit((sub), OP_PRINTI)
+#define PRINTS(sub) sub_emit((sub), OP_PRINTS)
+#define PRINTP(sub) sub_emit((sub), OP_PRINTP)
+
+#define SUB_MAXJUMP  64
 #define SUB_MAXLABEL 8
 
 #define L0(sub) sub_label((sub), 0)
@@ -1791,208 +1852,6 @@ static void sub_jump(struct vm_sub *sub, unsigned id) {
 	sub->j[sub->jc].id = id % spf_lengthof(sub->l);
 	sub->jc++;
 } /* sub_jump() */
-
-
-#if 0
-static void vm_emit_revmap(struct spf_vm *vm) {
-	if (vm->sub.revmap && vm->sub.revmap < vm->end)
-		return;
-
-	/*
-	 * REVMAP subroutine. Expects return address at top of stack.
-	 * Returns nothing.
-	 */
-	vm->sub.revmap = vm->end;
-
-	/*
-	 * Check VM_VAR_REVMAP. If TRUE then just return; we've already
-	 * completed this work.
-	 */
-	vm_emit(vm, OP_I8, VM_VAR_REVMAP);
-	vm_emit(vm, OP_LOAD);
-	vm_emit(vm, OP_NOT);
-	vm_emit(vm, OP_I8, 4);
-	vm_emit(vm, OP_JMP);   /* jump to body if !VM_VAR_REVMAP */
-	vm_emit(vm, OP_TRUE);  /* conditional */
-	vm_emit(vm, OP_SWAP);  /* swap conditional and address */
-	vm_emit(vm, OP_GOTO);
-	/* #ops = 10 */
-
-	/*
-	 * REVMAP begin.
-	 */
-	vm_emit(vm, OP_REF, (intptr_t)"%{ir}.%{v}.arpa.");
-	vm_emit(vm, OP_EXPAND);
-	vm_emit(vm, OP_I8, DNS_T_PTR);
-	vm_emit(vm, OP_SUBMIT);
-	vm_emit(vm, OP_FETCH);
-	vm_emit(vm, OP_QNAME);
-	vm_emit(vm, OP_I8, DNS_S_AN);
-	vm_emit(vm, OP_I8, DNS_T_PTR);
-	vm_emit(vm, OP_GREP);
-	/* #ops = OP_REF + 11 */
-
-	/*
-	 * REVMAP loop. At this point we have three items on the stack.
-	 * 	[-3] return address
-	 * 	[-2] DNS packet
-	 * 	[-1] grep iterator
-	 */
-	vm_emit(vm, OP_NEXT);
-	vm_emit(vm, OP_ONE);
-	vm_emit(vm, OP_NEG);
-	vm_emit(vm, OP_LOAD);
-	vm_emit(vm, OP_NOT);
-	vm_emit(vm, OP_I8, 11); /* distance from epilog */
-	vm_emit(vm, OP_JMP);
-	/* #ops = 8 */
-
-	/*
-	 * REVMAP loop body.
-	 * 	[-4] return address
-	 * 	[-3] DNS packet
-	 * 	[-2] grep iterator
-	 * 	[-1] rdata
-	 */ 
-	vm_emit(vm, OP_I8, DNS_T_A);
-	vm_emit(vm, OP_SUBMIT);
-	vm_emit(vm, OP_FETCH);
-	vm_emit(vm, OP_VERIFY);
-	vm_emit(vm, OP_POP);
-	vm_emit(vm, OP_TRUE);
-	vm_emit(vm, OP_I8, 18); /* distance from beginning of loop  */
-	vm_emit(vm, OP_NEG);    /* jump backwards */
-	vm_emit(vm, OP_JMP);
-	/* #ops = 11 */
-
-	/*
-	 * REVMAP epilog
-	 * 	[-4] return address
-	 * 	[-3] DNS packet
-	 * 	[-2] grep iterator
-	 * 	[-1] rdata
-	 */
-	vm_emit(vm, OP_POP);   /* pop rdata */
-	vm_emit(vm, OP_POP);   /* pop iterator */
-	vm_emit(vm, OP_POP);   /* pop packet */
-	vm_emit(vm, OP_TRUE);
-	vm_emit(vm, OP_I8, VM_VAR_REVMAP);
-	vm_emit(vm, OP_STORE);
-	vm_emit(vm, OP_TRUE);  /* conditional */
-	vm_emit(vm, OP_SWAP);  /* swap conditional and address */
-	vm_emit(vm, OP_GOTO);
-	/* #ops = 10 */
-} /* vm_emit_revmap() */
-
-
-static void vm_emit_exp(struct spf_vm *vm) {
-	if (vm->sub.exp && vm->sub.exp < vm->end)
-		return;
-
-	/*
-	 * EXP subroutine.
-	 */
-	vm->sub.exp = vm->end;
-
-	/*
-	 * EXP begin.
-	 * 	[-2] return address
-	 * 	[-1] target domain
-	 */
-	vm_emit(vm, OP_I8, 'p');
-	vm_emit(vm, OP_ISSET);
-	vm_emit(vm, OP_NOT);
-	vm_emit(vm, OP_TWO);
-	vm_emit(vm, OP_JMP);
-	vm_emit(vm, OP_REVMAP);
-	vm_emit(vm, OP_EXPAND);
-	vm_emit(vm, OP_I8, DNS_T_TXT);
-	vm_emit(vm, OP_SUBMIT);
-	vm_emit(vm, OP_FETCH);	/* [-2] return [-1] packet */
-	vm_emit(vm, OP_QNAME);
-	vm_emit(vm, OP_I8, DNS_S_AN);
-	vm_emit(vm, OP_I8, DNS_T_TXT);
-	vm_emit(vm, OP_GREP); /* [-3] return [-2] packet [-1] iterator */
-	vm_emit(vm, OP_NEXT); /* [-4] return [-3] packet [-2] iterator [-1] txt */
-	vm_emit(vm, OP_SWAP);
-	vm_emit(vm, OP_POP);  /* [-3] return [-2] packet [-1] txt */
-	vm_emit(vm, OP_SWAP);
-	vm_emit(vm, OP_POP);  /* [-2] return [-1] txt */
-	vm_emit(vm, OP_I8, 'p');
-	vm_emit(vm, OP_ISSET);
-	vm_emit(vm, OP_TWO);
-	vm_emit(vm, OP_NOT);
-	vm_emit(vm, OP_JMP);
-	vm_emit(vm, OP_REVMAP);
-	vm_emit(vm, OP_EXPAND);
-	vm_emit(vm, OP_SWAP);
-	vm_emit(vm, OP_TRUE);
-	vm_emit(vm, OP_SWAP);
-	vm_emit(vm, OP_GOTO);
-} /* vm_emit_exp() */
-
-
-static void vm_emit_check(struct spf_vm *vm, struct spf_rr *rr) {
-	struct spf_term *term, *redir, *exp;
-	int pc, error;
-
-	pc    = vm->end++;
-	redir = 0;
-	exp   = 0;
-
-	SPF_LIST_FOREACH(term, &rr->terms) {
-		switch (term->type) {
-		case SPF_EXP:
-			exp = term;
-
-			break;
-		case SPF_REDIRECT:
-			redir = term;
-
-			break;
-		default:
-			break;
-		} /* switch() */
-	}
-
-	SPF_LIST_FOREACH(term, &rr->terms) {
-		if (!SPF_ISMECHANISM(term->type))
-			continue;
-
-		if (spf_isset(term->macros, 'p') || term->type == SPF_PTR)
-			vm_emit(vm, OP_REVMAP);
-
-		vm_emit(vm, OP_REF, (intptr_t)term);
-		vm_emit(vm, term->type);
-	} /* SPF_LIST_FOREACH() */
-
-	if (redir) {
-		if (spf_isset(redir->macros, 'p'))
-			vm_emit_revmap(vm);
-
-		vm_emit(vm, OP_REF, (intptr_t)redir);
-		vm_emit(vm, SPF_REDIRECT);
-	}
-
-	if (exp)
-		;;
-} /* vm_emit_check() */
-#endif
-
-
-static void vm_comptxt(struct spf_vm *vm, const void *txt, size_t len) {
-	struct spf_rr rr;
-	struct spf_term *term, *redir, *exp;
-	int ip, error;
-
-	spf_rr_init(&rr);
-
-	if (len < sizeof "v=spf1" || memcmp(txt, "v=spf1", sizeof "v=spf1" - 1))
-		vm_throw(vm, EINVAL);
-
-	if ((error = spf_rr_parse(&rr, txt, len)))
-		vm_throw(vm, error);
-} /* vm_comptxt() */
 
 
 static void op_pop(struct spf_vm *vm) {
@@ -2139,33 +1998,28 @@ static void op_pc(struct spf_vm *vm) {
 } /* op_pc() */
 
 
-static void op_const(struct spf_vm *vm) {
-	enum vm_opcode code = vm->code[vm->pc];
-	intptr_t v;
-
-	switch (code) {
-	case OP_TRUE: case OP_FALSE:
-		v = (code == OP_TRUE);
-		break;
-	case OP_ZERO: case OP_ONE: case OP_TWO: case OP_THREE:
-		v = (code - OP_ZERO);
-		break;
-	default:
-		vm_throw(vm, EFAULT);
-	} /* switch() */
-
-	vm_push(vm, T_INT, v);
-	vm->pc++;
-} /* op_const() */
-
-
-static void op_var(struct spf_vm *vm) {
+static void op_lit(struct spf_vm *vm) {
 	enum vm_opcode code = vm->code[vm->pc];
 	uintptr_t v;
 	enum vm_type t;
 	int i, n;
 
+	n = 0;
+	v = 0;
+
 	switch (code) {
+	case OP_TRUE: case OP_FALSE:
+		v = (code == OP_TRUE);
+		t = T_INT;
+		break;
+	case OP_ZERO: case OP_ONE: case OP_TWO: case OP_THREE:
+		v = (code - OP_ZERO);
+		t = T_INT;
+		break;
+	case OP_NIL:
+		v = 0;
+		t = T_REF;
+		break;
 	case OP_I8:
 		n = 1;
 		t = T_INT;
@@ -2190,8 +2044,6 @@ static void op_var(struct spf_vm *vm) {
 		vm_throw(vm, EINVAL);
 	} /* switch () */
 
-	v = 0;
-
 	for (i = 0; i < n; i++) {
 		vm_assert(vm, ++vm->pc < vm->end, EFAULT);
 		v <<= 8;
@@ -2199,9 +2051,21 @@ static void op_var(struct spf_vm *vm) {
 	}
 
 	vm_push(vm, t, (intptr_t)v);
-
 	vm->pc++;
-} /* op_var() */
+} /* op_lit() */
+
+
+static void op_str(struct spf_vm *vm) {
+	unsigned pc = ++vm->pc;
+
+	while (pc < spf_lengthof(vm->code) && vm->code[pc])
+		pc++;
+
+	vm_assert(vm, pc < spf_lengthof(vm->code), EFAULT);
+	vm_memdup(vm, &vm->code[vm->pc], ++pc - vm->pc);
+
+	vm->pc = pc;
+} /* op_str() */
 
 
 static void op_dec(struct spf_vm *vm) {
@@ -2232,6 +2096,18 @@ static void op_not(struct spf_vm *vm) {
 	vm_poke(vm, -1, T_INT, !vm_peek(vm, -1, T_ANY));
 	vm->pc++;
 } /* op_not() */
+
+
+static void op_eq(struct spf_vm *vm) {
+	enum vm_type t = vm_typeof(vm, -1);
+
+	if ((T_REF|T_MEM) & t)
+		t = T_REF|T_MEM;
+
+	vm_push(vm, T_INT, (vm_pop(vm, t) == vm_pop(vm, t)));
+
+	vm->pc++;
+} /* op_eq() */
 
 
 static void op_submit(struct spf_vm *vm) {
@@ -2271,8 +2147,7 @@ static void op_qname(struct spf_vm *vm) {
 
 	pkt = (void *)vm_peek(vm, -1, T_REF|T_MEM);
 
-	if (!dns_d_expand(qname, sizeof qname, 12, pkt, &error))
-		vm_throw(vm, error);
+	vm_assert(vm, dns_d_expand(qname, sizeof qname, 12, pkt, &error), error);
 
 	vm_pop(vm, T_ANY);
 	vm_strdup(vm, qname);
@@ -2282,6 +2157,7 @@ static void op_qname(struct spf_vm *vm) {
 
 
 struct vm_grep {
+	int type;
 	struct dns_rr_i iterator;
 	char name[DNS_D_MAXNAME + 1];
 }; /* struct vm_grep */
@@ -2297,15 +2173,20 @@ static void op_grep(struct spf_vm *vm) {
 	sec  = vm_peek(vm, -2, T_INT);
 	type = vm_peek(vm, -1, T_INT);
 
-	if (!(grep = malloc(sizeof *grep)))
-		vm_throw(vm, errno);
+	vm_assert(vm, (grep = malloc(sizeof *grep)), errno);
 
 	memset(&grep->iterator, 0, sizeof grep->iterator);
-	spf_strlcpy(grep->name, name, sizeof grep->name);
 
-	grep->iterator.name    = (name && *name)? name : 0;
+	grep->type = type;
+
+	if (name && *name) {
+		spf_strlcpy(grep->name, name, sizeof grep->name);
+		grep->iterator.name = grep->name;
+	}
+
 	grep->iterator.section = sec;
-	grep->iterator.type    = type;
+	grep->iterator.type    = abs(type);
+
 	dns_rr_i_init(&grep->iterator, pkt);
 
 	vm_discard(vm, 3);
@@ -2314,6 +2195,10 @@ static void op_grep(struct spf_vm *vm) {
 	vm->pc++;
 } /* op_grep() */
 
+
+static _Bool txt_isspf(struct dns_txt *txt) {
+	return (txt->len >= sizeof "v=spf1" && !memcmp(txt->data, "v=spf1", sizeof "v=spf1" - 1));
+} /* txt_isspf() */
 
 static void op_next(struct spf_vm *vm) {
 	struct dns_packet *pkt;
@@ -2324,26 +2209,102 @@ static void op_next(struct spf_vm *vm) {
 	pkt  = (void *)vm_peek(vm, -2, T_REF|T_MEM);
 	grep = (void *)vm_peek(vm, -1, T_REF|T_MEM);
 
+grep:
 	if (dns_rr_grep(&rr, 1, &grep->iterator, pkt, &error)) {
-		union dns_any any;
 		char rd[DNS_D_MAXNAME + 1];
+		union dns_any any;
+		char *txt;
 
-		if ((error = dns_any_parse(&any, &rr, pkt)))
-			vm_throw(vm, error);
+		dns_any_init(&any, sizeof any);
 
-		if (!dns_any_print(rd, sizeof rd, &any, rr.type))
-			goto none;
+		vm_assert(vm, !(error = dns_any_parse(&any, &rr, pkt)), error);
 
-//		vm_pop(vm, T_ANY);
-		vm_strdup(vm, rd);
+		switch (rr.type) {
+		case DNS_T_TXT:
+			if (grep->type == -DNS_T_TXT && !txt_isspf(&any.txt))
+				goto grep;
+
+			/* FALL THROUGH */
+		case DNS_T_SPF:
+			txt = (char *)vm_memdup(vm, any.txt.data, any.txt.len + 1);
+			txt[any.txt.len] = '\0';
+
+			break;
+		default:
+			if (!dns_any_print(rd, sizeof rd, &any, rr.type))
+				goto none;
+
+			vm_strdup(vm, rd);
+
+			break;
+		} /* switch() */
 	} else {
 none:
-//		vm_pop(vm, T_ANY);
-		vm_push(vm, T_INT, 0);
+		vm_push(vm, T_REF, 0);
 	}
 
 	vm->pc++;
 } /* op_next() */
+
+
+static void op_addrinfo(struct spf_vm *vm) {
+	static const struct addrinfo hints = { .ai_family = PF_UNSPEC, .ai_socktype = SOCK_STREAM, .ai_flags = AI_CANONNAME };
+	const char *host;
+	char serv[16];
+	int qtype, error;
+
+	host = (char *)vm_peek(vm, -3, T_REF|T_MEM);
+
+	if (T_INT == vm_typeof(vm, -2))
+		spf_itoa(serv, sizeof serv, vm_peek(vm, -2, T_INT));
+	else
+		spf_strlcpy(serv, (char *)vm_peek(vm, -2, T_REF|T_MEM), sizeof serv);
+
+	qtype = vm_peek(vm, -1, T_INT);
+
+	dns_ai_close(vm->spf->ai);
+	vm_assert(vm, (vm->spf->ai = dns_ai_open(host, serv, qtype, &hints, vm->spf->res, &error)), error);
+
+	vm_discard(vm, 3);
+
+	vm->pc++;	
+} /* op_addrinfo() */
+
+
+static void op_nextent(struct spf_vm *vm) {
+	struct addrinfo *ent = 0;
+	int error;
+
+	vm_extend(vm, 1);
+	if ((error = dns_ai_nextent(&ent, vm->spf->ai)))
+		vm_assert(vm, error == ENOENT, error);
+	vm_push(vm, T_MEM, (intptr_t)ent);
+
+	vm->pc++;
+} /* op_nextent() */
+
+
+static void op_getenv(struct spf_vm *vm) {
+	char dst[512];
+	int error;
+
+	spf_getenv(dst, sizeof dst, vm_pop(vm, T_INT), &vm->spf->env);
+	vm_strdup(vm, dst);
+
+	vm->pc++;
+} /* op_getenv() */
+
+
+static void op_setenv(struct spf_vm *vm) {
+	char *src;
+	int error;
+
+	vm_assert(vm, (src = (char *)vm_peek(vm, -2, T_REF|T_MEM)), EINVAL);
+	spf_setenv(&vm->spf->env, vm_pop(vm, T_INT), src);
+	vm_discard(vm, 1);
+
+	vm->pc++;
+} /* op_setenv() */
 
 
 static void op_expand(struct spf_vm *vm) {
@@ -2351,8 +2312,7 @@ static void op_expand(struct spf_vm *vm) {
 	char dst[512];
 	int error;
 
-	if (!spf_expand(dst, sizeof dst, &macros, (void *)vm_peek(vm, -1, T_REF|T_MEM), vm->spf->env, &error))
-		vm_throw(vm, error);
+	vm_assert(vm, spf_expand(dst, sizeof dst, &macros, (void *)vm_peek(vm, -1, T_REF|T_MEM), &vm->spf->env, &error), error);
 
 	vm_pop(vm, T_ANY);
 	vm_strdup(vm, dst);
@@ -2363,57 +2323,21 @@ static void op_expand(struct spf_vm *vm) {
 
 static void op_isset(struct spf_vm *vm) {
 	spf_macros_t macros = 0;
-	int error, macro;
+	int isset, error;
 
-	if (!spf_expand(0, 0, &macros, (void *)vm_peek(vm, -2, T_REF|T_MEM), vm->spf->env, &error))
-		vm_throw(vm, error);
+	vm_assert(vm, spf_expand(0, 0, &macros, (void *)vm_peek(vm, -2, T_REF|T_MEM), &vm->spf->env, &error), error);
 
-	vm_push(vm, T_INT, !!spf_isset(macros, vm_pop(vm, T_INT)));
+	isset = !!spf_isset(macros, vm_peek(vm, -1, T_INT));
+	vm_discard(vm, 2);
+	vm_push(vm, T_INT, isset);
 
 	vm->pc++;
 } /* op_isset() */
 
 
-static void op_verify(struct spf_vm *vm) {
-	struct dns_packet *pkt;
-	char qname[DNS_D_MAXNAME + 1], dn[DNS_D_MAXNAME + 1];
-	struct dns_rr rr;
-	struct in_addr a, b;
-	int error;
-
-	pkt = (void *)vm_peek(vm, -1, T_REF|T_MEM);
-
-	if (!dns_d_expand(qname, sizeof qname, 12, pkt, &error))
-		vm_throw(vm, error);
-
-	spf_pto4(&b, vm->spf->env->c);
-
-	dns_rr_foreach(&rr, pkt, .section = DNS_S_AN, .type = DNS_T_A) {
-		if (!dns_d_expand(dn, sizeof dn, rr.dn.p, pkt, &error))
-			vm_throw(vm, error);
-		if ((error = dns_a_parse((struct dns_a *)&a, &rr, pkt)))
-			vm_throw(vm, error);
-
-		if (a.s_addr != b.s_addr)
-			continue;
-
-		if ((error = dns_p_push(&vm->spf->fcrd.ptr, DNS_S_AN, dn, strlen(dn), DNS_T_A, DNS_C_IN, 0, &a)))
-			vm_throw(vm, error);
-	}
-
-	vm->pc++;
-} /* op_verify() */
-
-
-static void op_fcrd(struct spf_vm *vm) {
+static void op_check(struct spf_vm *vm) {
 	struct vm_sub sub;
 	unsigned end, ret;
-
-	if (vm->spf->fcrd.done) {
-		vm->pc++;
-
-		return;
-	}
 
 	end = vm->end;
 	ret = vm->pc + 1;
@@ -2421,71 +2345,701 @@ static void op_fcrd(struct spf_vm *vm) {
 	sub_init(&sub, vm);
 
 	/*
-	 * begin.
+	 * [-3] reset address
+	 * [-2] return address
+	 * [-1] domain
 	 */
-	sub_emit(&sub, OP_REF, (intptr_t)"%{ir}.%{v}.arpa.");
-	sub_emit(&sub, OP_EXPAND);
-	sub_emit(&sub, OP_I8, DNS_T_PTR);
-	sub_emit(&sub, OP_SUBMIT);
-	sub_emit(&sub, OP_FETCH);
-	sub_emit(&sub, OP_QNAME);
-	sub_emit(&sub, OP_I8, DNS_S_AN);
-	sub_emit(&sub, OP_I8, DNS_T_PTR);
-	sub_emit(&sub, OP_GREP);
+	I8(&sub, DNS_T_TXT);
+	SUBMIT(&sub);
+	FETCH(&sub);
 
 	/*
-	 * loop. At this point we have two items on the stack.
-	 * 	[-2] DNS packet
-	 * 	[-1] grep iterator
+	 * [-3] reset address
+	 * [-2] return address
+	 * [-1] packet
 	 */
+	NIL(&sub);
+	TWO(&sub);
+	I8(&sub, DNS_T_TXT);
+	NEG(&sub); /* -DNS_T_TXT asks grep/next to scan for v=spf1 */
+	GREP(&sub);
 	L0(&sub);
-	sub_emit(&sub, OP_NEXT);
-	sub_emit(&sub, OP_ONE);
-	sub_emit(&sub, OP_NEG);
-	sub_emit(&sub, OP_LOAD);
-	sub_emit(&sub, OP_NOT);
-	J1(&sub);
+	NEXT(&sub);
+	DUP(&sub);
+	NOT(&sub);
+	J7(&sub);
+	COMP(&sub); /* pushes code address, or 0 if failed. */
+	DUP(&sub);
+	J1(&sub);   /* if not 0, jump to transfer code. */ 
+	NOT(&sub);
+	J0(&sub);   /* otherwise, continue looping */
 
 	/*
-	 * loop body.
-	 * 	[-3] DNS packet
-	 * 	[-2] grep iterator
-	 * 	[-1] rdata
-	 */ 
-	sub_emit(&sub, OP_I8, DNS_T_A);
-	sub_emit(&sub, OP_SUBMIT);
-	sub_emit(&sub, OP_FETCH);
-	sub_emit(&sub, OP_VERIFY);
-	sub_emit(&sub, OP_POP);
-	sub_emit(&sub, OP_TRUE);
-	J0(&sub);
-
-	/*
-	 * epilog
-	 * 	[-3] DNS packet
-	 * 	[-2] grep iterator
-	 * 	[-1] rdata
+	 * [-5] reset address
+	 * [-4] return address
+	 * [-3] packet
+	 * [-2] iterator
+	 * [-1] code address
 	 */
 	L1(&sub);
-	sub_emit(&sub, OP_POP);   /* pop rdata */
-	sub_emit(&sub, OP_POP);   /* pop iterator */
-	sub_emit(&sub, OP_POP);   /* pop packet */
+	SWAP(&sub);
+	POP(&sub);
+	SWAP(&sub);
+	POP(&sub);
+	TRUE(&sub);
+	SWAP(&sub);
+	 /*
+	  * [-4] reset address
+	  * [-3] return address
+	  * [-2] true
+	  * [-1] code address
+	  */
+	GOTO(&sub);
 
-	sub_emit(&sub, OP_I16, end);
-	sub_emit(&sub, OP_I16, ret);
-	sub_emit(&sub, OP_ZERO);
-	sub_emit(&sub, OP_EXIT);
+	/*
+	 * [-5] reset address
+	 * [-4] return address
+	 * [-3] packet
+	 * [-2] iterator
+	 * [-1] rdata
+	 */
+	L7(&sub);
+	POP(&sub);
+	POP(&sub);
+	POP(&sub);
+	NIL(&sub);
+	I8(&sub, SPF_NONE);
+	TWO(&sub);
+	EXIT(&sub);
 
 	sub_link(&sub);
+
+	vm_push(vm, T_INT, end);
+	vm_swap(vm);
+	vm_push(vm, T_INT, ret);
+	vm_swap(vm);
+
+	vm->pc = end;
+} /* op_check() */
+
+
+static void op_comp(struct spf_vm *vm) {
+	struct spf_parser parser;
+	union spf_term term;
+	struct spf_exp exp = { 0 };
+	struct spf_redirect redir = { 0 };
+	struct vm_sub sub;
+	const char *txt;
+	int type, error;
+	unsigned end;
+
+	end = vm->end;
+
+	vm_assert(vm, (txt = (char *)vm_peek(vm, -1, T_REF|T_MEM)), EINVAL);
+
+	spf_parser_init(&parser, txt, strlen(txt));
+
+	/*
+	 * L5 is for matches
+	 * L6 is the explanation (i.e. exp= or default).
+	 * L7 is to return
+	 */
+	sub_init(&sub, vm);
+
+	while ((type = spf_parse(&term, &parser, &error))) {
+#if 0
+		STR(&sub, (intptr_t)"checking");
+		STR(&sub, (intptr_t)spf_strterm(type));
+		I8(&sub, ' ');
+		STRCAT(&sub);
+		PRINTS(&sub);
+#endif
+		switch (type) {
+		case SPF_ALL:
+			TRUE(&sub);
+			break;
+		case SPF_INCLUDE:
+			I8(&sub, 'd');
+			GETENV(&sub);
+
+			STR(&sub, (intptr_t)&term.include.domain[0]);
+			if (term.macros) {
+				if (spf_isset(term.macros, 'p'))
+					FCRD(&sub);
+				EXPAND(&sub);
+			}
+			DUP(&sub);
+			I8(&sub, 'd');
+			SETENV(&sub);
+
+			sub_emit(&sub, OP_CHECK);
+			SWAP(&sub);
+			POP(&sub);    /* discard exp */
+
+			SWAP(&sub);
+			I8(&sub, 'd');
+			SETENV(&sub); /* replace our ${d} */
+
+			I8(&sub, SPF_PASS);
+			EQ(&sub);
+
+			break;
+		case SPF_A:
+			/* FALL THROUGH */
+		case SPF_MX:
+			I8(&sub, term.mx.prefix6);
+			I8(&sub, term.mx.prefix4);
+			if (term.mx.domain[0]) {
+				STR(&sub, (intptr_t)&term.mx.domain[0]);
+				if (term.macros) {
+					if (spf_isset(term.macros, 'p'))
+						FCRD(&sub);
+					EXPAND(&sub);
+				}
+			} else {
+				STR(&sub, (intptr_t)"%{d}");
+				EXPAND(&sub);
+			}
+			sub_emit(&sub, (type == SPF_A)? OP_A : OP_MX);
+			break;
+		case SPF_PTR:
+			FCRD(&sub);
+			if (term.ptr.domain[0]) {
+				STR(&sub, (intptr_t)&term.ptr.domain[0]);
+				if (term.macros)
+					EXPAND(&sub);
+			} else {
+				STR(&sub, (intptr_t)"%{d}");
+				EXPAND(&sub);
+			}
+			sub_emit(&sub, OP_PTR);
+			break;
+		case SPF_IP4:
+			I32(&sub, (intptr_t)term.ip4.addr.s_addr);
+			I8(&sub, term.ip4.prefix);
+			sub_emit(&sub, OP_IP4);
+			break;
+		case SPF_IP6:
+			TRAP(&sub);
+			break;
+		case SPF_EXISTS:
+			STR(&sub, (intptr_t)&term.exists.domain[0]);
+			if (term.macros) {
+				if (spf_isset(term.macros, 'p'))
+					FCRD(&sub);
+				EXPAND(&sub);
+			}
+			sub_emit(&sub, OP_EXISTS);
+			break;
+		case SPF_EXP:
+			exp = term.exp;
+			continue;
+		case SPF_REDIRECT:
+			redir = term.redirect;
+			continue;
+		default:
+			SPF_SAY("unknown term: %d", type);
+			continue;
+		} /* switch (type) */
+
+		/* [-1] matched */
+		I8(&sub, term.result);
+		SWAP(&sub);
+		J5(&sub);
+		POP(&sub);
+	}
+
+	if (error) {
+		vm->end = end;
+		end = 0;
+		goto done;
+	}
+
+	if (redir.type) {
+		STR(&sub, (intptr_t)&redir.domain[0]);
+		if (redir.macros) {
+			if (spf_isset(redir.macros, 'p'))
+				FCRD(&sub);
+			EXPAND(&sub);
+		}
+		sub_emit(&sub, OP_CHECK);
+		TRUE(&sub);
+		J7(&sub);
+	}
+
+	/*
+	 * No matches.
+	 */
+#if 0
+	STR(&sub, (intptr_t)"no match");
+	PRINTS(&sub);
+#endif
+	I8(&sub, SPF_NEUTRAL);
+	TRUE(&sub);
+	J6(&sub);
+
+	L5(&sub);
+#if 0
+	DUP(&sub);
+	STR(&sub, (intptr_t)"match : result=");
+	SWAP(&sub);
+	I8(&sub, ' ');
+	STRCAT(&sub);
+	PRINTS(&sub);
+#endif
+
+	/*
+	 * exp
+	 *
+	 * [-3] reset address
+	 * [-2] return address
+	 * [-1] result
+	 */
+	L6(&sub);
+	NIL(&sub);  /* queue NIL exp */
+	SWAP(&sub);
+	DUP(&sub);
+	I8(&sub, SPF_FAIL);
+	EQ(&sub);
+	NOT(&sub);
+	J7(&sub);   /* not a fail, so jump to end with our NIL exp */
+	SWAP(&sub);
+	POP(&sub);  /* otherwise discard the NIL exp */
+
+	if (exp.type) {
+		STR(&sub, (intptr_t)&term.exp.domain[0]);
+		if (term.macros) {
+			if (spf_isset(term.macros, 'p'))
+				FCRD(&sub);
+			EXPAND(&sub);
+		}
+		sub_emit(&sub, OP_EXP);
+		SWAP(&sub);
+	} else {
+		REF(&sub, (intptr_t)SPF_DEFEXP);
+		EXPAND(&sub);
+		SWAP(&sub);
+	}
+
+	L7(&sub);
+	TWO(&sub);
+	EXIT(&sub);
+
+	sub_link(&sub);
+
+done:
+	/*
+	 * We should always be called in conjunction with OP_CHECK. OP_COMP
+	 * returns the address of the new code, which OP_CHECK will jump
+	 * into (with the reset and return addresses properly set). If
+	 * compiling fails, 0 is returned to OP_CHECK.
+	 */
+	vm_discard(vm, 1);
+	vm_push(vm, T_INT, end);
+
+	vm->pc++;
+} /* op_comp() */
+
+
+static void op_ip4(struct spf_vm *vm) {
+	struct in_addr a, b;
+	unsigned prefix;
+	int match;
+
+	prefix   = vm_pop(vm, T_INT);
+	a.s_addr = vm_pop(vm, T_INT);
+
+	if (!strcmp(vm->spf->env.v, "in-addr")) {
+		spf_pto4(&b, vm->spf->env.i);
+		match = (0 == spf_4cmp(&a, &b, prefix));
+	} else
+		match = 0;
+
+	vm_push(vm, T_INT, match);
+
+	vm->pc++;
+} /* op_ip4() */
+
+
+static void op_exists(struct spf_vm *vm) {
+	struct vm_sub sub;
+	unsigned end, ret;
+
+	end = vm->end;
+	ret = vm->pc + 1;
+
+	sub_init(&sub, vm);
+
+	/*
+	 * [-3] reset address
+	 * [-2] return address
+	 * [-1] domain
+	 */
+	I8(&sub, DNS_T_A);
+	SUBMIT(&sub);
+	FETCH(&sub);
+	NIL(&sub);
+	TWO(&sub);
+	I8(&sub, DNS_T_A);
+	GREP(&sub);
+	NEXT(&sub);
+
+	/*
+	 * [-5] reset address
+	 * [-4] return address
+	 * [-3] packet
+	 * [-2] iterator
+	 * [-1] rdata
+	 */
+	SWAP(&sub);
+	POP(&sub);
+	SWAP(&sub);
+	POP(&sub);
+	NOT(&sub); /* to... */
+	NOT(&sub); /* ...boolean */
+	ONE(&sub);
+	EXIT(&sub);
+
+	sub_link(&sub);
+
+	vm_push(vm, T_INT, end);
+	vm_swap(vm);
+	vm_push(vm, T_INT, ret);
+	vm_swap(vm);
+
+	vm->pc = end;
+} /* op_exists() */
+
+
+static void op_a_mxv(struct spf_vm *vm) {
+	int prefix6 = vm_peek(vm, -3, T_INT);
+	int prefix4 = vm_peek(vm, -2, T_INT);
+	struct addrinfo *ent = (void *)vm_peek(vm, -1, T_REF|T_MEM);
+	union { struct in_addr a4; struct in6_addr a6; } a, b;
+	int af, prefix, error, match = 0;
+
+	if (0 == strcmp(vm->spf->env.v, "ipv6")) {
+		af     = AF_INET6;
+		prefix = prefix6;
+	} else {
+		af     = AF_INET;
+		prefix = prefix4;
+	}
+
+	if (ent->ai_addr->sa_family != af)
+		goto done;
+
+	spf_pton(&a, af, vm->spf->env.c);
+
+	if (af == AF_INET6)
+		b.a6 = ((struct sockaddr_in6 *)ent->ai_addr)->sin6_addr;
+	else
+		b.a4 = ((struct sockaddr_in *)ent->ai_addr)->sin_addr;
+
+	match = (0 == spf_inetcmp(af, &a, &b, prefix));
+done:
+	vm_discard(vm, 3);
+	vm_push(vm, T_INT, match);
+
+	vm->pc++;
+} /* op_a_mxv() */
+
+
+static void op_a_mx(struct spf_vm *vm, enum dns_type type) {
+	struct vm_sub sub;
+	unsigned end, ret;
+
+	end = vm->end;
+	ret = vm->pc + 1;
+
+	sub_init(&sub, vm);
+
+	/*
+	 * [-5] reset address
+	 * [-4] return address
+	 * [-3] prefix6
+	 * [-2] prefix4
+	 * [-1] domain
+	 */
+	I8(&sub, 0);
+	I8(&sub, type);
+	sub_emit(&sub, OP_ADDRINFO);
+
+	L0(&sub);
+	sub_emit(&sub, OP_NEXTENT);
+	DUP(&sub);
+	NOT(&sub);
+	J1(&sub);
+	/* push prefix6 */
+	THREE(&sub);
+	NEG(&sub);
+	LOAD(&sub);
+	SWAP(&sub);
+	/* push prefix4 */
+	THREE(&sub);
+	NEG(&sub);
+	LOAD(&sub);
+	SWAP(&sub);
+	/* call MXv with [-3] prefix6 [-2] prefix4 [-1] ent */
+#if 0
+	DUP(&sub);
+	sub_emit(&sub, OP_PRINTAI);
+#endif
+	sub_emit(&sub, OP_A_MXv);
+	NOT(&sub);
+	J0(&sub);
+	TRUE(&sub);
+	TRUE(&sub);
+	J1(&sub);
+
+	L1(&sub);
+	NOT(&sub); /* to... */
+	NOT(&sub); /* ...boolean */
+	SWAP(&sub);
+	POP(&sub);
+	SWAP(&sub);
+	POP(&sub);
+	ONE(&sub);
+	EXIT(&sub);
+
+	sub_link(&sub);
+
+	vm_push(vm, T_INT, end);
+	vm_push(vm, T_INT, ret);
+	vm_move(vm, -5);
+	vm_move(vm, -5);
+	vm_move(vm, -5);
+
+	vm->pc = end;
+} /* op_a_mx() */
+
+
+static void op_a(struct spf_vm *vm) {
+	op_a_mx(vm, DNS_T_A);
+} /* op_a() */
+
+
+static void op_mx(struct spf_vm *vm) {
+	op_a_mx(vm, DNS_T_MX);
+} /* op_mx() */
+
+
+static void op_ptr(struct spf_vm *vm) {
+	const char *arg;
+	struct dns_rr rr;
+	char dn[DNS_D_MAXNAME + 1], cn[DNS_D_MAXNAME + 1];
+	int error, match = 0;
+
+	vm_assert(vm, vm->spf->fcrd.done, EFAULT);
+	vm_assert(vm, (arg = (char *)vm_peek(vm, -1, T_REF|T_MEM)), EFAULT);
+
+	spf_strlcpy(dn, arg, sizeof dn);
+	spf_fixdn(dn, dn, sizeof dn, SPF_DN_ANCHOR);
+
+	dns_rr_foreach(&rr, &vm->spf->fcrd.ptr, .section = DNS_S_ANSWER) {
+		vm_assert(vm, dns_d_expand(cn, sizeof cn, rr.dn.p, &vm->spf->fcrd.ptr, &error), error);
+
+		do {
+			if ((match = !strcasecmp(dn, cn)))
+				goto done;
+		} while (spf_fixdn(cn, cn, sizeof cn, SPF_DN_SUPER));
+	}
+
+done:
+	vm_discard(vm, 1);
+	vm_push(vm, T_INT, match);
+
+	vm->pc++;
+} /* op_ptr() */
+
+
+static void op_fcrdx(struct spf_vm *vm) {
+	struct addrinfo *ent = (void *)vm_peek(vm, -1, T_REF|T_MEM);
+	union { struct in_addr a4; struct in6_addr a6; } a, b;
+	int af, rtype, error;
+
+	if (0 == strcmp(vm->spf->env.v, "ipv6")) {
+		af    = AF_INET6;
+		rtype = DNS_T_AAAA;
+	} else {
+		af    = AF_INET;
+		rtype = DNS_T_A;
+	}
+
+	if (ent->ai_addr->sa_family != af)
+		goto done;
+
+	spf_pton(&a, af, vm->spf->env.c);
+
+	if (af == AF_INET6)
+		b.a6 = ((struct sockaddr_in6 *)ent->ai_addr)->sin6_addr;
+	else
+		b.a4 = ((struct sockaddr_in *)ent->ai_addr)->sin_addr;
+
+	if (0 != spf_inetcmp(af, &a, &b, 128))
+		goto done;
+	
+	vm_assert(vm, !(error = dns_p_push(&vm->spf->fcrd.ptr, DNS_S_AN, ent->ai_canonname, strlen(ent->ai_canonname), rtype, DNS_C_IN, 0, &b)), error);
+done:
+	vm_discard(vm, 1);
+
+	vm->pc++;
+} /* op_fcrdx() */
+
+
+static void op_fcrd(struct spf_vm *vm) {
+	struct vm_sub sub;
+	unsigned end, ret;
+
+	if (vm->spf->fcrd.done)
+		{ vm->pc++; return; }
+
+	end = vm->end;
+	ret = vm->pc + 1;
+
+	sub_init(&sub, vm);
+
+	REF(&sub, (intptr_t)"%{ir}.%{v}.arpa.");
+	EXPAND(&sub);
+	I8(&sub, 0);
+	I8(&sub, DNS_T_PTR);
+	sub_emit(&sub, OP_ADDRINFO);
+	L0(&sub);
+	sub_emit(&sub, OP_NEXTENT);
+	DUP(&sub);
+	NOT(&sub);
+	J1(&sub);
+	FCRDx(&sub);
+	TRUE(&sub);
+	J0(&sub);
+	L1(&sub);
+	POP(&sub);
+	ZERO(&sub);
+	EXIT(&sub); /* [-1] return address [-2] reset address */
+
+	sub_link(&sub);
+
+	vm->spf->fcrd.done = 1;
+
+	vm_push(vm, T_INT, end);
+	vm_push(vm, T_INT, ret);
+
+	vm->pc = end;
 } /* op_fcrd() */
 
 
 static void op_exp(struct spf_vm *vm) {
-//	vm_emit_exp(vm);
-	vm_push(vm, T_INT, vm->pc + 1);
+	struct vm_sub sub;
+	unsigned end, ret;
+
+	end = vm->end;
+	ret = vm->pc + 1;
+
+	sub_init(&sub, vm);
+
+	/*
+	 * Query for TXT record
+	 * 	[-1] target
+	 */
+	L0(&sub);
+	I8(&sub, DNS_T_TXT);
+	SUBMIT(&sub);
+	FETCH(&sub);
+	REF(&sub, (intptr_t)"");
+	I8(&sub, DNS_S_AN);
+	I8(&sub, DNS_T_TXT);
+	GREP(&sub);
+	NEXT(&sub); // pops 0, pushes rdata (rdata could be NULL)
+	SWAP(&sub);
+	POP(&sub);  // discard grep iterator
+	SWAP(&sub);
+	POP(&sub);  // discard DNS packet
+
+	/*
+	 * TXT record present?
+	 * 	[-1] exp
+	 */
+	DUP(&sub);  // take a copy
+	J1(&sub);   // jump to FCRD check if present
+	POP(&sub);  // otherwise, pop and push default string
+	REF(&sub, (intptr_t)SPF_DEFEXP);
+
+	/*
+	 * Do we need to do FCRD match?
+	 * 	[-1] exp
+	 */
+	L1(&sub);
+	DUP(&sub);     // take a copy
+	I8(&sub, 'p'); // %{p} macro triggers FCRD
+	ISSET(&sub);   // check for macro (pops 2, pushs boolean)
+	NOT(&sub);
+	J2(&sub);      // if not set, jump to expansion
+	FCRD(&sub);    // otherwise do FCRD
+
+	/*
+	 * Expand rdata
+	 * 	[-1] exp
+	 */
+	L2(&sub);
+	EXPAND(&sub); // pops 1, pushes expansion
+
+	/*
+	 * Epilog.
+	 * 	[-1] exp
+	 */
+	ONE(&sub);  // returning one result
+	EXIT(&sub); // expects [-1] result [-2] return address [-3] reset address
+
+	sub_link(&sub);
+
+	/*
+	 * Call above routine.
+	 * 	[-3] code reset address
+	 * 	[-2] return address
+	 * 	[-1] target
+	 */
+	vm_push(vm, T_INT, end);
 	vm_swap(vm);
-//	vm->pc = vm->sub.exp;
+	vm_push(vm, T_INT, ret);
+	vm_swap(vm);
+
+	vm->pc = end;
 } /* op_exp() */
+
+
+static void op_sleep(struct spf_vm *vm) {
+	sleep(vm_pop(vm, T_INT));
+	vm->pc++;
+} /* op_sleep() */
+
+
+static void op_strcat(struct spf_vm *vm) {
+	struct spf_sbuf sbuf = SBUF_INIT(&sbuf);
+
+	/* Print [-3] as string */
+	if ((T_REF|T_MEM) & vm_typeof(vm, -3))
+		sbuf_puts(&sbuf, (char *)vm_peek(vm, -3, T_REF|T_MEM));
+	else
+		sbuf_puti(&sbuf, vm_peek(vm, -3, T_ANY));
+
+	/* Print [-1] as string or character code */
+	if ((T_REF|T_MEM) & vm_typeof(vm, -1))
+		sbuf_puts(&sbuf, (char *)vm_peek(vm, -1, T_REF|T_MEM));
+	else
+		sbuf_putc(&sbuf, vm_peek(vm, -1, T_INT));
+
+	/* Print [-2] as string */
+	if ((T_REF|T_MEM) & vm_typeof(vm, -2))
+		sbuf_puts(&sbuf, (char *)vm_peek(vm, -2, T_REF|T_MEM));
+	else
+		sbuf_puti(&sbuf, vm_peek(vm, -2, T_ANY));
+
+	vm_assert(vm, !sbuf.overflow, ENOMEM);
+	vm_discard(vm, 3);
+	vm_strdup(vm, sbuf.str);
+
+	vm->pc++;
+} /* op_strcat() */
 
 
 static void op_printi(struct spf_vm *vm) {
@@ -2502,12 +3056,11 @@ static void op_prints(struct spf_vm *vm) {
 
 
 static void op_printp(struct spf_vm *vm) {
-	struct dns_packet *pkt = (void *)vm_pop(vm, T_REF|T_MEM);
+	struct dns_packet *pkt = (void *)vm_peek(vm, -1, T_REF|T_MEM);
 	enum dns_section section;
 	struct dns_rr rr;
 	int error;
-	union dns_any any;
-	char pretty[sizeof any * 2];
+	char pretty[1024];
 	size_t len;
 
 	section	= 0;
@@ -2522,8 +3075,23 @@ static void op_printp(struct spf_vm *vm) {
 		section	= rr.section;
 	}
 
+	vm_discard(vm, 1);
+
 	vm->pc++;
 } /* op_printp() */
+
+
+static void op_printai(struct spf_vm *vm) {
+	struct addrinfo *ent = (void *)vm_peek(vm, -1, T_REF|T_MEM);
+	char pretty[1024];
+
+	dns_ai_print(pretty, sizeof pretty, ent, vm->spf->ai);
+	printf("%s", pretty);
+
+	vm_discard(vm, 1);
+
+	vm->pc++;
+} /* op_printai() */
 
 
 static const struct {
@@ -2535,25 +3103,31 @@ static const struct {
 	[OP_NOOP]  = { "noop", &op_noop },
 	[OP_PC]    = { "pc", &op_pc, },
 	[OP_CALL]  = { "call", &op_call, },
+	[OP_RET]   = { "ret", &op_ret, },
+	[OP_EXIT]  = { "exit", &op_exit, },
 
-	[OP_TRUE]  = { "true", &op_const, },
-	[OP_FALSE] = { "false", &op_const, },
-	[OP_ZERO]  = { "zero", &op_const, },
-	[OP_ONE]   = { "one", &op_const, },
-	[OP_TWO]   = { "two", &op_const, },
-	[OP_THREE] = { "three", &op_const, },
+	[OP_TRUE]  = { "true", &op_lit, },
+	[OP_FALSE] = { "false", &op_lit, },
+	[OP_ZERO]  = { "zero", &op_lit, },
+	[OP_ONE]   = { "one", &op_lit, },
+	[OP_TWO]   = { "two", &op_lit, },
+	[OP_THREE] = { "three", &op_lit, },
 
-	[OP_I8]    = { "i8", &op_var, },
-	[OP_I16]   = { "i16", &op_var, },
-	[OP_I32]   = { "i32", &op_var, },
-	[OP_REF]   = { "ref", &op_var, },
-	[OP_MEM]   = { "mem", &op_var, },
+	[OP_I8]    = { "i8", &op_lit, },
+	[OP_I16]   = { "i16", &op_lit, },
+	[OP_I32]   = { "i32", &op_lit, },
+	[OP_NIL]   = { "nil", &op_lit, },
+	[OP_REF]   = { "ref", &op_lit, },
+	[OP_MEM]   = { "mem", &op_lit, },
+	[OP_STR]   = { "str", &op_str, },
 
 	[OP_DEC]   = { "dec", &op_dec, },
 	[OP_INC]   = { "inc", &op_inc, },
 	[OP_NEG]   = { "neg", &op_neg, },
 	[OP_ADD]   = { "add", &op_add, },
 	[OP_NOT]   = { "not", &op_not, },
+
+	[OP_EQ]   = { "eq", &op_eq, },
 
 	[OP_JMP]   = { "jmp", &op_jmp, },
 	[OP_GOTO]  = { "goto", &op_goto, },
@@ -2565,6 +3139,9 @@ static const struct {
 	[OP_MOVE]  = { "move", &op_move, },
 	[OP_SWAP]  = { "swap", &op_swap, },
 
+	[OP_GETENV] = { "getenv", &op_getenv, },
+	[OP_SETENV] = { "setenv", &op_setenv, },
+
 	[OP_EXPAND] = { "expand", &op_expand, },
 	[OP_ISSET]  = { "isset", &op_isset, },
 
@@ -2574,13 +3151,31 @@ static const struct {
 	[OP_GREP]   = { "grep", &op_grep, },
 	[OP_NEXT]   = { "next", &op_next, },
 
-	[OP_FCRD]   = { "fcrd", &op_fcrd, },
-	[OP_VERIFY] = { "verify", &op_verify, },
-//	[OP_REVMAP] = { "revmap", &op_revmap, },
+	[OP_ADDRINFO] = { "addrinfo", &op_addrinfo, },
+	[OP_NEXTENT]  = { "nextent", &op_nextent, },
 
-	[OP_PRINTI] = { "printi", &op_printi, },
-	[OP_PRINTS] = { "prints", &op_prints, },
-	[OP_PRINTP] = { "printp", &op_printp, },
+	[OP_IP4]    = { "ip4", &op_ip4, },
+	[OP_EXISTS] = { "exists", &op_exists, },
+	[OP_A]      = { "a", &op_a },
+	[OP_MX]     = { "mx", &op_mx },
+	[OP_A_MXv]  = { "mxv", &op_a_mxv },
+	[OP_PTR]    = { "ptr", &op_ptr },
+
+	[OP_FCRD]  = { "fcrd", &op_fcrd, },
+	[OP_FCRDx] = { "fcrdx", &op_fcrdx, },
+
+	[OP_CHECK]  = { "check", &op_check, },
+	[OP_COMP]   = { "comp", &op_comp, },
+
+	[OP_SLEEP] = { "sleep", &op_sleep },
+
+	[OP_STRCAT]  = { "strcat", &op_strcat, },
+	[OP_PRINTI]  = { "printi", &op_printi, },
+	[OP_PRINTS]  = { "prints", &op_prints, },
+	[OP_PRINTP]  = { "printp", &op_printp, },
+	[OP_PRINTAI] = { "printai", &op_printai, },
+
+	[OP_EXP] = { "exp", &op_exp, },
 }; /* vm_op[] */
 
 
@@ -2588,11 +3183,15 @@ static int vm_exec(struct spf_vm *vm) {
 	enum vm_opcode code;
 	int error;
 
-	if ((error = setjmp(vm->trap)))
+	if ((error = setjmp(vm->trap))) {
+		SPF_SAY("trap: %s", spf_strerror(error));
 		return error;
+	}
 
 	while ((code = vm_opcode(vm))) {
-//SPF_SAY("code: %s", vm_op[code].name);
+		if (SPF_DEBUG(2)) {
+			SPF_SAY("code: %s", vm_op[code].name);
+		}
 		vm_op[code].exec(vm);
 	}
 
@@ -2602,37 +3201,38 @@ static int vm_exec(struct spf_vm *vm) {
 
 const struct spf_limits spf_safelimits = { .querymax = 10, };
 
-struct spf_resolver *spf_open(const struct spf_env *env, const struct spf_limits *limits, int *error) {
+struct spf_resolver *spf_open(const struct spf_env *env, const struct spf_limits *limits, int *error_) {
 	struct spf_resolver *spf = 0;
+	int error;
 
 	if (!(spf = malloc(sizeof *spf)))
 		goto syerr;
 
 	memset(spf, 0, sizeof *spf);
 
+	spf->env = *env;
+
 	vm_init(&spf->vm, spf);
 
-	if (!(spf->res = dns_res_stub(error)))	
+	if (!(spf->res = dns_res_stub(&error)))	
 		goto error;
-#if 0
-//	spf->env    = *env;
-//	spf->limits = *limits;
 
-	SPF_LIST_INIT(&spf->rdata);
+	dns_p_init(&spf->fcrd.ptr, sizeof spf->fcrd.buf);
 
-	dns_p_init(&spf->ptr, sizeof spf->pbuf);
-	dns_p_push(&spf->ptr, DNS_S_QD, ".", 1, DNS_T_PTR, DNS_C_IN, 0, 0);
+	if ((error = setjmp(spf->vm.trap)))
+		goto error;
 
-	memset(spf->stack, 0, sizeof spf->stack);
+	vm_emit(&spf->vm, OP_STR, (intptr_t)"%{d}");
+	vm_emit(&spf->vm, OP_EXPAND);
+	vm_emit(&spf->vm, OP_CHECK);
+	vm_emit(&spf->vm, OP_HALT);
 
-	spf->frame = &spf->stack[0];
-
-	spf_strlcpy(spf->frame->target, spf->env.d, sizeof spf->frame->target);
-#endif
 	return spf;
 syerr:
-	*error = errno;
+	error = errno;
 error:
+	*error_ = error;
+
 	free(spf);
 
 	return 0;
@@ -2646,37 +3246,59 @@ void spf_close(struct spf_resolver *spf) {
 		return;
 
 	dns_res_close(spf->res);
+	dns_ai_close(spf->ai);
 
 	vm_discard(&spf->vm, spf->vm.sp);
-
-#if 0
-	while ((rr = SPF_LIST_FIRST(&spf->rdata))) {
-		SPF_LIST_REMOVE(&spf->rdata, rr);
-		spf_rr_close(rr);
-	}
-#endif
 
 	free(spf);
 } /* spf_close() */
 
 
-#if 0
-enum spf_result spf_check(struct spf_resolver *spf, const char **qname, enum spf_rr_type *qtype, int *error) {
-#if 0
-	if ((*error = spf_exec(spf)))
-		return SPF_SYSERR;
+int spf_check(struct spf_resolver *spf) {
+	int error;
 
-	if (spf->result == SPF_QUERY) {
-		*qname = spf->qlast;
-		*qtype = spf->qtype;
-	} else {
-		*qname = 0;
-		*qtype = 0;
-	}
-#endif
-	return spf->result;
+	if ((error = vm_exec(&spf->vm)))
+		return error;
+
+	if ((error = setjmp(spf->vm.trap)))
+		return error;
+
+	spf->result = vm_peek(&spf->vm, -1, T_INT);
+	spf->exp    = (char *)vm_peek(&spf->vm, -2, T_REF|T_MEM);
+
+	return 0;
 } /* spf_check() */
-#endif
+
+
+enum spf_result spf_result(struct spf_resolver *spf) {
+	return spf->result;
+} /* spf_result() */
+
+
+const char *spf_exp(struct spf_resolver *spf) {
+	return spf->exp;
+} /* spf_exp() */
+
+
+int spf_elapsed(struct spf_resolver *spf) {
+	return dns_res_elapsed(spf->res);
+} /* spf_elapsed() */
+
+
+int spf_events(struct spf_resolver *spf) {
+	return dns_res_events(spf->res);
+} /* spf_events() */
+
+
+int spf_pollfd(struct spf_resolver *spf) {
+	return dns_res_pollfd(spf->res);
+} /* spf_pollfd() */
+
+
+int spf_poll(struct spf_resolver *spf, int timeout) {
+	return dns_res_poll(spf->res, timeout);
+} /* spf_poll() */
+
 
 
 #if SPF_MAIN
@@ -2697,6 +3319,9 @@ enum spf_result spf_check(struct spf_resolver *spf, const char **qname, enum spf
 #define panic(...) panic_(__func__, __LINE__, "spf: (%s:%d) " __VA_ARGS__, "\n")
 
 
+static void frepc(int ch, int count, FILE *fp)
+	{ while (count--) fputc(ch, fp); }
+
 static size_t rtrim(char *str) {
 	int p = strlen(str);
 
@@ -2706,7 +3331,7 @@ static size_t rtrim(char *str) {
 	return p + 1;
 } /* rtrim() */
 
-static int vm(int argc, char *argv[]) {
+static int vm(int argc, char *argv[], const struct spf_env *env) {
 	struct spf_resolver *spf;
 	struct spf_vm *vm;
 	char line[256], *str;
@@ -2714,11 +3339,11 @@ static int vm(int argc, char *argv[]) {
 	struct vm_sub sub;
 	int code, error;
 
-	assert((spf = spf_open(0, 0, &error)));
+	assert((spf = spf_open(env, 0, &error)));
 	vm = &spf->vm;
 
 	if ((error = setjmp(spf->vm.trap)))
-		panic("vm_exec: %s", strerror(error));
+		panic("vm_exec: %s", spf_strerror(error));
 
 	sub_init(&sub, vm);
 
@@ -2731,9 +3356,11 @@ static int vm(int argc, char *argv[]) {
 		case '-': case '+':
 		case '0': case '1': case '2': case '3': case '4':
 		case '5': case '6': case '7': case '8': case '9':
-			i = labs(strtol(line, 0, 10));
+			i = labs(strtol(line, 0, 0));
 
-			if (i < (1U<<8))
+			if (i < 4)
+				sub_emit(&sub, OP_ZERO + i);
+			else if (i < (1U<<8))
 				sub_emit(&sub, OP_I8, i);
 			else if (i < (1U<<16))
 				sub_emit(&sub, OP_I16, i);
@@ -2745,10 +3372,11 @@ static int vm(int argc, char *argv[]) {
 
 			break;
 		case '"':
-			if (!(str = strdup(&line[1])))
-				vm_throw(vm, errno);
+			sub_emit(&sub, OP_STR, (intptr_t)&line[1]);
 
-			sub_emit(&sub, OP_MEM, (intptr_t)str);
+			break;
+		case '\'':
+			sub_emit(&sub, OP_I8, (intptr_t)line[1]);
 
 			break;
 		case 'L':
@@ -2782,10 +3410,10 @@ static int vm(int argc, char *argv[]) {
 		switch (error) {
 		case EAGAIN:
 			if ((error = dns_res_poll(spf->res, 5)))
-				panic("poll: %s", strerror(error));
+				panic("poll: %s", spf_strerror(error));
 			break;
 		default:
-			panic("exec: %s", strerror(error));
+			panic("exec: %s", spf_strerror(error));
 		}
 	}
 
@@ -2795,20 +3423,53 @@ static int vm(int argc, char *argv[]) {
 } /* vm() */
 
 
-static int parse(const char *policy) {
-	struct spf_rr *rr;
+static int check(int argc, char *argv[], const struct spf_env *env) {
+	struct spf_resolver *spf;
 	int error;
 
-#if 0
-	if (!(rr = spf_rr_open("25thandClement.com.", SPF_RR_SPF, &error)))
-		panic("%s", strerror(error));
+	assert((spf = spf_open(env, 0, &error)));
 
-	if ((error = spf_rr_parse(rr, 0, policy, strlen(policy))))
-		panic("%s", strerror(error));
+	while ((error = spf_check(spf))) {
+		switch (error) {
+		case EAGAIN:
+			if ((error = spf_poll(spf, 5)))
+				panic("poll: %s", spf_strerror(error));
+			break;
+		default:
+			panic("check: %s", spf_strerror(error));
+		}
+	}
 
-	spf_rr_close(rr);
-#endif
+	printf("result: %s\n", spf_strresult(spf_result(spf)));
+	printf("exp:    %s\n", (spf_exp(spf))? spf_exp(spf) : "[no exp]");
+
+	spf_close(spf);
+
 	return 0;
+} /* check() */
+
+
+static int parse(const char *txt) {
+	struct spf_parser parser;
+	union spf_term term;
+	struct spf_sbuf sbuf;
+	int error;
+
+	spf_parser_init(&parser, txt, strlen(txt));
+
+	while (spf_parse(&term, &parser, &error)) {
+		term_comp(sbuf_init(&sbuf), &term);
+		puts(sbuf.str);
+	}
+
+	if (error) {
+		fprintf(stderr, "error near `%s'\n", parser.error.near);
+		frepc('.', 11 + parser.error.lp, stderr);
+		fputc('^', stderr);
+		fputc('\n', stderr);
+	}
+
+	return error;
 } /* parse() */
 
 
@@ -2818,7 +3479,7 @@ static int expand(const char *src, const struct spf_env *env) {
 	int error;
 
 	if (!(spf_expand(dst, sizeof dst, &macros, src, env, &error)) && error)
-		panic("%s: %s", src, strerror(error));	
+		panic("%s: %s", src, spf_strerror(error));	
 
 	fprintf(stdout, "[%s]\n", dst);
 
@@ -2842,7 +3503,7 @@ static int macros(const char *src, const struct spf_env *env) {
 	int error;
 
 	if (!(spf_expand(0, 0, &macros, src, env, &error)) && error)
-		panic("%s: %s", src, strerror(error));	
+		panic("%s: %s", src, spf_strerror(error));	
 
 	for (unsigned M = 'A'; M <= 'Z'; M++) {
 		if (spf_isset(macros, M)) {
@@ -2890,7 +3551,7 @@ int ip6(int argc, char *argv[]) {
 
 	if (libc) {
 		if (1 != (ret = inet_pton(AF_INET6, argv[0], &ip)))
-			panic("%s: %s", argv[0], (ret == 0)? "not v6 address" : strerror(errno));
+			panic("%s: %s", argv[0], (ret == 0)? "not v6 address" : spf_strerror(errno));
 
 		inet_ntop(AF_INET6, &ip, str, sizeof str);
 	} else {
@@ -2919,7 +3580,7 @@ int ip4(int argc, char *argv[]) {
 
 	if (libc) {
 		if (1 != (ret = inet_pton(AF_INET, argv[0], &ip)))
-			panic("%s: %s", argv[0], (ret == 0)? "not v4 address" : strerror(errno));
+			panic("%s: %s", argv[0], (ret == 0)? "not v4 address" : spf_strerror(errno));
 
 		inet_ntop(AF_INET, &ip, str, sizeof str);
 	} else {
@@ -2951,7 +3612,7 @@ int fixdn(int argc, char *argv[]) {
 		} else if (!strcmp(argv[i], "chomp")) {
 			flags |= SPF_DN_CHOMP;
 		} else
-			panic("%s: invalid flag (\"trunc[=limit]\", \"anchor\", \"chomp\")", argv[i]);
+			panic("%s: invalid flag (\"super\", \"trunc[=LIMIT]\", \"anchor\", \"chomp\")", argv[i]);
 	}
 
 	len = spf_fixdn(dst, argv[0], SPF_MIN(lim, sizeof dst), flags);
@@ -2972,10 +3633,11 @@ int fixdn(int argc, char *argv[]) {
 
 
 #define SIZE(x) { SPF_STRINGIFY(x), sizeof (struct x) }
+#define SIZEu(x) { SPF_STRINGIFY(x), sizeof (union x) }
 int sizes(int argc, char *argv[]) {
 	static const struct { const char *name; size_t size; } type[] = {
 		SIZE(spf_env), SIZE(spf_resolver), SIZE(spf_vm), SIZE(vm_sub),
-		SIZE(spf_term), SIZE(spf_all), SIZE(spf_include), SIZE(spf_a),
+		SIZEu(spf_term), SIZE(spf_all), SIZE(spf_include), SIZE(spf_a),
 		SIZE(spf_mx), SIZE(spf_ptr), SIZE(spf_ip4), SIZE(spf_ip6), 
 		SIZE(spf_exists), SIZE(spf_redirect), SIZE(spf_exp), SIZE(spf_unknown), 
 	};
@@ -2991,8 +3653,25 @@ int sizes(int argc, char *argv[]) {
 } /* sizes() */
 
 
+int printenv(int argc, char *argv[], const struct spf_env *env) {
+	printf("%%{s} : %s\n", env->s);
+	printf("%%{l} : %s\n", env->l);
+	printf("%%{o} : %s\n", env->o);
+	printf("%%{d} : %s\n", env->d);
+	printf("%%{i} : %s\n", env->i);
+	printf("%%{p} : %s\n", env->p);
+	printf("%%{v} : %s\n", env->v);
+	printf("%%{h} : %s\n", env->h);
+	printf("%%{c} : %s\n", env->c);
+	printf("%%{r} : %s\n", env->r);
+	printf("%%{t} : %s\n", env->t);
+
+	return 0;
+} /* printenv() */
+
+
 #define USAGE \
-	"spf [-S:L:O:D:I:P:V:H:C:R:T:vh] parse <POLICY> | expand <MACRO> | ip6 <ADDR>\n" \
+	"spf [-S:L:O:D:I:P:V:H:C:R:T:vh] ACTION\n" \
 	"  -S EMAIL   <sender>\n" \
 	"  -L LOCAL   local-part of <sender>\n" \
 	"  -O DOMAIN  domain of <sender>\n" \
@@ -3004,8 +3683,21 @@ int sizes(int argc, char *argv[]) {
 	"  -C IP      SMTP client IP\n" \
 	"  -R DOMAIN  domain name of host performing the check\n" \
 	"  -T TIME    current timestamp\n" \
-	"  -v         be verbose\n" \
+	"  -v         be verbose (use more to increase verboseness)\n" \
 	"  -h         print usage\n" \
+	"\n" \
+	"  check           Check SPF policy\n" \
+	"  parse <POLICY>  Parse the SPF policy, pretty-print errors\n" \
+	"  expand <MACRO>  Expand the SPF macro\n" \
+	"  macros <MACRO>  List the embedded macros\n" \
+	"  ip6 <ADDR> [\"nybble\" | \"compat\" | \"mapped\" | \"mixed\" | \"libc\"]\n" \
+	"                  Parse and compose address according to options\n" \
+	"  ip4 <ADDR>      See ip6\n" \
+	"  fixdn <POLICY> [\"super\" | \"trunc[=LIMIT]\" | \"anchor\" | \"chomp\"]\n" \
+	"                  Operate on domain string\n" \
+	"  vm              Assemble STDIN into bytecode and execute\n" \
+	"  sizes           Print data structure sizes\n" \
+	"  printenv        Print SPF environment\n" \
 	"\n" \
 	"Reports bugs to william@25thandClement.com\n"
 
@@ -3015,7 +3707,7 @@ int main(int argc, char **argv) {
 	int opt;
 	struct spf_env env;
 
-	spf_debug = 1;
+	spf_debug = 0;
 
 	memset(&env, 0, sizeof env);
 
@@ -3026,6 +3718,21 @@ int main(int argc, char **argv) {
 	while (-1 != (opt = getopt(argc, argv, "S:L:O:D:I:P:V:H:C:R:T:vh"))) {
 		switch (opt) {
 		case 'S':
+			{
+				char *argv[3];
+				char tmp[256];
+
+				spf_strlcpy(tmp, optarg, sizeof tmp);
+
+				if (2 == spf_split(spf_lengthof(argv), argv, tmp, "@", 0)) {
+					if (!*env.l)
+						spf_strlcpy(env.l, argv[0], sizeof env.l);
+
+					if (!*env.o)
+						spf_strlcpy(env.o, argv[1], sizeof env.o);
+				}
+			}
+
 			/* FALL THROUGH */
 		case 'L':
 			/* FALL THROUGH */
@@ -3046,7 +3753,7 @@ int main(int argc, char **argv) {
 		case 'R':
 			/* FALL THROUGH */
 		case 'T':
-			spf_env_set(&env, opt, optarg);
+			spf_setenv(&env, opt, optarg);
 
 			break;
 		case 'v':
@@ -3069,7 +3776,9 @@ usage:
 	if (!argc)
 		goto usage;
 
-	if (!strcmp(argv[0], "parse") && argc > 1) {
+	if (!strcmp(argv[0], "check")) {
+		return check(argc-1, &argv[1], &env);
+	} else if (!strcmp(argv[0], "parse") && argc > 1) {
 		return parse(argv[1]);
 	} else if (!strcmp(argv[0], "expand") && argc > 1) {
 		return expand(argv[1], &env);
@@ -3082,9 +3791,11 @@ usage:
 	} else if (!strcmp(argv[0], "fixdn") && argc > 1) {
 		return fixdn(argc - 1, &argv[1]);
 	} else if (!strcmp(argv[0], "vm")) {
-		return vm(argc - 1, &argv[1]);
+		return vm(argc - 1, &argv[1], &env);
 	} else if (!strcmp(argv[0], "sizes")) {
 		return sizes(argc - 1, &argv[1]);
+	} else if (!strcmp(argv[0], "printenv")) {
+		return printenv(argc - 1, &argv[1], &env);
 	} else
 		goto usage;
 
