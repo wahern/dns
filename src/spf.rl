@@ -3713,6 +3713,8 @@ int main(int argc, char **argv) {
 	memset(&env, 0, sizeof env);
 
 	spf_strlcpy(env.p, "unknown", sizeof env.p);
+	spf_strlcpy(env.v, "in-addr", sizeof env.v);
+	gethostname(env.h, sizeof env.h);
 	spf_strlcpy(env.r, "unknown", sizeof env.r);
 	spf_itoa(env.t, sizeof env.t, (unsigned)time(0));
 
@@ -3731,29 +3733,39 @@ int main(int argc, char **argv) {
 
 					if (!*env.o)
 						spf_strlcpy(env.o, argv[1], sizeof env.o);
+
+					if (!*env.d)
+						spf_strlcpy(env.d, argv[1], sizeof env.d);
 				}
 			}
 
-			/* FALL THROUGH */
+			goto setenv;
 		case 'L':
 			/* FALL THROUGH */
 		case 'O':
 			/* FALL THROUGH */
 		case 'D':
-			/* FALL THROUGH */
+			goto setenv;
 		case 'I':
-			/* FALL THROUGH */
+			if (!*env.c)
+				spf_strlcpy(env.c, optarg, sizeof env.c);
+
+			goto setenv;
 		case 'P':
 			/* FALL THROUGH */
 		case 'V':
 			/* FALL THROUGH */
 		case 'H':
-			/* FALL THROUGH */
+			goto setenv;
 		case 'C':
-			/* FALL THROUGH */
+			if (!*env.i)
+				spf_strlcpy(env.i, optarg, sizeof env.i);
+
+			goto setenv;
 		case 'R':
 			/* FALL THROUGH */
 		case 'T':
+setenv:
 			spf_setenv(&env, opt, optarg);
 
 			break;
