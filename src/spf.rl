@@ -24,6 +24,7 @@
  * ==========================================================================
  */
 #include <stddef.h>	/* size_t */
+#include <stdint.h>	/* intptr_t */
 #include <stdlib.h>	/* malloc(3) free(3) abs(3) */
 
 #include <ctype.h>	/* isgraph(3) isdigit(3) tolower(3) */
