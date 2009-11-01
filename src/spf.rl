@@ -1449,6 +1449,7 @@ enum vm_opcode {
 	OP_PRINTS,
 	OP_PRINTP,
 	OP_PRINTAI,
+	OP_STRRESULT,
 
 	OP_INCLUDE,
 	OP_A,
@@ -1645,7 +1646,7 @@ static intptr_t vm_move(struct spf_vm *vm, int p) {
 } /* vm_move() */
 
 
-static intptr_t vm_strdup(struct spf_vm *vm, void *s) {
+static intptr_t vm_strdup(struct spf_vm *vm, const void *s) {
 	void *v;
 
 	vm_extend(vm, 1);
@@ -1656,7 +1657,7 @@ static intptr_t vm_strdup(struct spf_vm *vm, void *s) {
 } /* vm_strdup() */
 
 
-static intptr_t vm_memdup(struct spf_vm *vm, void *p, size_t len) {
+static intptr_t vm_memdup(struct spf_vm *vm, const void *p, size_t len) {
 	void *v;
 
 	vm_extend(vm, 1);
@@ -2881,6 +2882,15 @@ static void op_fcrdx(struct spf_vm *vm) {
 		goto done;
 	
 	vm_assert(vm, !(error = dns_p_push(&vm->spf->fcrd.ptr, DNS_S_AN, ent->ai_canonname, strlen(ent->ai_canonname), rtype, DNS_C_IN, 0, &b)), error);
+
+	/*
+	 * FIXME: We need to give preference to a verified domain which is
+	 * the same as %{d}, or a sub-domain of %{d}. HOWEVER, include: and
+	 * require= recursion temporarily replace %{d}, so we need to copy
+	 * the _original_ %{d} somewhere for comparing.
+	 */
+	if (!*vm->spf->env.p || !strcmp(vm->spf->env.p, "unknown"))
+		spf_strlcpy(vm->spf->env.p, ent->ai_canonname, sizeof vm->spf->env.p);
 done:
 	vm_discard(vm, 1);
 
@@ -3095,6 +3105,13 @@ static void op_printai(struct spf_vm *vm) {
 } /* op_printai() */
 
 
+static void op_strresult(struct spf_vm *vm) {
+	vm_strdup(vm, spf_strresult(vm_pop(vm, T_INT)));
+
+	vm->pc++;
+} /* op_strresult() */
+
+
 static const struct {
 	const char *name;
 	void (*exec)(struct spf_vm *);
@@ -3175,6 +3192,7 @@ static const struct {
 	[OP_PRINTS]  = { "prints", &op_prints, },
 	[OP_PRINTP]  = { "printp", &op_printp, },
 	[OP_PRINTAI] = { "printai", &op_printai, },
+	[OP_STRRESULT] = { "strresult", &op_strresult, },
 
 	[OP_EXP] = { "exp", &op_exp, },
 }; /* vm_op[] */
@@ -3342,6 +3360,7 @@ static int vm(int argc, char *argv[], const struct spf_env *env) {
 
 	assert((spf = spf_open(env, 0, &error)));
 	vm = &spf->vm;
+	vm->end = 0;
 
 	if ((error = setjmp(spf->vm.trap)))
 		panic("vm_exec: %s", spf_strerror(error));
@@ -3404,6 +3423,8 @@ static int vm(int argc, char *argv[], const struct spf_env *env) {
 			}
 		}
 	} /* while() */
+
+	sub_emit(&sub, OP_HALT);
 
 	sub_link(&sub);
 
