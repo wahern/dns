@@ -26,23 +26,25 @@
 #ifndef DNS_H
 #define DNS_H
 
-#include <stddef.h>			/* offsetof() */
-#include <stdio.h>			/* FILE */
+#include <stddef.h>		/* offsetof() */
+#include <stdio.h>		/* FILE */
 
-#include <string.h>			/* strlen(3) */
+#include <string.h>		/* strlen(3) */
 
-#include <time.h>			/* time_t */
+#include <time.h>		/* time_t */
 
 #if _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #else
-#include <sys/types.h>			/* socklen_t */
-#include <sys/socket.h>			/* struct socket */
+#include <sys/types.h>		/* socklen_t */
+#include <sys/socket.h>		/* struct socket */
 
-#include <netinet/in.h>			/* struct in_addr struct in6_addr */
+#include <poll.h>		/* POLLIN POLLOUT */
 
-#include <netdb.h>			/* struct addrinfo */
+#include <netinet/in.h>		/* struct in_addr struct in6_addr */
+
+#include <netdb.h>		/* struct addrinfo */
 #endif
 
 
@@ -56,6 +58,30 @@ enum dns_errno {
 	DNS_EILLEGAL,
 	DNS_EUNKNOWN,
 }; /* dns_errno */
+
+
+/*
+ * E V E N T S  I N T E R F A C E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+#if defined(POLLIN)
+#define DNS_POLLIN POLLIN
+#else
+#define DNS_POLLIN  1
+#endif
+
+#if defined(POLLOUT)
+#define DNS_POLLOUT POLLOUT
+#else
+#define DNS_POLLOUT  2
+#endif
+
+
+/* Compatability for libevent. */
+#define DNS_POLL2EV(set) \
+	(((set) & DNS_POLLIN)? 2 : 0) | (((set) & DNS_POLLOUT)? 4 : 0)
+
 
 /*
  * E N U M E R A T I O N  I N T E R F A C E S
@@ -96,6 +122,7 @@ enum dns_type {
 	DNS_T_TXT	= 16,
 	DNS_T_AAAA	= 28,
 	DNS_T_SRV	= 33,
+	DNS_T_SPF	= 99,
 
 	DNS_T_ALL	= 255
 }; /* enum dns_type */
@@ -553,6 +580,8 @@ union dns_any {
 	struct dns_txt txt, rdata;
 }; /* union dns_any */
 
+#define DNS_ANY_INIT(any) { .rdata = { .size = sizeof *(any) } }
+
 union dns_any *dns_any_init(union dns_any *, size_t);
 
 int dns_any_parse(union dns_any *, struct dns_rr *, struct dns_packet *);
@@ -723,6 +752,10 @@ struct dns_packet *dns_so_fetch(struct dns_socket *, int *);
 
 time_t dns_so_elapsed(struct dns_socket *);
 
+int dns_so_events(struct dns_socket *);
+
+int dns_so_pollfd(struct dns_socket *);
+
 int dns_so_pollin(struct dns_socket *);
 
 int dns_so_pollout(struct dns_socket *);
@@ -759,11 +792,17 @@ struct dns_packet *dns_res_fetch(struct dns_resolver *, int *);
 
 time_t dns_res_elapsed(struct dns_resolver *);
 
+int dns_res_events(struct dns_resolver *);
+
+int dns_res_pollfd(struct dns_resolver *);
+
 int dns_res_pollin(struct dns_resolver *);
 
 int dns_res_pollout(struct dns_resolver *);
 
 int dns_res_poll(struct dns_resolver *, int);
+
+struct dns_packet *dns_res_query(struct dns_resolver *, const char *, enum dns_type, enum dns_class, int, int *);
 
 
 /*
@@ -779,7 +818,13 @@ void dns_ai_close(struct dns_addrinfo *);
 
 int dns_ai_nextent(struct addrinfo **, struct dns_addrinfo *);
 
+size_t dns_ai_print(void *, size_t, struct addrinfo *, struct dns_addrinfo *);
+
 time_t dns_ai_elapsed(struct dns_addrinfo *);
+
+int dns_ai_events(struct dns_addrinfo *);
+
+int dns_ai_pollfd(struct dns_addrinfo *);
 
 int dns_ai_pollin(struct dns_addrinfo *);
 

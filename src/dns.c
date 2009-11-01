@@ -67,6 +67,8 @@
 
 #include <unistd.h>		/* gethostname(3) close(2) */
 
+#include <poll.h>		/* POLLIN POLLOUT */
+
 #include <netinet/in.h>		/* struct sockaddr_in struct sockaddr_in6 */
 
 #include <arpa/inet.h>		/* inet_pton(3) inet_ntop(3) htons(3) ntohs(3) */
@@ -1160,7 +1162,7 @@ unsigned short dns_d_skip(unsigned short src, struct dns_packet *P) {
 	} /* while() */
 
 invalid:
-assert(0);
+//assert(0);
 	return P->end;
 } /* dns_d_skip() */
 
@@ -1375,7 +1377,7 @@ int dns_rr_parse(struct dns_rr *rr, unsigned short src, struct dns_packet *P) {
 
 	return 0;
 invalid:
-assert(0);
+//assert(0);
 	return DNS_EILLEGAL;
 } /* dns_rr_parse() */
 
@@ -4378,6 +4380,50 @@ time_t dns_so_elapsed(struct dns_socket *so) {
 } /* dns_so_elapsed() */
 
 
+int dns_so_events(struct dns_socket *so) {
+	int events = 0;
+
+	switch (so->state) {
+	case DNS_SO_UDP_CONN:
+	case DNS_SO_UDP_SEND:
+		events |= DNS_POLLOUT;
+
+		break;
+	case DNS_SO_UDP_RECV:
+		events |= DNS_POLLIN;
+
+		break;
+	case DNS_SO_TCP_CONN:
+	case DNS_SO_TCP_SEND:
+		events |= DNS_POLLOUT;
+
+		break;
+	case DNS_SO_TCP_RECV:
+		events |= DNS_POLLIN;
+
+		break;
+	} /* switch() */
+
+	return events;
+} /* dns_so_events() */
+
+
+int dns_so_pollfd(struct dns_socket *so) {
+	switch (so->state) {
+	case DNS_SO_UDP_CONN:
+	case DNS_SO_UDP_SEND:
+	case DNS_SO_UDP_RECV:
+		return so->udp;
+	case DNS_SO_TCP_CONN:
+	case DNS_SO_TCP_SEND:
+	case DNS_SO_TCP_RECV:
+		return so->tcp;
+	} /* switch() */
+
+	return -1;
+} /* dns_so_pollfd() */
+
+
 int dns_so_pollin(struct dns_socket *so) {
 	switch (so->state) {
 	case DNS_SO_UDP_RECV:
@@ -5230,6 +5276,18 @@ error:
 	return error;
 } /* dns_res_exec() */
 
+#undef goto
+
+
+int dns_res_events(struct dns_resolver *R) {
+	return dns_so_events(&R->so);
+} /* dns_res_events() */
+
+
+int dns_res_pollfd(struct dns_resolver *R) {
+	return dns_so_pollfd(&R->so);
+} /* dns_res_pollfd() */
+
 
 int dns_res_pollin(struct dns_resolver *R) {
 	return dns_so_pollin(&R->so);
@@ -5290,6 +5348,31 @@ struct dns_packet *dns_res_fetch(struct dns_resolver *R, int *error) {
 
 	return answer;
 } /* dns_res_fetch() */
+
+
+struct dns_packet *dns_res_query(struct dns_resolver *res, const char *qname, enum dns_type qtype, enum dns_class qclass, int timeout, int *error_) {
+	int error;
+
+	if ((error = dns_res_submit(res, qname, qtype, qclass)))
+		goto error;
+
+	while ((error = dns_res_check(res))) {
+		if (dns_res_elapsed(res) > timeout)
+			error = ETIMEDOUT;
+
+		if (error != EAGAIN)
+			goto error;
+
+		if ((error == dns_res_poll(res, 1)))
+			goto error;
+	}
+
+	return dns_res_fetch(res, error_);
+error:
+	*error_ = error;
+
+	return 0;
+} /* dns_res_query() */
 
 
 /*
@@ -5605,6 +5688,16 @@ time_t dns_ai_elapsed(struct dns_addrinfo *ai) {
 } /* dns_ai_elapsed() */
 
 
+int dns_ai_events(struct dns_addrinfo *ai) {
+	return dns_res_events(ai->res);
+} /* dns_ai_events() */
+
+
+int dns_ai_pollfd(struct dns_addrinfo *ai) {
+	return dns_res_pollfd(ai->res);
+} /* dns_ai_pollfd() */
+
+
 int dns_ai_pollin(struct dns_addrinfo *ai) {
 	return dns_res_pollin(ai->res);
 } /* dns_ai_pollin() */
@@ -5620,7 +5713,7 @@ int dns_ai_poll(struct dns_addrinfo *ai, int timeout) {
 } /* dns_ai_poll() */
 
 
-static size_t dns_ai_print(void *dst, size_t lim, struct addrinfo *ent, struct dns_addrinfo *ai) {
+size_t dns_ai_print(void *dst, size_t lim, struct addrinfo *ent, struct dns_addrinfo *ai) {
 	char addr[MAX(INET_ADDRSTRLEN, INET6_ADDRSTRLEN) + 1];
 	size_t cp	= 0;
 
