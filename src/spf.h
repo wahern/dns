@@ -31,17 +31,46 @@
 #include <netinet/in.h>	/* struct in_addr struct in6_addr */
 
 
+/*
+ * M I S C .  M A C R O S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
 #define SPF_MIN(a, b) (((a) < (b))? (a) : (b))
 #define SPF_MAX(a, b) (((a) > (b))? (a) : (b))
 
 #define SPF_MAXDN 255
 
 
+/*
+ * M I S C .  I N T E R F A C E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+extern int spf_debug;
+
+/** handles both system errors and (enum dns_errno) errors. */
 const char *spf_strerror(int);
 
 const char *spf_strterm(int);
 
 const char *spf_strresult(int);
+
+
+/*
+ * P A R S I N G / C O M P O S I N G  I N T E R F A C E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+enum spf_result {
+	SPF_NONE      = 0,
+	SPF_NEUTRAL   = '?',
+	SPF_PASS      = '+',
+	SPF_FAIL      = '-',
+	SPF_SOFTFAIL  = '~',
+	SPF_TEMPERROR = 'e',
+	SPF_PERMERROR = 'E',
+}; /* enum spf_result */
 
 
 #define SPF_ISMECHANISM(type) ((type) & 0x10)
@@ -58,17 +87,6 @@ enum spf_mechanism {
 }; /* enum spf_mechanism */
 
 
-enum spf_result {
-	SPF_NONE      = 0,
-	SPF_NEUTRAL   = '?',
-	SPF_PASS      = '+',
-	SPF_FAIL      = '-',
-	SPF_SOFTFAIL  = '~',
-	SPF_TEMPERROR = 'e',
-	SPF_PERMERROR = 'E',
-}; /* enum spf_result */
-
-
 #define SPF_ISMODIFIER(type) ((type) & 0x20)
 
 enum spf_modifier {
@@ -78,7 +96,7 @@ enum spf_modifier {
 }; /* enum spf_modifier */
 
 
-/** forward definitions */
+/** forward definition. See "Macro Interfaces" below. */
 typedef unsigned spf_macros_t;
 
 
@@ -226,6 +244,11 @@ void spf_parser_init(struct spf_parser *, const void *, size_t);
 int spf_parse(union spf_term *, struct spf_parser *, int *);
 
 
+/*
+ * E N V I R O N M E N T  I N T E R F A C E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
 struct spf_env {
 	char s[64 + 1 + SPF_MAXDN + 1];
 	char l[64 + 1];
@@ -248,6 +271,12 @@ size_t spf_setenv(struct spf_env *, int, const char *);
 size_t spf_getenv(char *, size_t, int, const struct spf_env *);
 
 
+/*
+ * M A C R O  I N T E R F A C E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+/** spf_isset(spf_macros("%{d}"), 'd') returns true */
 _Bool spf_isset(spf_macros_t, int);
 
 size_t spf_expand(char *, size_t, spf_macros_t *, const char *, const struct spf_env *, int *);
@@ -255,6 +284,11 @@ size_t spf_expand(char *, size_t, spf_macros_t *, const char *, const struct spf
 /** return set of macros used in expansion */
 spf_macros_t spf_macros(const char *, const struct spf_env *);
 
+
+/*
+ * R E S O L V E R  I N T E R F A C E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 struct spf_resolver;
 

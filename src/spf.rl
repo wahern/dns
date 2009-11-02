@@ -52,31 +52,41 @@
 #define SPF_DEFEXP "%{i} is not one of %{d}'s designated mail servers."
 
 
+/*
+ * D E B U G  R O U T I N E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+int spf_debug = 0;
+
 #if SPF_DEBUG
 #include <stdio.h> /* stderr fprintf(3) */
 
-int spf_debug = SPF_DEBUG - 1;
-
 #undef SPF_DEBUG
-#define SPF_DEBUG(N) (spf_debug >= (N))
+#define SPF_DEBUG spf_debug
 
 #define SPF_SAY_(fmt, ...) \
-	do { if (SPF_DEBUG(1)) fprintf(stderr, fmt "%.1s", __func__, __LINE__, __VA_ARGS__); } while (0)
+	do { if (SPF_DEBUG > 0) fprintf(stderr, fmt "%.1s", __func__, __LINE__, __VA_ARGS__); } while (0)
 #define SPF_SAY(...) SPF_SAY_(">>>> (%s:%d) " __VA_ARGS__, "\n")
 #define SPF_HAI SPF_SAY("HAI")
 
-#define SPF_TRACE(retval, ...) ({ if (SPF_DEBUG(2)) SPF_SAY(__VA_ARGS__); (retval); })
-#else
+#else /* !SPF_DEBUG */
+
 #undef SPF_DEBUG
-#define SPF_DEBUG(N) 0
+#define SPF_DEBUG 0
 
 #define SPF_SAY(...)
 #define SPF_HAI
 
-#define SPF_TRACE(retval, ...) (retval)
 #endif /* SPF_DEBUG */
 
 
+/*
+ * M I S C .  M A C R O S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+/** static assert */
 #define spf_verify_true(R) (!!sizeof (struct { unsigned int constraint: (R)? 1 : -1; }))
 #define spf_verify(R) extern int (*spf_contraint (void))[spf_verify_true(R)]
 
@@ -88,6 +98,11 @@ int spf_debug = SPF_DEBUG - 1;
 #define SPF_STRINGIFY_(x) #x
 #define SPF_STRINGIFY(x) SPF_STRINGIFY_(x)
 
+
+/*
+ * S T R I N G  R O U T I N E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 static size_t spf_itoa(char *dst, size_t lim, unsigned i) {
 	unsigned r, d = 1000000000, p = 0;
@@ -218,6 +233,18 @@ static unsigned spf_split(unsigned max, char **argv, char *src, const char *deli
 } /* spf_split() */
 
 
+char *spf_tolower(char *src) {
+	unsigned char *p = (unsigned char *)src;
+
+	while (*p) {
+		*p = tolower(*p);
+		++p;
+	}
+
+	return src;
+} /* spf_tolower() */
+
+
 /** domain normalization */
 
 #define SPF_DN_CHOMP  1	/* discard root zone, if any */
@@ -306,18 +333,6 @@ fixdn:
 
 	return dp;
 } /* spf_fixdn() */
-
-
-char *spf_tolower(char *src) {
-	unsigned char *p = (unsigned char *)src;
-
-	while (*p) {
-		*p = tolower(*p);
-		++p;
-	}
-
-	return src;
-} /* spf_tolower() */
 
 
 size_t spf_4top(char *dst, size_t lim, const struct in_addr *ip) {
@@ -566,12 +581,12 @@ int spf_4cmp(const struct in_addr *a,  const struct in_addr *b, unsigned prefix)
 } /* spf_4cmp() */
 
 
-int spf_inetcmp(int af, const void *a, const void *b, unsigned prefix) {
+int spf_addrcmp(int af, const void *a, const void *b, unsigned prefix) {
 	if (af == AF_INET6)
 		return spf_6cmp(a, b, prefix);
 	else
 		return spf_4cmp(a, b, prefix);
-} /* spf_inetcmp() */
+} /* spf_addrcmp() */
 
 
 const char *spf_strerror(int error) {
@@ -640,6 +655,11 @@ const char *spf_strresult(int result) {
 } /* spf_strresult() */
 
 
+/*
+ * S T R I N G  B U F F E R  R O U T I N E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
 #define SBUF_INIT(sbuf) { 0 }
 
 struct spf_sbuf {
@@ -705,6 +725,11 @@ static _Bool sbuf_put6(struct spf_sbuf *sbuf, const struct in6_addr *ip) {
 	return sbuf_puts(sbuf, tmp);
 } /* sbuf_put6() */
 
+
+/*
+ * P A R S I N G / C O M P O S I N G  R O U T I N E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 static const struct spf_all all_initializer =
 	{ .type = SPF_ALL, .result = SPF_PASS };
@@ -883,7 +908,7 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 		memset(parser->error.near, 0, sizeof parser->error.near);
 		memcpy(parser->error.near, part, SPF_MIN(sizeof parser->error.near - 1, parser->pe - part));
 
-		if (SPF_DEBUG(1)) {
+		if (SPF_DEBUG) {
 			if (isgraph(parser->error.lc))
 				SPF_SAY("`%c' invalid near offset %d of `%s'", parser->error.lc, parser->error.lp, parser->error.near);
 			else
@@ -908,7 +933,6 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 
 	action term_end {
 		if (term->type) {
-			//SPF_TRACE(1, "term -> %s", term_comp(&(struct spf_sbuf){ 0 }, term));
 			fbreak;
 		}
 	}
@@ -1125,6 +1149,11 @@ void spf_parser_init(struct spf_parser *parser, const void *rdata, size_t rdlen)
 } /* spf_parser_init() */
 
 
+/*
+ * E N V I R O N M E N T  R O U T I N E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
 int spf_env_init(struct spf_env *env, int af, const void *ip, const char *domain, const char *sender) {
 	memset(env->r, 0, sizeof env->r);
 
@@ -1212,6 +1241,11 @@ size_t spf_setenv(struct spf_env *env, int which, const char *src) {
 	return SPF_MIN(lim - 1, len);
 } /* spf_setenv() */
 
+
+/*
+ * M A C R O  R O U T I N E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 static size_t spf_expand_(char *dst, size_t lim, const char *src, const struct spf_env *env, int *error) {
 	char field[512], *part[128], *tmp;
@@ -1371,6 +1405,11 @@ spf_macros_t spf_macros(const char *src, const struct spf_env *env) {
 } /* spf_macros() */
 
 
+/*
+ * V I R T U A L  M A C H I N E  R O U T I N E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
 enum vm_type {
 	T_INT = 0x01,
 	T_REF = 0x02,
@@ -1488,6 +1527,7 @@ static void vm_init(struct spf_vm *vm, struct spf_resolver *spf) {
 } /* vm_init() */
 
 
+/** forward definition */
 struct spf_resolver {
 	struct spf_env env;
 
@@ -2738,7 +2778,7 @@ static void op_a_mxv(struct spf_vm *vm) {
 	else
 		b.a4 = ((struct sockaddr_in *)ent->ai_addr)->sin_addr;
 
-	match = (0 == spf_inetcmp(af, &a, &b, prefix));
+	match = (0 == spf_addrcmp(af, &a, &b, prefix));
 done:
 	vm_discard(vm, 3);
 	vm_push(vm, T_INT, match);
@@ -2878,7 +2918,7 @@ static void op_fcrdx(struct spf_vm *vm) {
 	else
 		b.a4 = ((struct sockaddr_in *)ent->ai_addr)->sin_addr;
 
-	if (0 != spf_inetcmp(af, &a, &b, 128))
+	if (0 != spf_addrcmp(af, &a, &b, 128))
 		goto done;
 	
 	vm_assert(vm, !(error = dns_p_push(&vm->spf->fcrd.ptr, DNS_S_AN, ent->ai_canonname, strlen(ent->ai_canonname), rtype, DNS_C_IN, 0, &b)), error);
@@ -3208,7 +3248,7 @@ static int vm_exec(struct spf_vm *vm) {
 	}
 
 	while ((code = vm_opcode(vm))) {
-		if (SPF_DEBUG(2)) {
+		if (SPF_DEBUG >= 2) {
 			SPF_SAY("code: %s", vm_op[code].name);
 		}
 		vm_op[code].exec(vm);
@@ -3217,6 +3257,14 @@ static int vm_exec(struct spf_vm *vm) {
 	return 0;
 } /* vm_exec() */
 
+
+/*
+ * R E S O L V E R  R O U T I N E S
+ *
+ * NOTE: `struct spf_resolver' is forward-defined at the beginning of the VM
+ * section.
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 const struct spf_limits spf_safelimits = { .querymax = 10, };
 
@@ -3505,7 +3553,7 @@ static int expand(const char *src, const struct spf_env *env) {
 
 	fprintf(stdout, "[%s]\n", dst);
 
-	if (SPF_DEBUG(2)) {
+	if (SPF_DEBUG >= 2) {
 		fputs("macros:", stderr);
 
 		for (unsigned M = 'A'; M <= 'Z'; M++) {
@@ -3639,7 +3687,7 @@ int fixdn(int argc, char *argv[]) {
 
 	len = spf_fixdn(dst, argv[0], SPF_MIN(lim, sizeof dst), flags);
 
-	if (SPF_DEBUG(2)) {
+	if (SPF_DEBUG >= 2) {
 		if (len < lim || !len)
 			SPF_SAY("%zu[%s]\n", len, dst);
 		else if (!lim)
@@ -3728,8 +3776,6 @@ int main(int argc, char **argv) {
 	extern char *optarg;
 	int opt;
 	struct spf_env env;
-
-	spf_debug = 0;
 
 	memset(&env, 0, sizeof env);
 
