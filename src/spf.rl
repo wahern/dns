@@ -245,6 +245,16 @@ char *spf_tolower(char *src) {
 } /* spf_tolower() */
 
 
+static size_t spf_rtrim(char *str, const char *trim) {
+	int p = strlen(str);
+
+	while (--p >= 0 && strchr(trim, str[p]))
+		str[p] = 0;
+
+	return p + 1;
+} /* spf_rtrim() */
+
+
 /** domain normalization */
 
 #define SPF_DN_CHOMP  1	/* discard root zone, if any */
@@ -1483,12 +1493,13 @@ enum vm_opcode {
 
 	OP_SLEEP,	/* 1/0 Sleep */
 
-	OP_STRCAT,
-	OP_PRINTI,
-	OP_PRINTS,
-	OP_PRINTP,
-	OP_PRINTAI,
-	OP_STRRESULT,
+	OP_CAT,		/* 2/1 Concatenate into string */
+	OP_GETS,	/* 0/1 Push line from stdin */
+	OP_PUTI,	/* 1/0 Print integer */
+	OP_PUTS,	/* 1/0 Print string */
+	OP_PUTP,	/* 1/0 Print `struct dns_packet' */
+	OP_PUTA,	/* 1/0 Print `struct addrinfo' */
+	OP_RSTR,	/* 1/1 Convert to string with spf_strresult() */
 
 	OP_INCLUDE,
 	OP_A,
@@ -1823,10 +1834,10 @@ copy:
 #define COMP(sub)   sub_emit((sub), OP_COMP)
 #define FCRD(sub)   sub_emit((sub), OP_FCRD)
 #define FCRDx(sub)  sub_emit((sub), OP_FCRDx)
-#define STRCAT(sub) sub_emit((sub), OP_STRCAT)
-#define PRINTI(sub) sub_emit((sub), OP_PRINTI)
-#define PRINTS(sub) sub_emit((sub), OP_PRINTS)
-#define PRINTP(sub) sub_emit((sub), OP_PRINTP)
+#define CAT(sub)    sub_emit((sub), OP_CAT)
+#define PUTI(sub)   sub_emit((sub), OP_PUTI)
+#define PUTS(sub)   sub_emit((sub), OP_PUTS)
+#define PUTP(sub)   sub_emit((sub), OP_PUTP)
 
 #define SUB_MAXJUMP  64
 #define SUB_MAXLABEL 8
@@ -2493,8 +2504,8 @@ static void op_comp(struct spf_vm *vm) {
 		STR(&sub, (intptr_t)"checking");
 		STR(&sub, (intptr_t)spf_strterm(type));
 		I8(&sub, ' ');
-		STRCAT(&sub);
-		PRINTS(&sub);
+		CAT(&sub);
+		PUTS(&sub);
 #endif
 		switch (type) {
 		case SPF_ALL:
@@ -2614,7 +2625,7 @@ static void op_comp(struct spf_vm *vm) {
 	 */
 #if 0
 	STR(&sub, (intptr_t)"no match");
-	PRINTS(&sub);
+	PUTS(&sub);
 #endif
 	I8(&sub, SPF_NEUTRAL);
 	TRUE(&sub);
@@ -2626,8 +2637,8 @@ static void op_comp(struct spf_vm *vm) {
 	STR(&sub, (intptr_t)"match : result=");
 	SWAP(&sub);
 	I8(&sub, ' ');
-	STRCAT(&sub);
-	PRINTS(&sub);
+	CAT(&sub);
+	PUTS(&sub);
 #endif
 
 	/*
@@ -2825,7 +2836,7 @@ static void op_a_mx(struct spf_vm *vm, enum dns_type type) {
 	/* call MXv with [-3] prefix6 [-2] prefix4 [-1] ent */
 #if 0
 	DUP(&sub);
-	sub_emit(&sub, OP_PRINTAI);
+	sub_emit(&sub, OP_PUTA);
 #endif
 	sub_emit(&sub, OP_A_MXv);
 	NOT(&sub);
@@ -3064,20 +3075,19 @@ static void op_sleep(struct spf_vm *vm) {
 } /* op_sleep() */
 
 
-static void op_strcat(struct spf_vm *vm) {
+static void op_gets(struct spf_vm *vm) {
+	char sbuf[1024];
+
+	vm_assert(vm, fgets(sbuf, sizeof sbuf, stdin), ((ferror(stdin))? errno : EINVAL));
+	spf_rtrim(sbuf, "\r\n");
+	vm_strdup(vm, sbuf);
+
+	vm->pc++;
+} /* op_gets() */
+
+
+static void op_cat(struct spf_vm *vm) {
 	struct spf_sbuf sbuf = SBUF_INIT(&sbuf);
-
-	/* Print [-3] as string */
-	if ((T_REF|T_MEM) & vm_typeof(vm, -3))
-		sbuf_puts(&sbuf, (char *)vm_peek(vm, -3, T_REF|T_MEM));
-	else
-		sbuf_puti(&sbuf, vm_peek(vm, -3, T_ANY));
-
-	/* Print [-1] as string or character code */
-	if ((T_REF|T_MEM) & vm_typeof(vm, -1))
-		sbuf_puts(&sbuf, (char *)vm_peek(vm, -1, T_REF|T_MEM));
-	else
-		sbuf_putc(&sbuf, vm_peek(vm, -1, T_INT));
 
 	/* Print [-2] as string */
 	if ((T_REF|T_MEM) & vm_typeof(vm, -2))
@@ -3085,28 +3095,34 @@ static void op_strcat(struct spf_vm *vm) {
 	else
 		sbuf_puti(&sbuf, vm_peek(vm, -2, T_ANY));
 
+	/* Print [-1] as string */
+	if ((T_REF|T_MEM) & vm_typeof(vm, -1))
+		sbuf_puts(&sbuf, (char *)vm_peek(vm, -1, T_REF|T_MEM));
+	else
+		sbuf_puti(&sbuf, vm_peek(vm, -1, T_ANY));
+
 	vm_assert(vm, !sbuf.overflow, ENOMEM);
-	vm_discard(vm, 3);
+	vm_discard(vm, 2);
 	vm_strdup(vm, sbuf.str);
 
 	vm->pc++;
-} /* op_strcat() */
+} /* op_cat() */
 
 
-static void op_printi(struct spf_vm *vm) {
+static void op_puti(struct spf_vm *vm) {
 	printf("%ld\n", (long)vm_pop(vm, T_ANY));
 	vm->pc++;
-} /* op_printi() */
+} /* op_puti() */
 
 
-static void op_prints(struct spf_vm *vm) {
+static void op_puts(struct spf_vm *vm) {
 	printf("%s\n", (char *)vm_peek(vm, -1, T_REF|T_MEM));
 	vm_pop(vm, T_ANY);
 	vm->pc++;
-} /* op_prints() */
+} /* op_puts() */
 
 
-static void op_printp(struct spf_vm *vm) {
+static void op_putp(struct spf_vm *vm) {
 	struct dns_packet *pkt = (void *)vm_peek(vm, -1, T_REF|T_MEM);
 	enum dns_section section;
 	struct dns_rr rr;
@@ -3129,10 +3145,10 @@ static void op_printp(struct spf_vm *vm) {
 	vm_discard(vm, 1);
 
 	vm->pc++;
-} /* op_printp() */
+} /* op_putp() */
 
 
-static void op_printai(struct spf_vm *vm) {
+static void op_puta(struct spf_vm *vm) {
 	struct addrinfo *ent = (void *)vm_peek(vm, -1, T_REF|T_MEM);
 	char pretty[1024];
 
@@ -3142,14 +3158,14 @@ static void op_printai(struct spf_vm *vm) {
 	vm_discard(vm, 1);
 
 	vm->pc++;
-} /* op_printai() */
+} /* op_puta() */
 
 
-static void op_strresult(struct spf_vm *vm) {
+static void op_rstr(struct spf_vm *vm) {
 	vm_strdup(vm, spf_strresult(vm_pop(vm, T_INT)));
 
 	vm->pc++;
-} /* op_strresult() */
+} /* op_rstr() */
 
 
 static const struct {
@@ -3227,12 +3243,13 @@ static const struct {
 
 	[OP_SLEEP] = { "sleep", &op_sleep },
 
-	[OP_STRCAT]  = { "strcat", &op_strcat, },
-	[OP_PRINTI]  = { "printi", &op_printi, },
-	[OP_PRINTS]  = { "prints", &op_prints, },
-	[OP_PRINTP]  = { "printp", &op_printp, },
-	[OP_PRINTAI] = { "printai", &op_printai, },
-	[OP_STRRESULT] = { "strresult", &op_strresult, },
+	[OP_GETS] = { "gets", &op_gets, },
+	[OP_CAT]  = { "cat", &op_cat, },
+	[OP_PUTI] = { "puti", &op_puti, },
+	[OP_PUTS] = { "puts", &op_puts, },
+	[OP_PUTP] = { "putp", &op_putp, },
+	[OP_PUTA] = { "puta", &op_puti, },
+	[OP_RSTR] = { "rstr", &op_rstr, },
 
 	[OP_EXP] = { "exp", &op_exp, },
 }; /* vm_op[] */
@@ -3389,22 +3406,17 @@ int spf_poll(struct spf_resolver *spf, int timeout) {
 static void frepc(int ch, int count, FILE *fp)
 	{ while (count--) fputc(ch, fp); }
 
-static size_t rtrim(char *str) {
-	int p = strlen(str);
-
-	while (--p >= 0 && isspace((unsigned char)str[p]))
-		str[p] = 0;
-
-	return p + 1;
-} /* rtrim() */
-
-static int vm(int argc, char *argv[], const struct spf_env *env) {
+static int vm(const struct spf_env *env, const char *file) {
+	FILE *fp = stdin;
 	struct spf_resolver *spf;
 	struct spf_vm *vm;
 	char line[256], *str;
 	long i;
 	struct vm_sub sub;
 	int code, error;
+
+	if (file)
+		assert((fp = fopen(file, "r")));
 
 	assert((spf = spf_open(env, 0, &error)));
 	vm = &spf->vm;
@@ -3415,8 +3427,8 @@ static int vm(int argc, char *argv[], const struct spf_env *env) {
 
 	sub_init(&sub, vm);
 
-	while (fgets(line, sizeof line, stdin)) {
-		rtrim(line);
+	while (fgets(line, sizeof line, fp)) {
+		spf_rtrim(line, "\r\n");
 
 		switch (line[0]) {
 		case '#': case ';':
@@ -3741,7 +3753,7 @@ int printenv(int argc, char *argv[], const struct spf_env *env) {
 
 
 #define USAGE \
-	"spf [-S:L:O:D:I:P:V:H:C:R:T:vh] ACTION\n" \
+	"spf [-S:L:O:D:I:P:V:H:C:R:T:f:vh] ACTION\n" \
 	"  -S EMAIL   <sender>\n" \
 	"  -L LOCAL   local-part of <sender>\n" \
 	"  -O DOMAIN  domain of <sender>\n" \
@@ -3753,6 +3765,7 @@ int printenv(int argc, char *argv[], const struct spf_env *env) {
 	"  -C IP      SMTP client IP\n" \
 	"  -R DOMAIN  domain name of host performing the check\n" \
 	"  -T TIME    current timestamp\n" \
+	"  -f PATH    path to file (e.g. to load vm instead of stdin)\n" \
 	"  -v         be verbose (use more to increase verboseness)\n" \
 	"  -h         print usage\n" \
 	"\n" \
@@ -3776,6 +3789,7 @@ int main(int argc, char **argv) {
 	extern char *optarg;
 	int opt;
 	struct spf_env env;
+	const char *file = 0;
 
 	memset(&env, 0, sizeof env);
 
@@ -3785,7 +3799,7 @@ int main(int argc, char **argv) {
 	spf_strlcpy(env.r, "unknown", sizeof env.r);
 	spf_itoa(env.t, sizeof env.t, (unsigned)time(0));
 
-	while (-1 != (opt = getopt(argc, argv, "S:L:O:D:I:P:V:H:C:R:T:vh"))) {
+	while (-1 != (opt = getopt(argc, argv, "S:L:O:D:I:P:V:H:C:R:T:f:vh"))) {
 		switch (opt) {
 		case 'S':
 			{
@@ -3836,6 +3850,10 @@ setenv:
 			spf_setenv(&env, opt, optarg);
 
 			break;
+		case 'f':
+			file = optarg;
+
+			break;
 		case 'v':
 			spf_debug++;
 
@@ -3871,7 +3889,7 @@ usage:
 	} else if (!strcmp(argv[0], "fixdn") && argc > 1) {
 		return fixdn(argc - 1, &argv[1]);
 	} else if (!strcmp(argv[0], "vm")) {
-		return vm(argc - 1, &argv[1], &env);
+		return vm(&env, file);
 	} else if (!strcmp(argv[0], "sizes")) {
 		return sizes(argc - 1, &argv[1]);
 	} else if (!strcmp(argv[0], "printenv")) {
