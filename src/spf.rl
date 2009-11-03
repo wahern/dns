@@ -133,8 +133,8 @@ static size_t spf_itoa(char *dst, size_t lim, unsigned i) {
 } /* spf_itoa() */
 
 
-unsigned spf_atoi(const char *src) {
-	unsigned i = 0;
+unsigned long spf_atoi(const char *src) {
+	unsigned long i = 0;
 
 	while (isdigit((unsigned char)*src)) {
 		i *= 10;
@@ -1451,6 +1451,8 @@ enum vm_opcode {
 	OP_REF,		/* 0/1 Decode next sizeof(intptr_t) opts and push as T_REF */
 	OP_MEM,		/* 0/1 Decode next sizeof(intptr_t) ops and push as T_MEM */
 	OP_STR,		/* 0/1 Decode until next NUL, allocate and push as T_MEM. */
+	OP_IN4,		/* 0/1 Decode (struct in_addr) and push as T_MEM. */
+	OP_IN6,		/* 0/1 Decode (struct in6_addr) and push as T_MEM. */
 
 	OP_DEC,		/* 1/1 Decrement S(-1) */
 	OP_INC,		/* 1/1 Increment S(-1) */
@@ -1500,6 +1502,11 @@ enum vm_opcode {
 	OP_PUTP,	/* 1/0 Print `struct dns_packet' */
 	OP_PUTA,	/* 1/0 Print `struct addrinfo' */
 	OP_RSTR,	/* 1/1 Convert to string with spf_strresult() */
+	OP_ATOI,	/* 1/1 Convert to string with atoi() */
+	OP_4TOP,	/* 1/1 Convert (struct in_addr) to string */
+	OP_PTO4,	/* 1/1 Convert string to (struct in_addr) */
+	OP_6TOP,	/* 1/1 Convert (struct in6_addr) to string */
+	OP_PTO6,	/* 1/1 Convert string to (struct in6_addr) */
 
 	OP_INCLUDE,
 	OP_A,
@@ -1747,7 +1754,7 @@ static int vm_opcode(struct spf_vm *vm) {
 
 static unsigned (vm_emit)(struct spf_vm *vm, enum vm_opcode code, intptr_t v_) {
 	uintptr_t v;
-	char *s;
+	void *p;
 	unsigned i, n;
 
 	vm_assert(vm, vm->end < spf_lengthof(vm->code), ENOMEM);
@@ -1774,14 +1781,24 @@ copy:
 
 		return vm->end++;
 	case OP_STR:
-		s = (char *)v_;
-		n = strlen(s) + 1;
-
+		p = (void *)v_;
+		n = strlen(p) + 1;
+embed:
 		vm_assert(vm, spf_lengthof(vm->code) - (vm->end + 1) >= n, ENOMEM);
-		memcpy(&vm->code[++vm->end], s, n);
+		memcpy(&vm->code[++vm->end], p, n);
 		vm->end += n;
 
 		return vm->end - 1;
+	case OP_IN4:
+		p = (void *)v_;
+		n = sizeof (struct in_addr);
+
+		goto embed;
+	case OP_IN6:
+		p = (void *)v_;
+		n = sizeof (struct in6_addr);
+
+		goto embed;
 	default:
 		return vm->end++;
 	} /* switch() */
@@ -1808,6 +1825,8 @@ copy:
 #define REF(sub,v)  sub_emit((sub), OP_REF, (v))
 #define MEM(sub,v)  sub_emit((sub), OP_MEM, (v))
 #define STR(sub,v)  sub_emit((sub), OP_STR, (v))
+#define IN4(sub,v)  sub_emit((sub), OP_IN4, (v))
+#define IN6(sub,v)  sub_emit((sub), OP_IN6, (v))
 #define DEC(sub)    sub_emit((sub), OP_DEC)
 #define INC(sub)    sub_emit((sub), OP_INC)
 #define NEG(sub)    sub_emit((sub), OP_NEG)
@@ -2109,16 +2128,36 @@ static void op_lit(struct spf_vm *vm) {
 
 
 static void op_str(struct spf_vm *vm) {
-	unsigned pc = ++vm->pc;
+	unsigned pe, pc = vm->pc + 1;
 
-	while (pc < spf_lengthof(vm->code) && vm->code[pc])
-		pc++;
+	for (pe = pc; pe < spf_lengthof(vm->code) && vm->code[pe]; pe++)
+		;;
+	pe++;
+	vm_assert(vm, pe < spf_lengthof(vm->code), EFAULT);
+	vm_memdup(vm, &vm->code[pc], pe - pc);
 
-	vm_assert(vm, pc < spf_lengthof(vm->code), EFAULT);
-	vm_memdup(vm, &vm->code[vm->pc], ++pc - vm->pc);
-
-	vm->pc = pc;
+	vm->pc = pe;
 } /* op_str() */
+
+
+static void op_in4(struct spf_vm *vm) {
+	unsigned pc = vm->pc + 1;
+
+	vm_assert(vm, pc + sizeof (struct in_addr) < spf_lengthof(vm->code), EFAULT);
+	vm_memdup(vm, &vm->code[pc], sizeof (struct in_addr));
+
+	vm->pc = pc + sizeof (struct in_addr);
+} /* op_in4() */
+
+
+static void op_in6(struct spf_vm *vm) {
+	unsigned pc = vm->pc + 1;
+
+	vm_assert(vm, pc + sizeof (struct in6_addr) < spf_lengthof(vm->code), EFAULT);
+	vm_memdup(vm, &vm->code[pc], sizeof (struct in6_addr));
+
+	vm->pc = pc + sizeof (struct in6_addr);
+} /* op_in6() */
 
 
 static void op_dec(struct spf_vm *vm) {
@@ -3171,6 +3210,61 @@ static void op_rstr(struct spf_vm *vm) {
 } /* op_rstr() */
 
 
+static void op_atoi(struct spf_vm *vm) {
+	unsigned long i;
+
+	i = spf_atoi((char *)vm_peek(vm, -1, T_REF|T_MEM));
+	vm_pop(vm, T_REF|T_MEM);
+	vm_push(vm, T_INT, i);
+
+	vm->pc++;
+} /* op_atoi() */
+
+
+static void op_4top(struct spf_vm *vm) {
+	char sbuf[INET_ADDRSTRLEN + 1];
+
+	spf_4top(sbuf, sizeof sbuf, (void *)vm_peek(vm, -1, T_REF|T_MEM));
+	vm_pop(vm, T_REF|T_MEM);
+	vm_strdup(vm, sbuf);
+
+	vm->pc++;
+} /* op_4top() */
+
+
+static void op_pto4(struct spf_vm *vm) {
+	struct in_addr in;
+
+	spf_pto4(&in, (void *)vm_peek(vm, -1, T_REF|T_MEM));
+	vm_pop(vm, T_REF|T_MEM);
+	vm_memdup(vm, &in, sizeof in);
+
+	vm->pc++;
+} /* op_pto4() */
+
+
+static void op_6top(struct spf_vm *vm) {
+	char sbuf[INET6_ADDRSTRLEN + 1];
+
+	spf_6top(sbuf, sizeof sbuf, (void *)vm_peek(vm, -1, T_REF|T_MEM), SPF_6TOP_MIXED);
+	vm_pop(vm, T_REF|T_MEM);
+	vm_strdup(vm, sbuf);
+
+	vm->pc++;
+} /* op_6top() */
+
+
+static void op_pto6(struct spf_vm *vm) {
+	struct in6_addr in;
+
+	spf_pto6(&in, (void *)vm_peek(vm, -1, T_REF|T_MEM));
+	vm_pop(vm, T_REF|T_MEM);
+	vm_memdup(vm, &in, sizeof in);
+
+	vm->pc++;
+} /* op_pto6() */
+
+
 static const struct {
 	const char *name;
 	void (*exec)(struct spf_vm *);
@@ -3197,6 +3291,8 @@ static const struct {
 	[OP_REF]   = { "ref", &op_lit, },
 	[OP_MEM]   = { "mem", &op_lit, },
 	[OP_STR]   = { "str", &op_str, },
+	[OP_IN4]   = { "in4", &op_in4, },
+	[OP_IN6]   = { "in6", &op_in6, },
 
 	[OP_DEC]   = { "dec", &op_dec, },
 	[OP_INC]   = { "inc", &op_inc, },
@@ -3253,6 +3349,11 @@ static const struct {
 	[OP_PUTP] = { "putp", &op_putp, },
 	[OP_PUTA] = { "puta", &op_puti, },
 	[OP_RSTR] = { "rstr", &op_rstr, },
+	[OP_ATOI] = { "atoi", &op_atoi, },
+	[OP_4TOP] = { "4top", &op_4top, },
+	[OP_PTO4] = { "pto4", &op_pto4, },
+	[OP_6TOP] = { "6top", &op_6top, },
+	[OP_PTO6] = { "pto6", &op_pto6, },
 
 	[OP_EXP] = { "exp", &op_exp, },
 }; /* vm_op[] */
@@ -3413,7 +3514,7 @@ static int vm(const struct spf_env *env, const char *file) {
 	FILE *fp = stdin;
 	struct spf_resolver *spf;
 	struct spf_vm *vm;
-	char line[256], *str;
+	char line[256], *str, *eos;
 	long i;
 	struct vm_sub sub;
 	int code, error;
@@ -3439,7 +3540,10 @@ static int vm(const struct spf_env *env, const char *file) {
 		case '-': case '+':
 		case '0': case '1': case '2': case '3': case '4':
 		case '5': case '6': case '7': case '8': case '9':
-			i = labs(strtol(line, 0, 0));
+			i = labs(strtol(line, &eos, 0));
+
+			if (isalpha((unsigned char)*eos))
+				goto strcode;
 
 			if (i < 4)
 				sub_emit(&sub, OP_ZERO + i);
@@ -3477,6 +3581,7 @@ static int vm(const struct spf_env *env, const char *file) {
 
 			break;
 		default:
+strcode:
 			for (code = 0; code < spf_lengthof(vm_op); code++) {
 				if (!vm_op[code].name)
 					continue;
