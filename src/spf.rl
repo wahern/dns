@@ -3798,8 +3798,7 @@ int main(int argc, char **argv) {
 
 	spf_strlcpy(env.p, "unknown", sizeof env.p);
 	spf_strlcpy(env.v, "in-addr", sizeof env.v);
-	gethostname(env.h, sizeof env.h);
-	spf_strlcpy(env.r, "unknown", sizeof env.r);
+	gethostname(env.r, sizeof env.r);
 	spf_itoa(env.t, sizeof env.t, (unsigned)time(0));
 
 	while (-1 != (opt = getopt(argc, argv, "S:L:O:D:I:P:V:H:C:R:T:f:vh"))) {
@@ -3820,6 +3819,9 @@ int main(int argc, char **argv) {
 
 					if (!*env.d)
 						spf_strlcpy(env.d, argv[1], sizeof env.d);
+
+					if (!*env.h)
+						spf_strlcpy(env.h, argv[1], sizeof env.h);
 				}
 			}
 
