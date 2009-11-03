@@ -3110,7 +3110,10 @@ static void op_cat(struct spf_vm *vm) {
 
 
 static void op_puti(struct spf_vm *vm) {
-	printf("%ld\n", (long)vm_pop(vm, T_ANY));
+	if ((T_REF|T_MEM) & vm_typeof(vm, -1))
+		printf("%p\n", (void *)vm_pop(vm, (T_REF|T_MEM)));
+	else
+		printf("%ld\n", (long)vm_pop(vm, T_ANY));
 	vm->pc++;
 } /* op_puti() */
 
@@ -3415,7 +3418,7 @@ static int vm(const struct spf_env *env, const char *file) {
 	struct vm_sub sub;
 	int code, error;
 
-	if (file)
+	if (file && strcmp(file, "-"))
 		assert((fp = fopen(file, "r")));
 
 	assert((spf = spf_open(env, 0, &error)));
@@ -3871,8 +3874,12 @@ usage:
 	argc -= optind;
 	argv += optind;
 
-	if (!argc)
+	if (!argc) {
+		if (file)
+			goto vm;
+
 		goto usage;
+	}
 
 	if (!strcmp(argv[0], "check")) {
 		return check(argc-1, &argv[1], &env);
@@ -3889,7 +3896,7 @@ usage:
 	} else if (!strcmp(argv[0], "fixdn") && argc > 1) {
 		return fixdn(argc - 1, &argv[1]);
 	} else if (!strcmp(argv[0], "vm")) {
-		return vm(&env, file);
+vm:		return vm(&env, file);
 	} else if (!strcmp(argv[0], "sizes")) {
 		return sizes(argc - 1, &argv[1]);
 	} else if (!strcmp(argv[0], "printenv")) {
