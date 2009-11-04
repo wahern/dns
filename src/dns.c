@@ -3181,6 +3181,57 @@ static enum dns_resconf_keyword dns_resconf_keyword(const char *word) {
 	return -1;
 } /* dns_resconf_keyword() */
 
+
+/** OpenBSD-style "[1.2.3.4]:53" nameserver syntax */
+static int dns_resconf_pton(struct sockaddr_storage *ss, const char *src) {
+	struct { char buf[128], *p; } addr = { "", addr.buf };
+	unsigned short port = 0;
+	int ch, af = AF_INET;
+
+	while ((ch = *src++)) {
+		switch (ch) {
+		case ' ':
+			/* FALL THROUGH */
+		case '\t':
+			break;
+		case '[':
+			break;
+		case ']':
+			while ((ch = *src++)) {
+				if (isdigit((unsigned char)ch)) {
+					port *= 10;
+					port += ch - '0';
+				}
+			}
+
+			goto inet;
+		case ':':
+			af = AF_INET6;
+
+			/* FALL THROUGH */
+		default:
+			if (addr.p < endof(addr.buf) - 1)
+				*addr.p++ = ch;
+
+			break;
+		} /* switch() */
+	} /* while() */
+inet:
+
+	switch (dns_inet_pton(af, addr.buf, dns_sa_addr(af, ss))) {
+	case -1:
+		return errno;
+	case 0:
+		return EINVAL;
+	} /* switch() */
+
+	port = (!port)? 53 : port;
+	*dns_sa_port(af, ss) = htons(port);
+	dns_sa_family(ss) = af;
+
+	return 0;
+} /* dns_resconf_pton() */
+
 #define dns_resconf_issep(ch)	(isspace(ch) || (ch) == ',')
 #define dns_resconf_iscom(ch)	((ch) == '#' || (ch) == ';')
 
@@ -3188,8 +3239,7 @@ int dns_resconf_loadfile(struct dns_resolv_conf *resconf, FILE *fp) {
 	unsigned sa_count	= 0;
 	char words[6][DNS_D_MAXNAME + 1];
 	unsigned wp, wc, i, j, n;
-	int ch, af;
-	struct sockaddr *sa;
+	int ch, error;
 
 	rewind(fp);
 
@@ -3230,14 +3280,8 @@ skip:
 			if (sa_count >= lengthof(resconf->nameserver))
 				continue;
 
-			af	= (strchr(words[1], ':'))? AF_INET6 : AF_INET;
-			sa	= (struct sockaddr *)&resconf->nameserver[sa_count];
-
-			if (1 != dns_inet_pton(af, words[1], dns_sa_addr(af, sa)))
+			if ((error = dns_resconf_pton(&resconf->nameserver[sa_count], words[1])))
 				continue;
-
-			*dns_sa_port(af, sa)	= htons(53);
-			sa->sa_family		= af;
 
 			sa_count++;
 
@@ -3434,10 +3478,15 @@ int dns_resconf_dump(struct dns_resolv_conf *resconf, FILE *fp) {
 
 	for (i = 0; i < lengthof(resconf->nameserver) && (af = resconf->nameserver[i].ss_family) != AF_UNSPEC; i++) {
 		char addr[INET6_ADDRSTRLEN + 1]	= "[INVALID]";
+		unsigned short port;
 
 		dns_inet_ntop(af, dns_sa_addr(af, &resconf->nameserver[i]), addr, sizeof addr);
+		port = ntohs(*dns_sa_port(af, &resconf->nameserver[i]));
 
-		fprintf(fp, "nameserver %s\n", addr);
+		if (port == 53)
+			fprintf(fp, "nameserver %s\n", addr);
+		else
+			fprintf(fp, "nameserver [%s]:%hu\n", addr, port);
 	}
 
 
@@ -3856,6 +3905,30 @@ error:
 
 	return 0;
 } /* dns_hints_query() */
+
+
+/** ugly hack to support specifying ports other than 53 in resolv.conf. */
+static unsigned short dns_hints_port(struct dns_hints *hints, int af, void *addr) {
+	struct dns_hints_soa *soa;
+	unsigned short port;
+	unsigned i;
+
+	for (soa = hints->head; soa; soa = soa->next) {
+		for (i = 0; i < soa->count; i++) {
+			if (af != soa->addrs[i].ss.ss_family)
+				continue;
+
+			if (memcmp(addr, dns_sa_addr(af, &soa->addrs[i].ss), (af == AF_INET6)? sizeof (struct in6_addr) : sizeof (struct in_addr)))
+				continue;
+
+			port = *dns_sa_port(af, &soa->addrs[i].ss);
+
+			return (port)? port : htons(53);
+		}
+	}
+
+	return htons(53);
+} /* dns_hints_port() */
 
 
 int dns_hints_dump(struct dns_hints *hints, FILE *fp) {
@@ -5051,10 +5124,14 @@ exec:
 		}
 
 		sin.sin_family	= AF_INET;
-		sin.sin_port	= htons(53);
 
 		if ((error = dns_a_parse((struct dns_a *)&sin.sin_addr, &rr, F->hints)))
 			goto error;
+
+		if (R->sp == 0)
+			sin.sin_port = dns_hints_port(R->hints, AF_INET, (struct sockaddr *)&sin.sin_addr);
+		else
+			sin.sin_port = htons(53);
 
 		if (DNS_TRACE) {
 			char addr[INET_ADDRSTRLEN + 1];
