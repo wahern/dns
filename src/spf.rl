@@ -37,7 +37,7 @@
 
 #include <time.h>	/* time(3) */
 
-#include <setjmp.h>	/* jmp_buf setjmp(3) longjmp(3) */
+#include <setjmp.h>	/* jmp_buf _setjmp(3) _longjmp(3) */
 
 #include <sys/socket.h>	/* AF_INET AF_INET6 */
 
@@ -1460,7 +1460,8 @@ enum vm_opcode {
 	OP_ADD,		/* 2/1 Push S(-2) + S(-1). */
 	OP_NOT,		/* 1/1 Logically Negate S(-1) (changes type to T_INT)  */
 
-	OP_EQ,		/* 2/1 Push S(-1) == S(-2) */
+	OP_EQ,		/* 2/1 Push S(-2) == S(-1) */
+	OP_LT,		/* 2/1 Push S(-2) < S(-1) */
 
 	OP_JMP,		/* 2/0 If S(-2) is non-zero, jump S(-1) instruction */
 	OP_GOTO,	/* 2/0 If S(-2) is non-zero, goto I(S(-1)) */
@@ -1496,6 +1497,8 @@ enum vm_opcode {
 	OP_SLEEP,	/* 1/0 Sleep */
 
 	OP_CAT,		/* 2/1 Concatenate into string */
+	OP_CMP,		/* 2/1 strcmp() */
+	OP_LC,          /* 1/1 strtolower() */
 	OP_GETS,	/* 0/1 Push line from stdin */
 	OP_PUTI,	/* 1/0 Print integer */
 	OP_PUTS,	/* 1/0 Print string */
@@ -1570,7 +1573,7 @@ struct spf_resolver {
 
 static void vm_throw() __attribute__((__noreturn__));
 static void vm_throw(struct spf_vm *vm, int error) {
-	longjmp(vm->trap, (error)? error : EINVAL);
+	_longjmp(vm->trap, (error)? error : EINVAL);
 } /* vm_throw() */
 
 /*
@@ -1728,7 +1731,7 @@ static intptr_t vm_memdup(struct spf_vm *vm, const void *p, size_t len) {
 
 static intptr_t vm_peek(struct spf_vm *vm, int p, enum vm_type t) {
 	p = vm_indexof(vm, p);
-	vm_assert(vm, t & vm_typeof(vm, p), EINVAL);
+	vm_assert(vm, (t & vm->type[p]), EINVAL);
 	return vm->stack[p];
 } /* vm_peek() */
 
@@ -1833,6 +1836,7 @@ embed:
 #define ADD(sub)    sub_emit((sub), OP_ADD)
 #define NOT(sub)    sub_emit((sub), OP_NOT)
 #define EQ(sub)     sub_emit((sub), OP_EQ)
+#define LT(sub)     sub_emit((sub), OP_LT)
 #define POP(sub)    sub_emit((sub), OP_POP)
 #define DUP(sub)    sub_emit((sub), OP_DUP)
 #define LOAD(sub)   sub_emit((sub), OP_LOAD)
@@ -1854,6 +1858,8 @@ embed:
 #define FCRD(sub)   sub_emit((sub), OP_FCRD)
 #define FCRDx(sub)  sub_emit((sub), OP_FCRDx)
 #define CAT(sub)    sub_emit((sub), OP_CAT)
+#define CMP(sub)    sub_emit((sub), OP_CMP)
+#define LC(sub)     sub_emit((sub), OP_LC)
 #define PUTI(sub)   sub_emit((sub), OP_PUTI)
 #define PUTS(sub)   sub_emit((sub), OP_PUTS)
 #define PUTP(sub)   sub_emit((sub), OP_PUTP)
@@ -2116,10 +2122,11 @@ static void op_lit(struct spf_vm *vm) {
 		vm_throw(vm, EINVAL);
 	} /* switch () */
 
+	vm_assert(vm, vm->pc + n < vm->end, EFAULT);
+
 	for (i = 0; i < n; i++) {
-		vm_assert(vm, ++vm->pc < vm->end, EFAULT);
 		v <<= 8;
-		v |= 0xff & vm->code[vm->pc];
+		v |= 0xff & vm->code[++vm->pc];
 	}
 
 	vm_push(vm, t, (intptr_t)v);
@@ -2200,6 +2207,22 @@ static void op_eq(struct spf_vm *vm) {
 
 	vm->pc++;
 } /* op_eq() */
+
+
+static void op_lt(struct spf_vm *vm) {
+	enum vm_type t = vm_typeof(vm, -1);
+	intptr_t a, b;
+
+	if ((T_REF|T_MEM) & t)
+		t = T_REF|T_MEM;
+
+	b = vm_pop(vm, t);
+	a = vm_pop(vm, t);
+
+	vm_push(vm, T_INT, a < b);
+
+	vm->pc++;
+} /* op_lt() */
 
 
 static void op_submit(struct spf_vm *vm) {
@@ -3117,9 +3140,13 @@ static void op_sleep(struct spf_vm *vm) {
 static void op_gets(struct spf_vm *vm) {
 	char sbuf[1024];
 
-	vm_assert(vm, fgets(sbuf, sizeof sbuf, stdin), ((ferror(stdin))? errno : EINVAL));
-	spf_rtrim(sbuf, "\r\n");
-	vm_strdup(vm, sbuf);
+	if (fgets(sbuf, sizeof sbuf, stdin)) {
+		spf_rtrim(sbuf, "\r\n");
+		vm_strdup(vm, sbuf);
+	} else if (feof(stdin)) {
+		vm_push(vm, T_REF, 0);
+	} else
+		vm_throw(vm, errno);
 
 	vm->pc++;
 } /* op_gets() */
@@ -3146,6 +3173,28 @@ static void op_cat(struct spf_vm *vm) {
 
 	vm->pc++;
 } /* op_cat() */
+
+
+static void op_cmp(struct spf_vm *vm) {
+	char *a, *b;
+	int cmp;
+	a = (char *)vm_peek(vm, -2, T_REF|T_MEM);
+	b = (char *)vm_peek(vm, -1, T_REF|T_MEM);
+	cmp = strcmp(a, b);
+	vm_discard(vm, 2);
+	vm_push(vm, T_INT, cmp);
+	vm->pc++;
+} /* op_cmp() */
+
+
+static void op_lc(struct spf_vm *vm) {
+	char *s;
+	s = (char *)vm_peek(vm, -1, T_REF|T_MEM);
+	spf_tolower((char *)vm_strdup(vm, s));
+	vm_swap(vm);
+	vm_pop(vm, T_REF|T_MEM);
+	vm->pc++;
+} /* op_lc() */
 
 
 static void op_puti(struct spf_vm *vm) {
@@ -3301,6 +3350,7 @@ static const struct {
 	[OP_NOT]   = { "not", &op_not, },
 
 	[OP_EQ]   = { "eq", &op_eq, },
+	[OP_LT]   = { "lt", &op_lt, },
 
 	[OP_JMP]   = { "jmp", &op_jmp, },
 	[OP_GOTO]  = { "goto", &op_goto, },
@@ -3342,8 +3392,10 @@ static const struct {
 
 	[OP_SLEEP] = { "sleep", &op_sleep },
 
-	[OP_GETS] = { "gets", &op_gets, },
 	[OP_CAT]  = { "cat", &op_cat, },
+	[OP_CMP]  = { "cmp", &op_cmp, },
+	[OP_LC]   = { "lc", &op_lc, },
+	[OP_GETS] = { "gets", &op_gets, },
 	[OP_PUTI] = { "puti", &op_puti, },
 	[OP_PUTS] = { "puts", &op_puts, },
 	[OP_PUTP] = { "putp", &op_putp, },
@@ -3363,7 +3415,7 @@ static int vm_exec(struct spf_vm *vm) {
 	enum vm_opcode code;
 	int error;
 
-	if ((error = setjmp(vm->trap))) {
+	if ((error = _setjmp(vm->trap))) {
 		SPF_SAY("trap: %s", spf_strerror(error));
 		return error;
 	}
@@ -3407,7 +3459,7 @@ struct spf_resolver *spf_open(const struct spf_env *env, const struct spf_limits
 
 	dns_p_init(&spf->fcrd.ptr, sizeof spf->fcrd.buf);
 
-	if ((error = setjmp(spf->vm.trap)))
+	if ((error = _setjmp(spf->vm.trap)))
 		goto error;
 
 	vm_emit(&spf->vm, OP_STR, (intptr_t)"%{d}");
@@ -3448,7 +3500,7 @@ int spf_check(struct spf_resolver *spf) {
 	if ((error = vm_exec(&spf->vm)))
 		return error;
 
-	if ((error = setjmp(spf->vm.trap)))
+	if ((error = _setjmp(spf->vm.trap)))
 		return error;
 
 	spf->result = vm_peek(&spf->vm, -1, T_INT);
@@ -3511,6 +3563,20 @@ static void frepc(int ch, int count, FILE *fp)
 	{ while (count--) fputc(ch, fp); }
 
 static int vm(const struct spf_env *env, const char *file) {
+#define VM_C(name) { #name, name }
+	static const struct { const char *name; int value; } ctable[] = {
+		VM_C(AF_INET), VM_C(AF_INET6),
+		VM_C(SPF_NONE), VM_C(SPF_NEUTRAL), VM_C(SPF_PASS),
+		VM_C(SPF_FAIL), VM_C(SPF_SOFTFAIL), VM_C(SPF_TEMPERROR),
+		VM_C(SPF_PERMERROR),
+		VM_C(DNS_S_QD), VM_C(DNS_S_AN), VM_C(DNS_S_NS),
+		VM_C(DNS_S_AR), VM_C(DNS_S_ALL),
+		VM_C(DNS_C_IN), VM_C(DNS_C_ANY),
+		VM_C(DNS_T_A), VM_C(DNS_T_NS), VM_C(DNS_T_CNAME),
+		VM_C(DNS_T_SOA), VM_C(DNS_T_PTR), VM_C(DNS_T_MX),
+		VM_C(DNS_T_TXT), VM_C(DNS_T_AAAA), VM_C(DNS_T_SRV),
+		VM_C(DNS_T_SPF), VM_C(DNS_T_ALL),
+	};
 	FILE *fp = stdin;
 	struct spf_resolver *spf;
 	struct spf_vm *vm;
@@ -3526,7 +3592,7 @@ static int vm(const struct spf_env *env, const char *file) {
 	vm = &spf->vm;
 	vm->end = 0;
 
-	if ((error = setjmp(spf->vm.trap)))
+	if ((error = _setjmp(spf->vm.trap)))
 		panic("vm_exec: %s", spf_strerror(error));
 
 	sub_init(&sub, vm);
@@ -3537,14 +3603,28 @@ static int vm(const struct spf_env *env, const char *file) {
 		switch (line[0]) {
 		case '#': case ';':
 			break;
+		case '$':
+			spf_rtrim(line, " \t");
+
+			for (i = 0; i < spf_lengthof(ctable); i++) {
+				if (!strcasecmp(&line[1], ctable[i].name))
+					break;
+			}
+
+			if (i >= spf_lengthof(ctable))
+				panic("%s: unknown constant", line);
+
+			i = ctable[i].value;
+
+			goto number;
 		case '-': case '+':
 		case '0': case '1': case '2': case '3': case '4':
 		case '5': case '6': case '7': case '8': case '9':
 			i = labs(strtol(line, &eos, 0));
 
 			if (isalpha((unsigned char)*eos))
-				goto strcode;
-
+				goto search;
+number:
 			if (i < 4)
 				sub_emit(&sub, OP_ZERO + i);
 			else if (i < (1U<<8))
@@ -3581,14 +3661,19 @@ static int vm(const struct spf_env *env, const char *file) {
 
 			break;
 		default:
-strcode:
+search:
+			spf_rtrim(line, " \t");
+
 			for (code = 0; code < spf_lengthof(vm_op); code++) {
 				if (!vm_op[code].name)
 					continue;
-
-				if (!strcasecmp(line, vm_op[code].name))
-					sub_emit(&sub, code);
+				if (strcasecmp(line, vm_op[code].name))
+					continue;
+				sub_emit(&sub, code);
+				break;
 			}
+
+			SPF_SAY("%s: unknown opcode", line);
 		}
 	} /* while() */
 
