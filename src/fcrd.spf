@@ -34,12 +34,12 @@ cat
 cat
 puts
 ## query
-12
+$DNS_T_PTR
 submit
 fetch
 "
-two
-12
+$DNS_S_AN
+$DNS_T_PTR
 grep
 ## OUTER LOOP
 L0
@@ -60,12 +60,12 @@ cat
 cat
 puts
 ## query
-1
+$DNS_T_A
 submit
 fetch
 "
-2
-1
+$DNS_S_AN
+$DNS_T_A
 grep
 ## INNER LOOP
 L1
