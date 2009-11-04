@@ -66,7 +66,7 @@ int spf_debug = 0;
 #define SPF_DEBUG spf_debug
 
 #define SPF_SAY_(fmt, ...) \
-	do { if (SPF_DEBUG > 0) fprintf(stderr, fmt "%.1s", __func__, __LINE__, __VA_ARGS__); } while (0)
+	do { if (spf_unlikely(SPF_DEBUG > 0)) fprintf(stderr, fmt "%.1s", __func__, __LINE__, __VA_ARGS__); } while (0)
 #define SPF_SAY(...) SPF_SAY_(">>>> (%s:%d) " __VA_ARGS__, "\n")
 #define SPF_HAI SPF_SAY("HAI")
 
@@ -85,6 +85,14 @@ int spf_debug = 0;
  * M I S C .  M A C R O S
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+#if __GNUC__ >= 3
+#define spf_likely(e)	__builtin_expect((e), 1)
+#define spf_unlikely(e)	__builtin_expect((e), 0)
+#else
+#define spf_likely(e)	(e)
+#define spf_unlikely(e)	(e)
+#endif
 
 /** static assert */
 #define spf_verify_true(R) (!!sizeof (struct { unsigned int constraint: (R)? 1 : -1; }))
@@ -1585,20 +1593,20 @@ static void vm_throw(struct spf_vm *vm, int error) {
  * 	vm_assert(vm, (p = malloc()), errno)
  */
 #define vm_assert(vm, cond, error) do { \
-	if (!(cond)) { \
+	if (spf_unlikely(!(cond))) { \
 		SPF_SAY("fail: %s", SPF_STRINGIFY(cond)); \
 		vm_throw((vm), (error)); \
 	} \
 } while (0)
 
 
-static void vm_extend(struct spf_vm *vm, unsigned n) {
+static inline void vm_extend(struct spf_vm *vm, unsigned n) {
 	vm_assert(vm, spf_lengthof(vm->stack) - vm->sp >= n, EFAULT);
 } /* vm_extend() */
 
 
-static int vm_indexof(struct spf_vm *vm, int p) {
-	if (p < 0)
+static inline int vm_indexof(struct spf_vm *vm, int p) {
+	if (spf_likely(p < 0))
 		p = vm->sp + p;
 
 	vm_assert(vm, p >= 0 && p < vm->sp, EFAULT);
@@ -1607,7 +1615,7 @@ static int vm_indexof(struct spf_vm *vm, int p) {
 } /* vm_indexof() */
 
 
-static enum vm_type vm_typeof(struct spf_vm *vm, int p) {
+static inline enum vm_type vm_typeof(struct spf_vm *vm, int p) {
 	return vm->type[vm_indexof(vm, p)];
 } /* vm_typeof() */
 
@@ -1628,7 +1636,7 @@ static void t_free(struct spf_vm *vm, enum vm_type t, intptr_t v) {
 } /* t_free() */
 
 
-static intptr_t vm_pop(struct spf_vm *vm, enum vm_type t) {
+static inline intptr_t vm_pop(struct spf_vm *vm, enum vm_type t) {
 	intptr_t v;
 	vm_assert(vm, vm->sp, EFAULT);
 	vm->sp--;
@@ -1649,7 +1657,7 @@ static void vm_discard(struct spf_vm *vm, unsigned n) {
 } /* vm_discard() */
 
 
-static intptr_t vm_push(struct spf_vm *vm, enum vm_type t, intptr_t v) {
+static inline intptr_t vm_push(struct spf_vm *vm, enum vm_type t, intptr_t v) {
 	vm_assert(vm, vm->sp < spf_lengthof(vm->stack), ENOMEM);
 
 	vm->type[vm->sp]  = t;
@@ -1729,14 +1737,14 @@ static intptr_t vm_memdup(struct spf_vm *vm, const void *p, size_t len) {
 } /* vm_memdup() */
 
 
-static intptr_t vm_peek(struct spf_vm *vm, int p, enum vm_type t) {
+static inline intptr_t vm_peek(struct spf_vm *vm, int p, enum vm_type t) {
 	p = vm_indexof(vm, p);
 	vm_assert(vm, (t & vm->type[p]), EINVAL);
 	return vm->stack[p];
 } /* vm_peek() */
 
 
-static intptr_t vm_poke(struct spf_vm *vm, int p, enum vm_type t, intptr_t v) {
+static inline intptr_t vm_poke(struct spf_vm *vm, int p, enum vm_type t, intptr_t v) {
 	p = vm_indexof(vm, p);
 	t_free(vm, vm->type[p], vm->stack[p]);
 	vm->type[p]  = t;
@@ -1745,7 +1753,7 @@ static intptr_t vm_poke(struct spf_vm *vm, int p, enum vm_type t, intptr_t v) {
 } /* vm_poke() */
 
 
-static int vm_opcode(struct spf_vm *vm) {
+static inline int vm_opcode(struct spf_vm *vm) {
 	vm_assert(vm, vm->pc < spf_lengthof(vm->code), EFAULT);
 
 	return vm->code[vm->pc];
@@ -3421,7 +3429,7 @@ static int vm_exec(struct spf_vm *vm) {
 	}
 
 	while ((code = vm_opcode(vm))) {
-		if (SPF_DEBUG >= 2) {
+		if (spf_unlikely(SPF_DEBUG >= 2)) {
 			SPF_SAY("code: %s", vm_op[code].name);
 		}
 		vm_op[code].exec(vm);
