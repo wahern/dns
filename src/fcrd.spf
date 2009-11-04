@@ -4,16 +4,13 @@
 # handy iterator addrinfo/nextent ops, and of course not using the actual
 # fcrd/fcrdx ops).
 #
-# However, this stops short of actual "confirmation" because it doesn't
-# compare the starting IP address with the terminal IP address (no cmp
-# operation yet).
-#
 
 # Using a hotmail.com address which had--as of the time this was
 # written--multiple PTR records. Multiple PTR records is illegal, but
 # Microsoft tends not to care about such things. (They also do illegal CNAME
 # chaining, even with their MX records!)
 "64.4.32.7
+dup
 'i
 setenv
 "in-addr
@@ -77,12 +74,27 @@ J2
 #
 # Print PTR ([-3]) and A records ([-1])
 #
--3
+dup
+-4
 load
 qname
-" <-> 
+" -- 
 cat
 swap
+cat
+swap
+0
+load
+cmp
+not
+not
+J4
+" (CONFIRMED)
+true
+J5
+L4
+"
+L5
 cat
 puts
 ## JUMP TO INNER LOOP
@@ -101,6 +113,7 @@ J0
 # HALT
 #
 L7
+pop
 pop
 pop
 pop
