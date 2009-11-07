@@ -3407,7 +3407,7 @@ static const struct {
 	[OP_PUTI] = { "puti", &op_puti, },
 	[OP_PUTS] = { "puts", &op_puts, },
 	[OP_PUTP] = { "putp", &op_putp, },
-	[OP_PUTA] = { "puta", &op_puti, },
+	[OP_PUTA] = { "puta", &op_puta, },
 	[OP_RSTR] = { "rstr", &op_rstr, },
 	[OP_ATOI] = { "atoi", &op_atoi, },
 	[OP_4TOP] = { "4top", &op_4top, },
