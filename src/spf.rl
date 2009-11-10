@@ -508,7 +508,7 @@ struct in6_addr *spf_pto6(struct in6_addr *ip, const char *src) {
 					group[i] = spf_xtoi(part[i]);
 				}
 			} else {
-				for (j = 7, k = count - 1; j > i && k > 0; j--, k--) {
+				for (j = 7, k = count - 1; j > i && k > i; j--, k--) {
 					if (strchr(part[k], '.')) {
 						spf_pto4(&ip4, part[k]);
 
