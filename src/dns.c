@@ -3029,7 +3029,7 @@ error:
 
 struct dns_resolv_conf *dns_resconf_open(int *error) {
 	static const struct dns_resolv_conf resconf_initializer
-		= { .lookup = "bf", .options = { .ndots = 1, .timeout = 5, .attempts = 2, },
+		= { .lookup = "bf", .options = { .ndots = 1, .timeout = 5, .attempts = 2, .tcp = DNS_RESCONF_TCP_ENABLE, },
 		    .iface = { .ss_family = AF_INET }, };
 	struct dns_resolv_conf *resconf;
 
@@ -3144,7 +3144,14 @@ enum dns_resconf_keyword {
 	DNS_RESCONF_ROTATE,
 	DNS_RESCONF_RECURSE,
 	DNS_RESCONF_SMART,
+	DNS_RESCONF_TCP,
+	DNS_RESCONF_TCPx,
 	DNS_RESCONF_INTERFACE,
+	DNS_RESCONF_ZERO,
+	DNS_RESCONF_ONE,
+	DNS_RESCONF_ENABLE,
+	DNS_RESCONF_ONLY,
+	DNS_RESCONF_DISABLE,
 }; /* enum dns_resconf_keyword */ 
 
 static enum dns_resconf_keyword dns_resconf_keyword(const char *word) {
@@ -3160,7 +3167,13 @@ static enum dns_resconf_keyword dns_resconf_keyword(const char *word) {
 		[DNS_RESCONF_ROTATE]		= "rotate",
 		[DNS_RESCONF_RECURSE]		= "recurse",
 		[DNS_RESCONF_SMART]		= "smart",
+		[DNS_RESCONF_TCP]		= "tcp",
 		[DNS_RESCONF_INTERFACE]		= "interface",
+		[DNS_RESCONF_ZERO]		= "0",
+		[DNS_RESCONF_ONE]		= "1",
+		[DNS_RESCONF_ENABLE]		= "enable",
+		[DNS_RESCONF_ONLY]		= "only",
+		[DNS_RESCONF_DISABLE]		= "disable",
 	};
 	unsigned i;
 
@@ -3177,6 +3190,9 @@ static enum dns_resconf_keyword dns_resconf_keyword(const char *word) {
 
 	if (0 == strncasecmp(word, "attempts:", sizeof "attempts:" - 1))
 		return DNS_RESCONF_ATTEMPTS;
+
+	if (0 == strncasecmp(word, "tcp:", sizeof "tcp:" - 1))
+		return DNS_RESCONF_TCPx;
 
 	return -1;
 } /* dns_resconf_keyword() */
@@ -3355,6 +3371,31 @@ skip:
 					break;
 				case DNS_RESCONF_SMART:
 					resconf->options.smart		= 1;
+
+					break;
+				case DNS_RESCONF_TCP:
+					resconf->options.tcp		= DNS_RESCONF_TCP_ONLY;
+
+					break;
+				case DNS_RESCONF_TCPx:
+					switch (dns_resconf_keyword(&words[i][sizeof "tcp:" - 1])) {
+					case DNS_RESCONF_ENABLE:
+						resconf->options.tcp	= DNS_RESCONF_TCP_ENABLE;
+
+						break;
+					case DNS_RESCONF_ONE:
+					case DNS_RESCONF_ONLY:
+						resconf->options.tcp	= DNS_RESCONF_TCP_ONLY;
+
+						break;
+					case DNS_RESCONF_ZERO:
+					case DNS_RESCONF_DISABLE:
+						resconf->options.tcp	= DNS_RESCONF_TCP_DISABLE;
+
+						break;
+					default:
+						break;
+					} /* switch() */
 
 					break;
 				default:
@@ -4673,11 +4714,22 @@ struct dns_resolver {
 }; /* struct dns_resolver */
 
 
+static int dns_res_tcp2type(int tcp) {
+	switch (tcp) {
+	case DNS_RESCONF_TCP_ONLY:
+		return SOCK_STREAM;
+	case DNS_RESCONF_TCP_DISABLE:
+		return SOCK_DGRAM;
+	default:
+		return 0;
+	}
+} /* dns_res_tcp2type() */
+
 struct dns_resolver *dns_res_open(struct dns_resolv_conf *resconf, struct dns_hosts *hosts, struct dns_hints *hints, int *error_) {
 	static const struct dns_resolver R_initializer
 		= { .refcount = 1, };
 	struct dns_resolver *R	= 0;
-	int error;
+	int type, error;
 
 	/*
 	 * Grab ref count early because the caller may have passed us a mortal
@@ -4703,8 +4755,8 @@ struct dns_resolver *dns_res_open(struct dns_resolv_conf *resconf, struct dns_ho
 		goto syerr;
 
 	*R	= R_initializer;
-
-	if (!dns_so_init(&R->so, (struct sockaddr *)&resconf->iface, 0, &error))
+	type	= dns_res_tcp2type(resconf->options.tcp);
+	if (!dns_so_init(&R->so, (struct sockaddr *)&resconf->iface, type, &error))
 		goto error;
 
 	R->resconf	= resconf;

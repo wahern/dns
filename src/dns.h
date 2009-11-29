@@ -651,6 +651,12 @@ struct dns_resolv_conf {
 		_Bool recurse;
 
 		_Bool smart;
+
+		enum {
+			DNS_RESCONF_TCP_ENABLE,
+			DNS_RESCONF_TCP_ONLY,
+			DNS_RESCONF_TCP_DISABLE,
+		} tcp;
 	} options;
 
 	struct sockaddr_storage iface;
