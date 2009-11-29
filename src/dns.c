@@ -4093,7 +4093,7 @@ struct dns_socket {
 
 /*
  * NOTE: Actual closure delayed so that kqueue(2) and epoll(2) callers have
- * a chance to recognize a state change after installing a persistant event
+ * a chance to recognize a state change after installing a persistent event
  * and where sequential descriptors with the same integer value returned
  * from _pollfd() would be ambiguous. See dns_so_closefds().
  */
