@@ -4241,8 +4241,6 @@ void dns_so_close(struct dns_socket *so) {
 
 
 void dns_so_reset(struct dns_socket *so) {
-	dns_so_closefds(so, DNS_SO_CLOSE_TCP|DNS_SO_CLOSE_OLD);
-
 	free(so->answer);
 
 	memset(&so->state, '\0', sizeof *so - offsetof(struct dns_socket, state));
