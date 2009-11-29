@@ -4061,6 +4061,9 @@ struct dns_socket {
 	int udp;
 	int tcp;
 
+	int *old;
+	unsigned onum, olim;
+
 	int type;
 
 	struct sockaddr_storage local, remote;
@@ -4086,6 +4089,56 @@ struct dns_socket {
 	struct dns_packet *answer;
 	size_t alen, apos;
 }; /* struct dns_socket() */
+
+
+/*
+ * NOTE: Actual closure delayed so that kqueue(2) and epoll(2) callers have
+ * a chance to recognize a state change after installing a persistant event
+ * and where sequential descriptors with the same integer value returned
+ * from _pollfd() would be ambiguous. See dns_so_closefds().
+ */
+static int dns_so_closefd(struct dns_socket *so, int *fd) {
+	if (*fd == -1)
+		return 0;
+
+	if (!(so->onum < so->olim)) {
+		unsigned olim = MAX(4, so->olim * 2);
+		void *old;
+
+		if (!(old = realloc(so->old, sizeof so->old[0] * olim)))
+			return dns_syerr();
+
+		so->old  = old;
+		so->olim = olim;
+	}
+
+	so->old[so->onum++] = *fd;
+	*fd = -1;
+
+	return 0;
+} /* dns_so_closefd() */
+
+
+#define DNS_SO_CLOSE_UDP 0x01
+#define DNS_SO_CLOSE_TCP 0x02
+#define DNS_SO_CLOSE_OLD 0x04
+#define DNS_SO_CLOSE_ALL (DNS_SO_CLOSE_UDP|DNS_SO_CLOSE_TCP|DNS_SO_CLOSE_OLD)
+
+static void dns_so_closefds(struct dns_socket *so, int which) {
+	if (DNS_SO_CLOSE_UDP & which)
+		dns_socketclose(&so->udp);
+	if (DNS_SO_CLOSE_TCP & which)
+		dns_socketclose(&so->tcp);
+	if (DNS_SO_CLOSE_OLD & which) {
+		unsigned i;
+		for (i = 0; i < so->onum; i++)
+			dns_socketclose(&so->old[i]);
+		so->onum = 0;
+		free(so->old);
+		so->old  = 0;
+		so->olim = 0;
+	}
+} /* dns_so_closefds() */
 
 
 static void dns_so_destroy(struct dns_socket *);
@@ -4132,7 +4185,7 @@ error:
 
 static void dns_so_destroy(struct dns_socket *so) {
 	dns_so_reset(so);
-	dns_socketclose(&so->udp);
+	dns_so_closefds(so, DNS_SO_CLOSE_ALL);
 } /* dns_so_destroy() */
 
 
@@ -4147,7 +4200,7 @@ void dns_so_close(struct dns_socket *so) {
 
 
 void dns_so_reset(struct dns_socket *so) {
-	dns_socketclose(&so->tcp);
+	dns_so_closefds(so, DNS_SO_CLOSE_TCP|DNS_SO_CLOSE_OLD);
 
 	free(so->answer);
 
@@ -4339,7 +4392,8 @@ retry:
 
 		so->state++;
 	case DNS_SO_TCP_INIT:
-		dns_socketclose(&so->tcp);
+		if ((error = dns_so_closefd(so, &so->tcp)))
+			goto error;
 
 		if (-1 == (so->tcp = dns_socket((struct sockaddr *)&so->local, SOCK_STREAM, &error)))
 			goto error;
@@ -4363,7 +4417,8 @@ retry:
 
 		so->state++;
 	case DNS_SO_TCP_DONE:
-		dns_socketclose(&so->tcp);
+		if ((error = dns_so_closefd(so, &so->tcp)))
+			goto error;
 
 		if (so->answer->end < 12)
 			return DNS_EILLEGAL;
