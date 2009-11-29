@@ -6523,7 +6523,7 @@ static int send_query(int argc, char *argv[]) {
 	else if (strstr(argv[0], "tcp"))
 		type	= SOCK_STREAM;
 	else
-		type	= 0;
+		type	= dns_res_tcp2type(resconf()->options.tcp);
 
 	fprintf(stderr, "querying %s for %s IN %s\n", host, MAIN.qname, dns_strtype(MAIN.qtype));
 
