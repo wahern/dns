@@ -6023,6 +6023,18 @@ const char *(dns_strtype)(enum dns_type type, void *dst, size_t lim) {
 } /* dns_strtype() */
 
 
+enum dns_type dns_itype(const char *type) {
+	unsigned i;
+
+	for (i = 0; i < lengthof(dns_rrtypes); i++) {
+		if (!strcasecmp(dns_rrtypes[i].name, type))
+			return dns_rrtypes[i].type;
+	}
+
+	return 0;
+} /* dns_itype() */
+
+
 const char *dns_stropcode(enum dns_opcode opcode) {
 	static char table[16][16]	= {
 		[DNS_OP_QUERY]	= "QUERY",

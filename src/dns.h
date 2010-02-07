@@ -175,6 +175,8 @@ const char *dns_strtype(enum dns_type, void *, size_t);
 #define dns_strtype1(a)		dns_strtype((a), (char [DNS_STRMINLEN + 1]){ 0 }, DNS_STRMINLEN + 1)
 #define dns_strtype(...)	DNS_PP_CALL(DNS_PP_XPASTE(dns_strtype, DNS_PP_NARG(__VA_ARGS__)), __VA_ARGS__)
 
+enum dns_type dns_itype(const char *);
+
 const char *dns_stropcode(enum dns_opcode);
 
 const char *dns_strrcode(enum dns_rcode);
