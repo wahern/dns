@@ -1,7 +1,7 @@
 /* ==========================================================================
  * dns.c - Recursive, Reentrant DNS Resolver.
  * --------------------------------------------------------------------------
- * Copyright (c) 2008, 2009  William Ahern
+ * Copyright (c) 2008, 2009, 2010  William Ahern
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
@@ -108,37 +108,41 @@
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-#ifndef DNS_DEBUG
-#define DNS_DEBUG	0
-#endif
+static int dns_debug = 0;
 
 #if DNS_DEBUG
-static int dns_trace;
-#endif
 
-#ifndef DNS_TRACE
-#define DNS_TRACE	0
-#endif
+#undef DNS_DEBUG
+#define DNS_DEBUG dns_debug
 
-#define MARK_(fmt, ...)	fprintf(stderr, fmt "%s", __FILE__, __LINE__, __func__, __VA_ARGS__)
-#define MARK(...)	MARK_("@@ %s:%d:%s: " __VA_ARGS__, "\n")
+#define DNS_SAY_(fmt, ...) \
+	do { if (DNS_DEBUG > 0) fprintf(stderr, fmt "%.1s", __func__, __LINE__, __VA_ARGS__); } while (0)
+#define DNS_SAY(...) DNS_SAY_("@@ (%s:%d) " __VA_ARGS__, "\n")
+#define DNS_HAI DNS_SAY("HAI")
 
 static void print_packet();
 
-
-#define DUMP_(P, fmt, ...)	do {					\
+#define DNS_DUMP_(P, fmt, ...)	do {					\
+	if (DNS_DEBUG > 1) {						\
 	fprintf(stderr, "@@ BEGIN * * * * * * * * * * * *\n");		\
 	fprintf(stderr, "@@ " fmt "%.0s\n", __VA_ARGS__);		\
 	print_packet((P), stderr);					\
 	fprintf(stderr, "@@ END * * * * * * * * * * * * *\n\n");	\
+	}								\
 } while (0)
 
+#define DNS_DUMP(...)	DNS_DUMP_(__VA_ARGS__, "")
 
-#if DNS_DEBUG
-#define DUMP(...)	DUMP_(__VA_ARGS__, "")
-#else
-#define DUMP(...)
-#endif
+#else /* !DNS_DEBUG */
+
+#undef DNS_DEBUG
+#define DNS_DEBUG 0
+
+#define DNS_SAY(...)
+#define DNS_HAI
+#define DNS_DUMP(...)
+
+#endif /* DNS_DEBUG */
 
 
 /*
@@ -5238,10 +5242,10 @@ exec:
 		else
 			sin.sin_port = htons(53);
 
-		if (DNS_TRACE) {
+		if (DNS_DEBUG) {
 			char addr[INET_ADDRSTRLEN + 1];
 			dns_a_print(addr, sizeof addr, (struct dns_a *)&sin.sin_addr);
-			DUMP(F->query, "ASKING: %s/%s @ DEPTH: %u)", host, addr, R->sp);
+			DNS_DUMP(F->query, "ASKING: %s/%s @ DEPTH: %u)", host, addr, R->sp);
 		}
 
 		if ((error = dns_so_submit(&R->so, F->query, (struct sockaddr *)&sin)))
@@ -5260,8 +5264,8 @@ exec:
 		if (!(F->answer = dns_so_fetch(&R->so, &error)))
 			goto error;
 
-		if (DNS_TRACE) {
-			DUMP(F->answer, "ANSWER @ DEPTH: %u)", R->sp);
+		if (DNS_DEBUG) {
+			DNS_DUMP(F->answer, "ANSWER @ DEPTH: %u)", R->sp);
 		}
 
 		if ((error = dns_rr_parse(&rr, 12, F->query)))
@@ -6813,9 +6817,7 @@ int main(int argc, char **argv) {
 
 			break;
 		case 'v':
-			MAIN.verbose++;
-
-			dns_trace	= (MAIN.verbose > 0);
+			dns_debug = ++MAIN.verbose;
 
 			break;
 		case 'h':
