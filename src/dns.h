@@ -424,7 +424,7 @@ struct dns_rr_i *dns_rr_i_init(struct dns_rr_i *, struct dns_packet *);
 unsigned dns_rr_grep(struct dns_rr *, unsigned, struct dns_rr_i *, struct dns_packet *, int *);
 
 #define dns_rr_foreach_(rr, P, ...)	\
-	for (struct dns_rr_i i##__LINE__ = *dns_rr_i_new((P), __VA_ARGS__); dns_rr_grep((rr), 1, &i##__LINE__, (P), &(int){ 0 }); )
+	for (struct dns_rr_i DNS_PP_XPASTE(i, __LINE__) = *dns_rr_i_new((P), __VA_ARGS__); dns_rr_grep((rr), 1, &DNS_PP_XPASTE(i, __LINE__), (P), &(int){ 0 }); )
 
 #define dns_rr_foreach(...)	dns_rr_foreach_(__VA_ARGS__)
 
