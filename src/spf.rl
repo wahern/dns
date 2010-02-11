@@ -3418,6 +3418,21 @@ static const struct {
 	[OP_EXP] = { "exp", &op_exp, },
 }; /* vm_op[] */
 
+static const char *vm_strcode(int code) {
+	return vm_op[code].name;
+} /* vm_strcode() */
+
+static int vm_icode(const char *name) {
+	int code;
+
+	for (code = 0; code < (int)spf_lengthof(vm_op); code++) {
+		if (vm_op[code].name && !strcasecmp(name, vm_op[code].name))
+			return code;
+	}
+
+	return -1;
+} /* vm_icode() */
+
 
 static int vm_exec(struct spf_vm *vm) {
 	enum vm_opcode code;
@@ -3531,6 +3546,11 @@ const char *spf_exp(struct spf_resolver *spf) {
 int spf_elapsed(struct spf_resolver *spf) {
 	return dns_res_elapsed(spf->res);
 } /* spf_elapsed() */
+
+
+void spf_clear(struct spf_resolver *spf) {
+	return dns_res_clear(spf->res);
+} /* spf_clear() */
 
 
 int spf_events(struct spf_resolver *spf) {
@@ -3672,17 +3692,13 @@ number:
 search:
 			spf_rtrim(line, " \t");
 
-			for (code = 0; code < spf_lengthof(vm_op); code++) {
-				if (!vm_op[code].name)
-					continue;
-				if (strcasecmp(line, vm_op[code].name))
-					continue;
-				sub_emit(&sub, code);
-				break;
+			if (*line) {
+				if (-1 != (code = vm_icode(line))) {
+					sub_emit(&sub, code);
+				} else
+					SPF_SAY("%s: unknown opcode", line);
 			}
-
-			SPF_SAY("%s: unknown opcode", line);
-		}
+		} /* switch() */
 	} /* while() */
 
 	sub_emit(&sub, OP_HALT);

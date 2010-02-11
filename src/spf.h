@@ -310,6 +310,8 @@ const char *spf_exp(struct spf_resolver *);
 
 int spf_elapsed(struct spf_resolver *);
 
+void spf_clear(struct spf_resolver *);
+
 int spf_events(struct spf_resolver *);
 
 int spf_pollfd(struct spf_resolver *);
