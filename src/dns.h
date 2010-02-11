@@ -49,6 +49,34 @@
 
 
 /*
+ * V E R S I O N
+ *
+ * Vendor: Entity for which versions numbers are relevant. (If forking
+ * change DNS_VENDOR to avoid confusion.)
+ *
+ * Three versions:
+ *
+ * REL	Official "release"--bug fixes, new features, etc.
+ * ABI	Changes to existing object sizes or parameter types.
+ * API	Changes that might effect application source.
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+#define DNS_VENDOR "william@25thandClement.com"
+
+#define DNS_V_REL  0x20100210
+#define DNS_V_ABI  0x20100210
+#define DNS_V_API  0x20100210
+
+
+const char *dns_vendor(void);
+
+int dns_v_rel(void);
+int dns_v_abi(void);
+int dns_v_api(void);
+
+
+/*
  * E R R O R S
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -74,13 +102,23 @@ enum dns_errno {
 #if defined(POLLOUT)
 #define DNS_POLLOUT POLLOUT
 #else
-#define DNS_POLLOUT  2
+#define DNS_POLLOUT 2
 #endif
 
 
-/* Compatability for libevent. */
+/*
+ * See Application Interface below for configuring libevent bitmasks instead
+ * of poll(2) bitmasks.
+ */
+#define DNS_EVREAD  2
+#define DNS_EVWRITE 4
+
+
 #define DNS_POLL2EV(set) \
-	(((set) & DNS_POLLIN)? 2 : 0) | (((set) & DNS_POLLOUT)? 4 : 0)
+	(((set) & DNS_POLLIN)? DNS_EVREAD : 0) | (((set) & DNS_POLLOUT)? DNS_EVWRITE : 0)
+
+#define DNS_EV2POLL(set) \
+	(((set) & DNS_EVREAD)? DNS_POLLIN : 0) | (((set) & DNS_EVWRITE)? DNS_POLLOUT : 0)
 
 
 /*
@@ -736,13 +774,47 @@ unsigned dns_hints_grep(struct sockaddr **, socklen_t *, unsigned, struct dns_hi
 
 
 /*
+ * A P P L I C A T I O N  I N T E R F A C E
+ *
+ * Options to change the behavior of the API. Applies across all the
+ * different components.
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+#define DNS_OPTS_INITIALIZER_ { 0, 0 }, 0
+#define DNS_OPTS_INITIALIZER  { DNS_OPTS_INITIALIZER_ }
+#define DNS_OPTS_INIT(...)    { DNS_OPTS_INITIALIZER_, __VA_ARGS__ }
+
+#define dns_opts(...) (&(struct dns_options)DNS_OPTS_INIT(__VA_ARGS__))
+
+struct dns_options {
+	/*
+	 * If the callback closes *fd, it must set it to -1. Otherwise, the
+	 * descriptor is queued and lazily closed at object destruction or
+	 * by an explicit call to _clear(). This allows safe use of
+	 * kqueue(2), epoll(2), et al -style persistent events.
+	 */
+	struct {
+		void *arg;
+		int (*cb)(int *fd, void *arg);
+	} closefd;
+
+	/* bitmask for _events() routines */
+	enum dns_events {
+		DNS_SYSPOLL,
+		DNS_LIBEVENT,
+	} events;
+}; /* struct dns_options */
+
+
+/*
  * S O C K E T  I N T E R F A C E
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 struct dns_socket;
 
-struct dns_socket *dns_so_open(struct sockaddr *, int type, int *error);
+struct dns_socket *dns_so_open(const struct sockaddr *, int, const struct dns_options *, int *error);
 
 void dns_so_close(struct dns_socket *);
 
@@ -759,6 +831,8 @@ int dns_so_check(struct dns_socket *);
 struct dns_packet *dns_so_fetch(struct dns_socket *, int *);
 
 time_t dns_so_elapsed(struct dns_socket *);
+
+void dns_so_clear(struct dns_socket *);
 
 int dns_so_events(struct dns_socket *);
 
@@ -778,9 +852,9 @@ int dns_so_poll(struct dns_socket *, int);
 
 struct dns_resolver;
 
-struct dns_resolver *dns_res_open(struct dns_resolv_conf *, struct dns_hosts *hosts, struct dns_hints *, int *);
+struct dns_resolver *dns_res_open(struct dns_resolv_conf *, struct dns_hosts *hosts, struct dns_hints *, const struct dns_options *, int *);
 
-struct dns_resolver *dns_res_stub(int *);
+struct dns_resolver *dns_res_stub(const struct dns_options *, int *);
 
 void dns_res_reset(struct dns_resolver *);
 
@@ -799,6 +873,8 @@ int dns_res_check(struct dns_resolver *);
 struct dns_packet *dns_res_fetch(struct dns_resolver *, int *);
 
 time_t dns_res_elapsed(struct dns_resolver *);
+
+void dns_res_clear(struct dns_resolver *);
 
 int dns_res_events(struct dns_resolver *);
 
@@ -829,6 +905,8 @@ int dns_ai_nextent(struct addrinfo **, struct dns_addrinfo *);
 size_t dns_ai_print(void *, size_t, struct addrinfo *, struct dns_addrinfo *);
 
 time_t dns_ai_elapsed(struct dns_addrinfo *);
+
+void dns_ai_clear(struct dns_addrinfo *);
 
 int dns_ai_events(struct dns_addrinfo *);
 

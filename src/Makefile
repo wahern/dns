@@ -1,5 +1,5 @@
-CPPFLAGS	+= -DDNS_DEBUG -DDNS_MAIN -DDNS_TRACE=dns_trace
-CFLAGS		+= -std=c99 -Wall -Werror -Wno-unused-function -O0 -g -fstack-protector
+CPPFLAGS	+= -DDNS_DEBUG -DDNS_MAIN
+CFLAGS		+= -std=c99 -Wall -Wextra -Werror -Wno-unused-function -Wno-unused-parameter -O2 -g -fstack-protector
 
 EXE_CC		= mingw32-gcc
 EXE_CPPFLAGS	+= $(CPPFLAGS)

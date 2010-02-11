@@ -3462,7 +3462,7 @@ struct spf_resolver *spf_open(const struct spf_env *env, const struct spf_limits
 
 	vm_init(&spf->vm, spf);
 
-	if (!(spf->res = dns_res_stub(&error)))	
+	if (!(spf->res = dns_res_stub(NULL, &error)))	
 		goto error;
 
 	dns_p_init(&spf->fcrd.ptr, sizeof spf->fcrd.buf);
