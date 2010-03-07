@@ -455,8 +455,13 @@ static unsigned dns_k_permutor_step(struct dns_k_permutor *p) {
  * Simple permutation box. Useful for shuffling rrsets from an iterator.
  * Uses AES s-box to provide good diffusion.
  *
- * TODO: Run some statistical tests to guage how well the xor rounds are
- * removing bias.
+ * Seems to pass muster under runs test.
+ *
+ * $ for i in 0 1 2 3 4 5 6 7 8 9; do ./dns shuffle-16 > /tmp/out; done
+ * $ R -q -f /dev/stdin 2>/dev/null <<-EOF | awk '/p-value/{ print $8 }'
+ * 	library(lawstat)
+ * 	runs.test(scan(file="/tmp/out"))
+ * EOF
  */
 static unsigned short dns_k_shuffle16(unsigned short n, unsigned s) {
 	static const unsigned char sbox[256] =
@@ -492,20 +497,17 @@ static unsigned short dns_k_shuffle16(unsigned short n, unsigned s) {
 	  0x9b, 0x1e, 0x87, 0xe9, 0xce, 0x55, 0x28, 0xdf,
 	  0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68,
 	  0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16 };
-	unsigned char a, b, r[4];
+	unsigned char a, b;
 	unsigned i;
-
-	r[0] = 0xff & (s >> 0);
-	r[1] = 0xff & (s >> 8);
-	r[2] = 0xff & (s >> 16);
-	r[3] = 0xff & (s >> 24);
 
 	a = 0xff & (n >> 0);
 	b = 0xff & (n >> 8);
 
-	for (i = 0; i < lengthof(r); i++) {
-		a = sbox[a ^ r[0 + i]] ^ b;
-		b = sbox[b ^ r[3 - i]] ^ a;
+	for (i = 0; i < 4; i++) {
+		a ^= 0xff & s;
+		a = sbox[a] ^ b;
+		b = sbox[b] ^ a;
+		s >>= 8;
 	}
 
 	return ((0xff00 & (a << 8)) | (0x00ff & (b << 0)));
@@ -6539,7 +6541,7 @@ int permute_set(int argc, char *argv[]) {
 	hi	= (--argc > 0)? atoi(argv[argc]) : 8;
 	lo	= (--argc > 0)? atoi(argv[argc]) : 0;
 
-	fprintf(stdout, "[%u .. %u]\n", lo, hi);
+	fprintf(stderr, "[%u .. %u]\n", lo, hi);
 
 	dns_k_permutor_init(&p, lo, hi);
 
