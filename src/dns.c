@@ -3073,11 +3073,20 @@ struct dns_resolv_conf *dns_resconf_open(int *error) {
 		= { .lookup = "bf", .options = { .ndots = 1, .timeout = 5, .attempts = 2, .tcp = DNS_RESCONF_TCP_ENABLE, },
 		    .iface = { .ss_family = AF_INET }, };
 	struct dns_resolv_conf *resconf;
+	struct sockaddr_in *sin;
 
 	if (!(resconf = malloc(sizeof *resconf)))
 		goto syerr;
 
-	*resconf	= resconf_initializer;
+	*resconf = resconf_initializer;
+
+	sin = (struct sockaddr_in *)&resconf->nameserver[0];
+	sin->sin_family      = AF_INET;
+	sin->sin_addr.s_addr = INADDR_ANY;
+	sin->sin_port        = htons(53);
+#if defined(SA_LEN)
+	sin->sin_len         = sizeof *sin;
+#endif
 
 	if (0 != gethostname(resconf->search[0], sizeof resconf->search[0]))
 		goto syerr;
