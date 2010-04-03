@@ -25,7 +25,7 @@ SPF_CFLAGS   += -std=gnu99 -Wall -Werror -Wno-unused-function -Wno-unused-variab
 	ragel -C -o $@ $<
 
 spf: spf.c dns.c
-	$(CC) $(SPF_CFLAGS) $(SPF_CPPFLAGS) -DSPF_MAIN -DSPF_DEBUG  -o $@ $^
+	$(CC) $(SPF_CFLAGS) $(SPF_CPPFLAGS) -DSPF_MAIN -DSPF_DEBUG -o $@ $^
 
 .PHONY: check spf.t
 
