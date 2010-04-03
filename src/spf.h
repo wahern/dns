@@ -1,7 +1,7 @@
 /* ==========================================================================
  * spf.h - "spf.c", a Sender Policy Framework library.
  * --------------------------------------------------------------------------
- * Copyright (c) 2009  William Ahern
+ * Copyright (c) 2009, 2010  William Ahern
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
@@ -55,6 +55,34 @@ const char *spf_strerror(int);
 const char *spf_strterm(int);
 
 const char *spf_strresult(int);
+
+
+/*
+ * V E R S I O N
+ *
+ * Vendor: Entity for which versions numbers are relevant. (If forking
+ * change SPF_VENDOR to avoid confusion.)
+ *
+ * Three versions:
+ *
+ * REL	Official "release"--bug fixes, new features, etc.
+ * ABI	Changes to existing object sizes or parameter types.
+ * API	Changes that might effect application source.
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+#define SPF_VENDOR "william@25thandClement.com"
+
+#define SPF_V_REL  0x20100324
+#define SPF_V_ABI  0x20100324
+#define SPF_V_API  0x20100324
+
+
+const char *spf_vendor(void);
+
+int spf_v_rel(void);
+int spf_v_abi(void);
+int spf_v_api(void);
 
 
 /*
@@ -275,6 +303,9 @@ size_t spf_getenv(char *, size_t, int, const struct spf_env *);
  * M A C R O  I N T E R F A C E S
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+/** must manually call tolower(3) if necessary */
+#define SPF_M(m) (1U << (unsigned)((m) - 'a'))
 
 /** spf_isset(spf_macros("%{d}"), 'd') returns true */
 _Bool spf_isset(spf_macros_t, int);

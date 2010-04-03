@@ -1,7 +1,7 @@
 /* ==========================================================================
  * spf.rl - "spf.c", a Sender Policy Framework library.
  * --------------------------------------------------------------------------
- * Copyright (c) 2009  William Ahern
+ * Copyright (c) 2009, 2010  William Ahern
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
@@ -105,6 +105,31 @@ int spf_debug = 0;
 #define SPF_XPASTE(x, y) SPF_PASTE(a, b)
 #define SPF_STRINGIFY_(x) #x
 #define SPF_STRINGIFY(x) SPF_STRINGIFY_(x)
+
+
+/*
+ * V E R S I O N  R O U T I N E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+const char *spf_vendor(void) {
+	return SPF_VENDOR;
+} /* spf_vendor() */
+
+
+int spf_v_rel(void) {
+	return SPF_V_REL;
+} /* spf_v_rel() */
+
+
+int spf_v_abi(void) {
+	return SPF_V_ABI;
+} /* spf_v_abi() */
+
+
+int spf_v_api(void) {
+	return SPF_V_API;
+} /* spf_v_api() */
 
 
 /*
@@ -759,7 +784,7 @@ static void all_comp(struct spf_sbuf *sbuf, struct spf_all *all) {
 
 
 static const struct spf_include include_initializer =
-	{ .type = SPF_INCLUDE, .result = SPF_PASS, .domain = "%{d}" };
+	{ .type = SPF_INCLUDE, .result = SPF_PASS, .macros = SPF_M('d'), .domain = "%{d}" };
 
 static void include_comp(struct spf_sbuf *sbuf, struct spf_include *include) {
 	sbuf_putc(sbuf, include->result);
@@ -770,7 +795,7 @@ static void include_comp(struct spf_sbuf *sbuf, struct spf_include *include) {
 
 
 static const struct spf_a a_initializer =
-	{ .type = SPF_A, .result = SPF_PASS, .domain = "%{d}", .prefix4 = 32, .prefix6 = 128 };
+	{ .type = SPF_A, .result = SPF_PASS, .macros = SPF_M('d'), .domain = "%{d}", .prefix4 = 32, .prefix6 = 128 };
 
 static void a_comp(struct spf_sbuf *sbuf, struct spf_a *a) {
 	sbuf_putc(sbuf, a->result);
@@ -785,7 +810,7 @@ static void a_comp(struct spf_sbuf *sbuf, struct spf_a *a) {
 
 
 static const struct spf_mx mx_initializer =
-	{ .type = SPF_MX, .result = SPF_PASS, .domain = "%{d}", .prefix4 = 32, .prefix6 = 128 };
+	{ .type = SPF_MX, .result = SPF_PASS, .macros = SPF_M('d'), .domain = "%{d}", .prefix4 = 32, .prefix6 = 128 };
 
 static void mx_comp(struct spf_sbuf *sbuf, struct spf_mx *mx) {
 	sbuf_putc(sbuf, mx->result);
@@ -800,7 +825,7 @@ static void mx_comp(struct spf_sbuf *sbuf, struct spf_mx *mx) {
 
 
 static const struct spf_ptr ptr_initializer =
-	{ .type = SPF_PTR, .result = SPF_PASS, .domain = "%{d}" };
+	{ .type = SPF_PTR, .result = SPF_PASS, .macros = SPF_M('d'), .domain = "%{d}" };
 
 static void ptr_comp(struct spf_sbuf *sbuf, struct spf_ptr *ptr) {
 	sbuf_putc(sbuf, ptr->result);
@@ -837,7 +862,7 @@ static void ip6_comp(struct spf_sbuf *sbuf, struct spf_ip6 *ip6) {
 
 
 static const struct spf_exists exists_initializer =
-	{ .type = SPF_EXISTS, .result = SPF_PASS, .domain = "%{d}" };
+	{ .type = SPF_EXISTS, .result = SPF_PASS, .macros = SPF_M('d'), .domain = "%{d}" };
 
 static void exists_comp(struct spf_sbuf *sbuf, struct spf_exists *exists) {
 	sbuf_putc(sbuf, exists->result);
@@ -942,11 +967,12 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 		result = SPF_PASS;
 		memset(term, 0, sizeof *term);
 		sbuf_init(&domain);
+		macros = 0;
 		prefix4 = 32; prefix6 = 128;
 	}
 
 	action term_macro {
-		term->macros |= 1U << ((tolower((unsigned char)fc)) - 'a');
+		macros |= 1U << ((tolower((unsigned char)fc)) - 'a');
 	}
 
 	action term_end {
@@ -969,8 +995,10 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 	}
 
 	action include_end {
-		if (*domain.str)
+		if (*domain.str) {
 			spf_fixdn(term->include.domain, domain.str, sizeof term->include.domain, SPF_DN_TRUNC);
+			term->macros = macros;
+		}
 	}
 
 	action a_begin {
@@ -979,8 +1007,10 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 	}
 
 	action a_end {
-		if (*domain.str)
+		if (*domain.str) {
 			spf_fixdn(term->a.domain, domain.str, sizeof term->a.domain, SPF_DN_TRUNC);
+			term->macros = macros;
+		}
 
 		term->a.prefix4 = prefix4;
 		term->a.prefix6 = prefix6;
@@ -992,8 +1022,10 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 	}
 
 	action mx_end {
-		if (*domain.str)
+		if (*domain.str) {
 			spf_fixdn(term->mx.domain, domain.str, sizeof term->mx.domain, SPF_DN_TRUNC);
+			term->macros = macros;
+		}
 
 		term->mx.prefix4 = prefix4;
 		term->mx.prefix6 = prefix6;
@@ -1005,8 +1037,10 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 	}
 
 	action ptr_end {
-		if (*domain.str)
+		if (*domain.str) {
 			spf_fixdn(term->ptr.domain, domain.str, sizeof term->ptr.domain, SPF_DN_TRUNC);
+			term->macros = macros;
+		}
 	}
 
 	action ip4_begin {
@@ -1035,8 +1069,10 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 	}
 
 	action exists_end {
-		if (*domain.str)
+		if (*domain.str) {
 			spf_fixdn(term->exists.domain, domain.str, sizeof term->exists.domain, SPF_DN_TRUNC);
+			term->macros = macros;
+		}
 	}
 
 	action redirect_begin {
@@ -1044,8 +1080,10 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 	}
 
 	action redirect_end {
-		if (*domain.str)
+		if (*domain.str) {
 			spf_fixdn(term->redirect.domain, domain.str, sizeof term->redirect.domain, SPF_DN_TRUNC);
+			term->macros = macros;
+		}
 	}
 
 	action exp_begin {
@@ -1053,8 +1091,10 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 	}
 
 	action exp_end {
-		if (*domain.str)
+		if (*domain.str) {
 			spf_fixdn(term->exp.domain, domain.str, sizeof term->exp.domain, SPF_DN_TRUNC);
+			term->macros = macros;
+		}
 	}
 
 	action unknown_begin {
@@ -1139,6 +1179,7 @@ int spf_parse(union spf_term *term, struct spf_parser *parser, int *error_) {
 	enum spf_result result = 0;
 	struct spf_sbuf domain, name, value;
 	unsigned prefix4 = 0, prefix6 = 0;
+	spf_macros_t macros = 0;
 	int error;
 
 	term->type = 0;
@@ -2238,6 +2279,8 @@ static void op_submit(struct spf_vm *vm) {
 	int qtype   = vm_peek(vm, -1, T_INT);
 	int error;
 
+	SPF_SAY("querying %s IN %s", (char *)qname, dns_strtype(qtype));
+
 	error = dns_res_submit(vm->spf->res, qname, qtype, DNS_C_IN);
 	vm_assert(vm, !error, error);
 
@@ -2384,6 +2427,8 @@ static void op_addrinfo(struct spf_vm *vm) {
 		spf_strlcpy(serv, (char *)vm_peek(vm, -2, T_REF|T_MEM), sizeof serv);
 
 	qtype = vm_peek(vm, -1, T_INT);
+
+	SPF_SAY("querying %s IN %s", host, dns_strtype(qtype));
 
 	dns_ai_close(vm->spf->ai);
 	vm_assert(vm, (vm->spf->ai = dns_ai_open(host, serv, qtype, &hints, vm->spf->res, &error)), error);
@@ -3983,6 +4028,7 @@ int printenv(int argc, char *argv[], const struct spf_env *env) {
 	"  -R DOMAIN  domain name of host performing the check\n" \
 	"  -T TIME    current timestamp\n" \
 	"  -f PATH    path to file (e.g. to load vm instead of stdin)\n" \
+	"  -W         print version\n" \
 	"  -v         be verbose (use more to increase verboseness)\n" \
 	"  -h         print usage\n" \
 	"\n" \
@@ -4001,6 +4047,17 @@ int printenv(int argc, char *argv[], const struct spf_env *env) {
 	"\n" \
 	"Reports bugs to william@25thandClement.com\n"
 
+
+static void version(FILE *fp) {
+	fprintf(fp, "spf (spf.c) %.8X\n", spf_v_rel());
+	fprintf(fp, "vendor  %s\n", spf_vendor());
+	fprintf(fp, "release %.8X\n", spf_v_rel());
+	fprintf(fp, "abi     %.8X\n", spf_v_abi());
+	fprintf(fp, "api     %.8X\n", spf_v_api());
+	fprintf(fp, "dns     %.8X\n", dns_v_rel());
+} /* version() */
+
+
 int main(int argc, char **argv) {
 	extern int optind;
 	extern char *optarg;
@@ -4015,7 +4072,7 @@ int main(int argc, char **argv) {
 	gethostname(env.r, sizeof env.r);
 	spf_itoa(env.t, sizeof env.t, (unsigned)time(0));
 
-	while (-1 != (opt = getopt(argc, argv, "S:L:O:D:I:P:V:H:C:R:T:f:vh"))) {
+	while (-1 != (opt = getopt(argc, argv, "S:L:O:D:I:P:V:H:C:R:T:f:vWh"))) {
 		switch (opt) {
 		case 'S':
 			{
@@ -4077,6 +4134,10 @@ setenv:
 			spf_debug++;
 
 			break;
+		case 'W':
+			version(stdout);
+
+			return 0;
 		case 'h':
 			/* FALL THROUGH */
 		default:
