@@ -2724,13 +2724,27 @@ static void op_comp(struct spf_vm *vm) {
 	}
 
 	if (redir.type) {
+		I8(&sub, 'd');
+		GETENV(&sub);
+
 		STR(&sub, (intptr_t)&redir.domain[0]);
 		if (redir.macros) {
 			if (spf_isset(redir.macros, 'p'))
 				FCRD(&sub);
 			EXPAND(&sub);
 		}
+		DUP(&sub);
+		I8(&sub, 'd');
+		SETENV(&sub);
+
 		sub_emit(&sub, OP_CHECK);
+
+		I8(&sub, 3);
+		NEG(&sub);
+		MOVE(&sub);
+		I8(&sub, 'd');
+		SETENV(&sub);
+
 		TRUE(&sub);
 		J7(&sub);
 	}
