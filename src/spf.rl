@@ -1155,13 +1155,14 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 	exists  = "exists"i %exists_begin ":" domain_spec %exists_end;
 	IP6     = "ip6"i %ip6_begin ":" ip6_network ip6_cidr_length? %ip6_end;
 	IP4     = "ip4"i %ip4_begin ":" ip4_network ip4_cidr_length? %ip4_end;
+	BARE4   =  ip4_network >ip4_begin ip4_cidr_length? %ip4_end;
 	PTR     = "ptr"i %ptr_begin (":" domain_spec)? %ptr_end;
 	MX      = "mx"i %mx_begin (":" domain_spec)? dual_cidr_length? %mx_end;
 	A       = "a"i %a_begin (":" domain_spec)? dual_cidr_length? %a_end;
 	inklude = "include"i %include_begin ":" domain_spec %include_end;
 	all     = "all"i %all_begin %all_end;
 
-	mechanism = all | inklude | A | MX | PTR | IP4 | IP6 | exists;
+	mechanism = all | inklude | A | MX | PTR | BARE4 | IP4 | IP6 | exists;
 	qualifier = ("+" | "-" | "?" | "~") @{ result = fc; };
 	directive = qualifier? mechanism;
 
