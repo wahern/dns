@@ -195,29 +195,37 @@ enum dns_rcode {
  * integer value needs to be printed and returned. UNLESS this buffer is
  * SPECIFIED, the returned string has ONLY BLOCK SCOPE.
  */
-#define DNS_STRMINLEN	15
+#define DNS_STRMAXLEN 47 /* "QUESTION|ANSWER|AUTHORITY|ADDITIONAL" */
 
 const char *dns_strsection(enum dns_section, void *, size_t);
 #define dns_strsection3(a, b, c) \
 				dns_strsection((a), (b), (c))
-#define dns_strsection1(a)	dns_strsection((a), (char [DNS_STRMINLEN + 1]){ 0 }, DNS_STRMINLEN + 1)
+#define dns_strsection1(a)	dns_strsection((a), (char [DNS_STRMAXLEN + 1]){ 0 }, DNS_STRMAXLEN + 1)
 #define dns_strsection(...)	DNS_PP_CALL(DNS_PP_XPASTE(dns_strsection, DNS_PP_NARG(__VA_ARGS__)), __VA_ARGS__)
+
+enum dns_section dns_isection(const char *);
 
 const char *dns_strclass(enum dns_class, void *, size_t);
 #define dns_strclass3(a, b, c)	dns_strclass((a), (b), (c))
-#define dns_strclass1(a)	dns_strclass((a), (char [DNS_STRMINLEN + 1]){ 0 }, DNS_STRMINLEN + 1)
+#define dns_strclass1(a)	dns_strclass((a), (char [DNS_STRMAXLEN + 1]){ 0 }, DNS_STRMAXLEN + 1)
 #define dns_strclass(...)	DNS_PP_CALL(DNS_PP_XPASTE(dns_strclass, DNS_PP_NARG(__VA_ARGS__)), __VA_ARGS__)
+
+enum dns_class dns_iclass(const char *);
 
 const char *dns_strtype(enum dns_type, void *, size_t);
 #define dns_strtype3(a, b, c)	dns_strtype((a), (b), (c))
-#define dns_strtype1(a)		dns_strtype((a), (char [DNS_STRMINLEN + 1]){ 0 }, DNS_STRMINLEN + 1)
+#define dns_strtype1(a)		dns_strtype((a), (char [DNS_STRMAXLEN + 1]){ 0 }, DNS_STRMAXLEN + 1)
 #define dns_strtype(...)	DNS_PP_CALL(DNS_PP_XPASTE(dns_strtype, DNS_PP_NARG(__VA_ARGS__)), __VA_ARGS__)
 
 enum dns_type dns_itype(const char *);
 
 const char *dns_stropcode(enum dns_opcode);
 
+enum dns_opcode dns_iopcode(const char *);
+
 const char *dns_strrcode(enum dns_rcode);
+
+enum dns_rcode dns_ircode(const char *);
 
 
 /*

@@ -38,7 +38,7 @@
 #include <stdlib.h>		/* malloc(3) realloc(3) free(3) rand(3) random(3) arc4random(3) */
 #include <stdio.h>		/* FILE fopen(3) fclose(3) getc(3) rewind(3) */
 
-#include <string.h>		/* memcpy(3) strlen(3) memmove(3) memchr(3) memcmp(3) strchr(3) */
+#include <string.h>		/* memcpy(3) strlen(3) memmove(3) memchr(3) memcmp(3) strchr(3) strsep(3) */
 #include <strings.h>		/* strcasecmp(3) strncasecmp(3) */
 
 #include <ctype.h>		/* isspace(3) isdigit(3) */
@@ -6050,48 +6050,99 @@ size_t dns_ai_print(void *dst, size_t lim, struct addrinfo *ent, struct dns_addr
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+static const struct {
+	char name[16];
+	enum dns_section type;
+} dns_sections[] = {
+	{ "QUESTION",   DNS_S_QUESTION },
+	{ "QD",         DNS_S_QUESTION },
+	{ "ANSWER",     DNS_S_ANSWER },
+	{ "AN",         DNS_S_ANSWER },
+	{ "AUTHORITY",  DNS_S_AUTHORITY },
+	{ "NS",         DNS_S_AUTHORITY },
+	{ "ADDITIONAL", DNS_S_ADDITIONAL },
+	{ "AR",         DNS_S_ADDITIONAL },
+};
+
 const char *(dns_strsection)(enum dns_section section, void *dst, size_t lim) {
-	switch (section) {
-	case DNS_S_QD:
-		dns__printstring(dst, lim, 0, "QUESTION");
+	unsigned i, p = 0;
 
-		break;
-	case DNS_S_AN:
-		dns__printstring(dst, lim, 0, "ANSWER");
+	for (i = 0; i < lengthof(dns_sections); i++) {
+		if (dns_sections[i].type & section) {
+			if (p > 0)
+				p += dns__printchar(dst, lim, p, '|');
 
-		break;
-	case DNS_S_NS:
-		dns__printstring(dst, lim, 0, "AUTHORITY");
+			p += dns__printstring(dst, lim, p, dns_sections[i].name);
 
-		break;
-	case DNS_S_AR:
-		dns__printstring(dst, lim, 0, "ADDITIONAL");
+			section &= ~dns_sections[i].type;
+		}
+	}
 
-		break;
-	default:
-		dns__printnul(dst, lim, dns__print10(dst, lim, 0, (0xffff & section), 0));
+	if (!p)
+		p += dns__print10(dst, lim, 0, (0xffff & section), 0);
 
-		break;
-	} /* switch (class) */
+	dns__printnul(dst, lim, p);
 
 	return dst;
 } /* dns_strsection() */
 
 
-const char *(dns_strclass)(enum dns_class class, void *dst, size_t lim) {
-	switch (class) {
-	case DNS_C_IN:
-		dns__printstring(dst, lim, 0, "IN");
+enum dns_section dns_isection(const char *src) {
+	enum dns_section section = 0;
+	char sbuf[128];
+	char *name, *next;
+	unsigned i;
 
-		break;
-	default:
-		dns__printnul(dst, lim, dns__print10(dst, lim, 0, (0xffff & class), 0));
+	dns_strlcpy(sbuf, src, sizeof sbuf);
+	next = sbuf;
 
-		break;
-	} /* switch (class) */
+	while ((name = strsep(&next, "|+, \t"))) {
+		for (i = 0; i < lengthof(dns_sections); i++) {
+			if (!strcasecmp(dns_sections[i].name, name)) {
+				section |= dns_sections[i].type;
+				break;
+			}
+		}
+	}
+
+	return section;
+} /* dns_isection() */
+
+
+static const struct {
+	char name[8];
+	enum dns_class type;
+} dns_classes[] = {
+	{ "IN", DNS_C_IN },
+};
+
+const char *(dns_strclass)(enum dns_class type, void *dst, size_t lim) {
+	unsigned i;
+
+	for (i = 0; i < lengthof(dns_classes); i++) {
+		if (dns_classes[i].type == type) {
+			dns__printnul(dst, lim, dns__printstring(dst, lim, 0, dns_classes[i].name));
+
+			return dst;
+		}
+	}
+
+	dns__printnul(dst, lim, dns__print10(dst, lim, 0, (0xffff & type), 0));
 
 	return dst;
 } /* dns_strclass() */
+
+
+enum dns_class dns_iclass(const char *name) {
+	unsigned i;
+
+	for (i = 0; i < lengthof(dns_classes); i++) {
+		if (!strcasecmp(dns_classes[i].name, name))
+			return dns_classes[i].type;
+	}
+
+	return 0;
+} /* dns_iclass() */
 
 
 const char *(dns_strtype)(enum dns_type type, void *dst, size_t lim) {
@@ -6099,7 +6150,7 @@ const char *(dns_strtype)(enum dns_type type, void *dst, size_t lim) {
 
 	for (i = 0; i < lengthof(dns_rrtypes); i++) {
 		if (dns_rrtypes[i].type == type) {
-			dns__printstring(dst, lim, 0, dns_rrtypes[i].name);
+			dns__printnul(dst, lim, dns__printstring(dst, lim, 0, dns_rrtypes[i].name));
 
 			return dst;
 		}
@@ -6123,46 +6174,70 @@ enum dns_type dns_itype(const char *type) {
 } /* dns_itype() */
 
 
+static char dns_opcodes[16][16] = {
+	[DNS_OP_QUERY]  = "QUERY",
+	[DNS_OP_IQUERY] = "IQUERY",
+	[DNS_OP_STATUS] = "STATUS",
+	[DNS_OP_NOTIFY] = "NOTIFY",
+	[DNS_OP_UPDATE] = "UPDATE",
+};
+
 const char *dns_stropcode(enum dns_opcode opcode) {
-	static char table[16][16]	= {
-		[DNS_OP_QUERY]	= "QUERY",
-		[DNS_OP_IQUERY]	= "IQUERY",
-		[DNS_OP_STATUS]	= "STATUS",
-		[DNS_OP_NOTIFY]	= "NOTIFY",
-		[DNS_OP_UPDATE]	= "UPDATE",
-	};
+	opcode &= 0xf;
 
-	opcode	&= 0xf;
+	if ('\0' == dns_opcodes[opcode][0])
+		dns__printnul(dns_opcodes[opcode], sizeof dns_opcodes[opcode], dns__print10(dns_opcodes[opcode], sizeof dns_opcodes[opcode], 0, opcode, 0));
 
-	if ('\0' == table[opcode][0])
-		dns__printnul(table[opcode], sizeof table[opcode], dns__print10(table[opcode], sizeof table[opcode], 0, opcode, 0));
-
-	return table[opcode];
+	return dns_opcodes[opcode];
 } /* dns_stropcode() */
 
 
+enum dns_opcode dns_iopcode(const char *name) {
+	unsigned opcode;
+
+	for (opcode = 0; opcode < lengthof(dns_opcodes); opcode++) {
+		if (!strcasecmp(name, dns_opcodes[opcode]))
+			return opcode;
+	}
+
+	return lengthof(dns_opcodes) - 1;
+} /* dns_iopcode() */
+
+
+static char dns_rcodes[16][16] = {
+	[DNS_RC_NOERROR]  = "NOERROR",
+	[DNS_RC_FORMERR]  = "FORMERR",
+	[DNS_RC_SERVFAIL] = "SERVFAIL",
+	[DNS_RC_NXDOMAIN] = "NXDOMAIN",
+	[DNS_RC_NOTIMP]   = "NOTIMP",
+	[DNS_RC_REFUSED]  = "REFUSED",
+	[DNS_RC_YXDOMAIN] = "YXDOMAIN",
+	[DNS_RC_YXRRSET]  = "YXRRSET",
+	[DNS_RC_NXRRSET]  = "NXRRSET",
+	[DNS_RC_NOTAUTH]  = "NOTAUTH",
+	[DNS_RC_NOTZONE]  = "NOTZONE",
+};
+
 const char *dns_strrcode(enum dns_rcode rcode) {
-	static char table[16][16]	= {
-		[DNS_RC_NOERROR]	= "NOERROR",
-		[DNS_RC_FORMERR]	= "FORMERR",
-		[DNS_RC_SERVFAIL]	= "SERVFAIL",
-		[DNS_RC_NXDOMAIN]	= "NXDOMAIN",
-		[DNS_RC_NOTIMP]		= "NOTIMP",
-		[DNS_RC_REFUSED]	= "REFUSED",
-		[DNS_RC_YXDOMAIN]	= "YXDOMAIN",
-		[DNS_RC_YXRRSET]	= "YXRRSET",
-		[DNS_RC_NXRRSET]	= "NXRRSET",
-		[DNS_RC_NOTAUTH]	= "NOTAUTH",
-		[DNS_RC_NOTZONE]	= "NOTZONE",
-	};
+	rcode &= 0xf;
 
-	rcode	&= 0xf;
+	if ('\0' == dns_rcodes[rcode][0])
+		dns__printnul(dns_rcodes[rcode], sizeof dns_rcodes[rcode], dns__print10(dns_rcodes[rcode], sizeof dns_rcodes[rcode], 0, rcode, 0));
 
-	if ('\0' == table[rcode][0])
-		dns__printnul(table[rcode], sizeof table[rcode], dns__print10(table[rcode], sizeof table[rcode], 0, rcode, 0));
-
-	return table[rcode];
+	return dns_rcodes[rcode];
 } /* dns_strrcode() */
+
+
+enum dns_rcode dns_ircode(const char *name) {
+	unsigned rcode;
+
+	for (rcode = 0; rcode < lengthof(dns_rcodes); rcode++) {
+		if (!strcasecmp(name, dns_rcodes[rcode]))
+			return rcode;
+	}
+
+	return lengthof(dns_rcodes) - 1;
+} /* dns_ircode() */
 
 
 /*
@@ -6811,6 +6886,71 @@ static int resolve_addrinfo(int argc, char *argv[]) {
 } /* resolve_addrinfo() */
 
 
+static int isection(int argc, char *argv[]) {
+	const char *name = (argv[1])? argv[1] : "";
+	int type;
+
+	type = dns_isection(name);
+	name = dns_strsection(type);
+
+	printf("%s (%d)\n", name, type);
+
+	return 0;
+} /* isection() */
+
+
+static int iclass(int argc, char *argv[]) {
+	const char *name = (argv[1])? argv[1] : "";
+	int type;
+
+	type = dns_iclass(name);
+	name = dns_strclass(type);
+
+	printf("%s (%d)\n", name, type);
+
+	return 0;
+} /* iclass() */
+
+
+static int itype(int argc, char *argv[]) {
+	const char *name = (argv[1])? argv[1] : "";
+	int type;
+
+	type = dns_itype(name);
+	name = dns_strtype(type);
+
+	printf("%s (%d)\n", name, type);
+
+	return 0;
+} /* itype() */
+
+
+static int iopcode(int argc, char *argv[]) {
+	const char *name = (argv[1])? argv[1] : "";
+	int type;
+
+	type = dns_iopcode(name);
+	name = dns_stropcode(type);
+
+	printf("%s (%d)\n", name, type);
+
+	return 0;
+} /* iopcode() */
+
+
+static int ircode(int argc, char *argv[]) {
+	const char *name = (argv[1])? argv[1] : "";
+	int type;
+
+	type = dns_ircode(name);
+	name = dns_strrcode(type);
+
+	printf("%s (%d)\n", name, type);
+
+	return 0;
+} /* ircode() */
+
+
 static const struct { const char *cmd; int (*run)(); const char *help; } cmds[] = {
 	{ "parse-packet",	&parse_packet,		"parse raw packet from stdin" },
 	{ "parse-domain",	&parse_domain,		"anchor and iteratively cleave domain" },
@@ -6831,6 +6971,11 @@ static const struct { const char *cmd; int (*run)(); const char *help; } cmds[] 
 	{ "addrinfo-stub",	&resolve_addrinfo,	"resolve through getaddrinfo clone" },
 	{ "addrinfo-recurse",	&resolve_addrinfo,	"resolve through getaddrinfo clone" },
 /*	{ "resolve-nameinfo",	&resolve_query,		"resolve as recursive resolver" }, */
+	{ "isection",		&isection,		"parse section string" },
+	{ "iclass",		&iclass,		"parse class string" },
+	{ "itype",		&itype,			"parse type string" },
+	{ "iopcode",		&iopcode,		"parse opcode string" },
+	{ "ircode",		&ircode,		"parse rcode string" },
 };
 
 
