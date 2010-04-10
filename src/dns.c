@@ -676,6 +676,32 @@ static size_t dns_strlcpy(char *dst, const char *src, size_t lim) {
 #endif
 
 
+static int dns_poll(int fd, short events, int timeout, const struct dns_options *opts) {
+	fd_set rset, wset;
+
+	if (!events)
+		return 0;
+
+	if (opts->events == DNS_LIBEVENT)
+		events = DNS_EV2POLL(events);
+
+	assert(fd >= 0 && fd < FD_SETSIZE);
+
+	FD_ZERO(&rset);
+	FD_ZERO(&wset);
+
+	if (events & DNS_POLLIN)
+		FD_SET(fd, &rset);
+
+	if (events & DNS_POLLOUT)
+		FD_SET(fd, &wset);
+
+	select(fd + 1, &rset, &wset, 0, (timeout >= 0)? &(struct timeval){ timeout, 0 } : NULL);
+
+	return 0;
+} /* dns_poll() */
+
+
 /*
  * P A C K E T  R O U T I N E S
  *
@@ -3186,6 +3212,7 @@ enum dns_resconf_keyword {
 	DNS_RESCONF_LOOKUP,
 	DNS_RESCONF_FILE,
 	DNS_RESCONF_BIND,
+	DNS_RESCONF_CACHE,
 	DNS_RESCONF_OPTIONS,
 	DNS_RESCONF_EDNS0,
 	DNS_RESCONF_NDOTS,
@@ -3212,6 +3239,7 @@ static enum dns_resconf_keyword dns_resconf_keyword(const char *word) {
 		[DNS_RESCONF_LOOKUP]		= "lookup",
 		[DNS_RESCONF_FILE]		= "file",
 		[DNS_RESCONF_BIND]		= "bind",
+		[DNS_RESCONF_CACHE]		= "cache",
 		[DNS_RESCONF_OPTIONS]		= "options",
 		[DNS_RESCONF_EDNS0]		= "edns0",
 		[DNS_RESCONF_ROTATE]		= "rotate",
@@ -3369,6 +3397,10 @@ skip:
 					break;
 				case DNS_RESCONF_BIND:
 					resconf->lookup[j++]	= 'b';
+
+					break;
+				case DNS_RESCONF_CACHE:
+					resconf->lookup[j++]	= 'c';
 
 					break;
 				default:
@@ -4046,6 +4078,81 @@ int dns_hints_dump(struct dns_hints *hints, FILE *fp) {
 
 
 /*
+ * C A C H E  R O U T I N E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+static dns_atomic_t dns_cache_acquire(struct dns_cache *cache) {
+	return 0;
+} /* dns_cache_acquire() */
+
+
+static dns_atomic_t dns_cache_release(struct dns_cache *cache) {
+	return 0;
+} /* dns_cache_release() */
+
+
+static struct dns_packet *dns_cache_query(struct dns_packet *query, struct dns_cache *cache, int *error) {
+	return 0;
+} /* dns_cache_submit() */
+
+
+static int dns_cache_submit(struct dns_packet *query, struct dns_cache *cache) {
+	return 0;
+} /* dns_cache_submit() */
+
+
+static int dns_cache_check(struct dns_cache *cache) {
+	return 0;
+} /* dns_cache_check() */
+
+
+static struct dns_packet *dns_cache_fetch(struct dns_cache *cache, int *error) {
+	return 0;
+} /* dns_cache_fetch() */
+
+
+static int dns_cache_pollfd(struct dns_cache *cache) {
+	return -1;
+} /* dns_cache_pollfd() */
+
+
+static short dns_cache_events(struct dns_cache *cache) {
+	return 0;
+} /* dns_cache_events() */
+
+
+static void dns_cache_clear(struct dns_cache *cache) {
+	return;
+} /* dns_cache_clear() */
+
+
+struct dns_cache *dns_cache_init(struct dns_cache *cache) {
+	static const struct dns_cache c_init = {
+		.acquire = &dns_cache_acquire,
+		.release = &dns_cache_release,
+		.query   = &dns_cache_query,
+		.submit  = &dns_cache_submit,
+		.check   = &dns_cache_check,
+		.fetch   = &dns_cache_fetch,
+		.pollfd  = &dns_cache_pollfd,
+		.events  = &dns_cache_events,
+		.clear   = &dns_cache_clear,
+	};
+
+	*cache = c_init;
+
+	return cache;
+} /* dns_cache_init() */
+
+
+void dns_cache_close(struct dns_cache *cache) {
+	if (cache)
+		cache->release(cache);
+} /* dns_cache_close() */
+
+
+/*
  * S O C K E T  R O U T I N E S
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -4668,48 +4775,8 @@ int dns_so_pollfd(struct dns_socket *so) {
 } /* dns_so_pollfd() */
 
 
-int dns_so_pollin(struct dns_socket *so) {
-	switch (so->state) {
-	case DNS_SO_UDP_RECV:
-		return so->udp;
-	case DNS_SO_TCP_RECV:
-		return so->tcp;
-	default:
-		return -1;
-	}
-} /* dns_so_pollin() */
-
-
-int dns_so_pollout(struct dns_socket *so) {
-	switch (so->state) {
-	case DNS_SO_UDP_CONN:
-	case DNS_SO_UDP_SEND:
-		return so->udp;
-	case DNS_SO_TCP_CONN:
-	case DNS_SO_TCP_SEND:
-		return so->tcp;
-	default:
-		return -1;
-	}
-} /* dns_so_pollout() */
-
-
 int dns_so_poll(struct dns_socket *so, int timeout) {
-	fd_set rfds, wfds;
-	int rfd, wfd;
-
-	FD_ZERO(&rfds);
-	FD_ZERO(&wfds);
-
-	if (-1 != (rfd = dns_so_pollin(so)) && rfd < FD_SETSIZE)
-		FD_SET(rfd, &rfds);
-
-	if (-1 != (wfd = dns_so_pollout(so)) && wfd < FD_SETSIZE)
-		FD_SET(wfd, &wfds);
-
-	select(MAX(rfd, wfd) + 1, &rfds, &wfds, 0, (timeout >= 0)? &(struct timeval){ timeout, 0 } : 0);
-
-	return 0;
+	return dns_poll(dns_so_pollfd(so), dns_so_events(so), timeout, &so->opts);
 } /* dns_so_poll() */
 
 
@@ -4721,9 +4788,14 @@ int dns_so_poll(struct dns_socket *so, int timeout) {
 enum dns_res_state {
 	DNS_R_INIT,
 	DNS_R_GLUE,
-	DNS_R_SWITCH,		/* (B)IND, (F)ILE */
+	DNS_R_SWITCH,		/* (B)IND, (F)ILE, (C)ACHE */
 
 	DNS_R_FILE,		/* Lookup in local hosts database */
+
+	DNS_R_CACHE,		/* Lookup in application cache */
+	DNS_R_SUBMIT,
+	DNS_R_CHECK,
+	DNS_R_FETCH,
 
 	DNS_R_BIND,		/* Lookup in the network */
 	DNS_R_SEARCH,
@@ -4754,6 +4826,7 @@ struct dns_resolver {
 	struct dns_resolv_conf *resconf;
 	struct dns_hosts *hosts;
 	struct dns_hints *hints;
+	struct dns_cache *cache;
 
 	dns_atomic_t refcount;
 
@@ -4800,7 +4873,7 @@ static int dns_res_tcp2type(int tcp) {
 	}
 } /* dns_res_tcp2type() */
 
-struct dns_resolver *dns_res_open(struct dns_resolv_conf *resconf, struct dns_hosts *hosts, struct dns_hints *hints, const struct dns_options *opts, int *error_) {
+struct dns_resolver *dns_res_open(struct dns_resolv_conf *resconf, struct dns_hosts *hosts, struct dns_hints *hints, struct dns_cache *cache, const struct dns_options *opts, int *error_) {
 	static const struct dns_resolver R_initializer
 		= { .refcount = 1, };
 	struct dns_resolver *R	= 0;
@@ -4817,6 +4890,8 @@ struct dns_resolver *dns_res_open(struct dns_resolv_conf *resconf, struct dns_ho
 		dns_hosts_acquire(hosts);
 	if (hints)
 		dns_hints_acquire(hints);
+	if (cache)
+		dns_cache_acquire(cache);
 
 	/*
 	 * Don't try to load it ourselves because a NULL object might be an
@@ -4838,6 +4913,7 @@ struct dns_resolver *dns_res_open(struct dns_resolv_conf *resconf, struct dns_ho
 	R->resconf	= resconf;
 	R->hosts	= hosts;
 	R->hints	= hints;
+	R->cache	= cache;
 
 	return R;
 syerr:
@@ -4850,6 +4926,7 @@ error:
 	dns_resconf_close(resconf);
 	dns_hosts_close(hosts);
 	dns_hints_close(hints);
+	dns_cache_close(cache);
 
 	return 0;
 } /* dns_res_open() */
@@ -4870,7 +4947,7 @@ struct dns_resolver *dns_res_stub(const struct dns_options *opts, int *error) {
 	if (!(hints = dns_hints_local(resconf, error)))
 		goto epilog;
 
-	if (!(res = dns_res_open(resconf, hosts, hints, opts, error)))
+	if (!(res = dns_res_open(resconf, hosts, hints, NULL, opts, error)))
 		goto epilog;
 
 epilog:
@@ -5148,10 +5225,15 @@ exec:
 	case DNS_R_SWITCH:
 		while (F->which < (int)sizeof R->resconf->lookup) {
 			switch (R->resconf->lookup[F->which++]) {
-			case 'b':
+			case 'b': case 'B':
 				goto(R->sp, DNS_R_BIND);
-			case 'f':
+			case 'f': case 'F':
 				goto(R->sp, DNS_R_FILE);
+			case 'c': case 'C':
+				if (R->cache)
+					goto(R->sp, DNS_R_CACHE);
+
+				break;
 			default:
 				break;
 			}
@@ -5201,6 +5283,44 @@ exec:
 				free(F->answer); F->answer = 0;
 			}
 		}
+
+		goto(R->sp, DNS_R_SWITCH);
+	case DNS_R_CACHE:
+		error = 0;
+
+		if ((F->answer = R->cache->query(F->query, R->cache, &error))) {
+			if (dns_p_count(F->answer, DNS_S_AN) > 0)
+				goto(R->sp, DNS_R_FINISH);
+
+			free(F->answer); F->answer = 0;
+
+			goto(R->sp, DNS_R_SWITCH);
+		} else if (error)
+			goto error;
+
+		F->state++;
+	case DNS_R_SUBMIT:
+		if ((error = R->cache->submit(F->query, R->cache)))
+			goto error;
+
+		F->state++;
+	case DNS_R_CHECK:
+		if ((error = R->cache->check(R->cache)))
+			goto error;
+
+		F->state++;
+	case DNS_R_FETCH:
+		error = 0;
+
+		if ((F->answer = R->cache->fetch(R->cache, &error))) {
+			if (dns_p_count(F->answer, DNS_S_AN) > 0)
+				goto(R->sp, DNS_R_FINISH);
+
+			free(F->answer); F->answer = 0;
+
+			goto(R->sp, DNS_R_SWITCH);
+		} else if (error)
+			goto error;
 
 		goto(R->sp, DNS_R_SWITCH);
 	case DNS_R_BIND:
@@ -5413,6 +5533,9 @@ exec:
 
 		F->state++;
 	case DNS_R_SMART0_A:
+		if (&F[1] >= endof(R->stack))
+			goto(R->sp, DNS_R_DONE);
+
 		while (dns_rr_grep(&rr, 1, &R->smart, F->answer, &error)) {
 			union {
 				struct dns_ns ns;
@@ -5540,28 +5663,33 @@ error:
 
 
 void dns_res_clear(struct dns_resolver *R) {
-	return dns_so_clear(&R->so);
+	switch (R->stack[R->sp].state) {
+	case DNS_R_CHECK:
+		return R->cache->clear(R->cache);
+	default:
+		return dns_so_clear(&R->so);
+	}
 } /* dns_res_clear() */
 
 
 int dns_res_events(struct dns_resolver *R) {
-	return dns_so_events(&R->so);
+	switch (R->stack[R->sp].state) {
+	case DNS_R_CHECK:
+		return R->cache->events(R->cache);
+	default:
+		return dns_so_events(&R->so);
+	}
 } /* dns_res_events() */
 
 
 int dns_res_pollfd(struct dns_resolver *R) {
-	return dns_so_pollfd(&R->so);
+	switch (R->stack[R->sp].state) {
+	case DNS_R_CHECK:
+		return R->cache->pollfd(R->cache);
+	default:
+		return dns_so_pollfd(&R->so);
+	}
 } /* dns_res_pollfd() */
-
-
-int dns_res_pollin(struct dns_resolver *R) {
-	return dns_so_pollin(&R->so);
-} /* dns_res_pollin() */
-
-
-int dns_res_pollout(struct dns_resolver *R) {
-	return dns_so_pollout(&R->so);
-} /* dns_res_pollout() */
 
 
 time_t dns_res_elapsed(struct dns_resolver *R) {
@@ -5570,7 +5698,7 @@ time_t dns_res_elapsed(struct dns_resolver *R) {
 
 
 int dns_res_poll(struct dns_resolver *R, int timeout) {
-	return dns_so_poll(&R->so, timeout);
+	return dns_poll(dns_res_pollfd(R), dns_res_events(R), timeout, &R->so.opts);
 } /* dns_res_poll() */
 
 
@@ -5966,16 +6094,6 @@ int dns_ai_events(struct dns_addrinfo *ai) {
 int dns_ai_pollfd(struct dns_addrinfo *ai) {
 	return dns_res_pollfd(ai->res);
 } /* dns_ai_pollfd() */
-
-
-int dns_ai_pollin(struct dns_addrinfo *ai) {
-	return dns_res_pollin(ai->res);
-} /* dns_ai_pollin() */
-
-
-int dns_ai_pollout(struct dns_addrinfo *ai) {
-	return dns_res_pollout(ai->res);
-} /* dns_ai_pollout() */
 
 
 int dns_ai_poll(struct dns_addrinfo *ai, int timeout) {
@@ -6810,7 +6928,7 @@ static int resolve_query(int argc, char *argv[]) {
 
 	resconf()->options.recurse	= (0 != strstr(argv[0], "recurse"));
 
-	if (!(R = dns_res_open(resconf(), hosts(), hints(resconf(), &error), dns_opts(), &error)))
+	if (!(R = dns_res_open(resconf(), hosts(), hints(resconf(), &error), NULL, dns_opts(), &error)))
 		panic("%s: %s", MAIN.qname, strerror(error));
 
 	if ((error = dns_res_submit(R, MAIN.qname, MAIN.qtype, DNS_C_IN)))
@@ -6849,7 +6967,7 @@ static int resolve_addrinfo(int argc, char *argv[]) {
 
 	resconf()->options.recurse	= (0 != strstr(argv[0], "recurse"));
 
-	if (!(res = dns_res_open(resconf(), hosts(), hints(resconf(), &error), dns_opts(), &error)))
+	if (!(res = dns_res_open(resconf(), hosts(), hints(resconf(), &error), NULL, dns_opts(), &error)))
 		panic("%s: %s", MAIN.qname, strerror(error));
 
 	if (!(ai = dns_ai_open(MAIN.qname, "80", MAIN.qtype, &ai_hints, res, &error)))

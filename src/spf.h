@@ -73,9 +73,9 @@ const char *spf_strresult(int);
 
 #define SPF_VENDOR "william@25thandClement.com"
 
-#define SPF_V_REL  0x20100406
-#define SPF_V_ABI  0x20100324
-#define SPF_V_API  0x20100324
+#define SPF_V_REL  0x20100409
+#define SPF_V_ABI  0x20100409
+#define SPF_V_API  0x20100409
 
 
 const char *spf_vendor(void);
@@ -321,15 +321,20 @@ spf_macros_t spf_macros(const char *, const struct spf_env *);
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-struct spf_resolver;
-
 struct spf_limits {
-	unsigned querymax; /* max # terms which require a query */
+	unsigned query; /* max # terms which require a query */
 }; /* struct spf_limits */
 
 extern const struct spf_limits spf_safelimits;
 
-struct spf_resolver *spf_open(const struct spf_env *, const struct spf_limits *, int *);
+struct spf_options {
+	struct spf_limits limits;
+}; /* struct spf_options */
+
+struct dns_resolver;
+struct spf_resolver;
+
+struct spf_resolver *spf_open(const struct spf_env *, struct dns_resolver *, const struct spf_options *, int *);
 
 void spf_close(struct spf_resolver *);
 

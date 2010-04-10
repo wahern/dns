@@ -683,6 +683,7 @@ struct dns_resolv_conf {
 
 	char search[4][DNS_D_MAXNAME + 1];
 
+	/* (f)ile, (b)ind, (c)ache */
 	char lookup[3];
 
 	struct {
@@ -782,6 +783,39 @@ unsigned dns_hints_grep(struct sockaddr **, socklen_t *, unsigned, struct dns_hi
 
 
 /*
+ * C A C H E  I N T E R F A C E
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+struct dns_cache {
+	void *state;
+
+	dns_atomic_t (*acquire)(struct dns_cache *);
+	dns_atomic_t (*release)(struct dns_cache *);
+
+	struct dns_packet *(*query)(struct dns_packet *, struct dns_cache *, int *);
+
+	int (*submit)(struct dns_packet *, struct dns_cache *);
+	int (*check)(struct dns_cache *);
+	struct dns_packet *(*fetch)(struct dns_cache *, int *);
+
+	int (*pollfd)(struct dns_cache *);
+	short (*events)(struct dns_cache *);
+	void (*clear)(struct dns_cache *);
+
+	union {
+		long i;
+		void *p;
+	} arg[3];
+}; /* struct dns_cache */
+
+
+struct dns_cache *dns_cache_init(struct dns_cache *);
+
+void dns_cache_close(struct dns_cache *);
+
+
+/*
  * A P P L I C A T I O N  I N T E R F A C E
  *
  * Options to change the behavior of the API. Applies across all the
@@ -846,10 +880,6 @@ int dns_so_events(struct dns_socket *);
 
 int dns_so_pollfd(struct dns_socket *);
 
-int dns_so_pollin(struct dns_socket *);
-
-int dns_so_pollout(struct dns_socket *);
-
 int dns_so_poll(struct dns_socket *, int);
 
 
@@ -860,7 +890,7 @@ int dns_so_poll(struct dns_socket *, int);
 
 struct dns_resolver;
 
-struct dns_resolver *dns_res_open(struct dns_resolv_conf *, struct dns_hosts *hosts, struct dns_hints *, const struct dns_options *, int *);
+struct dns_resolver *dns_res_open(struct dns_resolv_conf *, struct dns_hosts *hosts, struct dns_hints *, struct dns_cache *, const struct dns_options *, int *);
 
 struct dns_resolver *dns_res_stub(const struct dns_options *, int *);
 
@@ -887,10 +917,6 @@ void dns_res_clear(struct dns_resolver *);
 int dns_res_events(struct dns_resolver *);
 
 int dns_res_pollfd(struct dns_resolver *);
-
-int dns_res_pollin(struct dns_resolver *);
-
-int dns_res_pollout(struct dns_resolver *);
 
 int dns_res_poll(struct dns_resolver *, int);
 
@@ -919,10 +945,6 @@ void dns_ai_clear(struct dns_addrinfo *);
 int dns_ai_events(struct dns_addrinfo *);
 
 int dns_ai_pollfd(struct dns_addrinfo *);
-
-int dns_ai_pollin(struct dns_addrinfo *);
-
-int dns_ai_pollout(struct dns_addrinfo *);
 
 int dns_ai_poll(struct dns_addrinfo *, int);
 

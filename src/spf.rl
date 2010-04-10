@@ -1600,6 +1600,8 @@ static void vm_init(struct spf_vm *vm, struct spf_resolver *spf) {
 
 /** forward definition */
 struct spf_resolver {
+	struct spf_options opts;
+
 	struct spf_env env;
 
 	struct spf_vm vm;
@@ -3522,22 +3524,35 @@ static int vm_exec(struct spf_vm *vm) {
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-const struct spf_limits spf_safelimits = { .querymax = 10, };
+#define SPF_SAFELIMITS { .query = 10 }
 
-struct spf_resolver *spf_open(const struct spf_env *env, const struct spf_limits *limits, int *error_) {
+const struct spf_limits spf_safelimits = SPF_SAFELIMITS;
+
+const struct spf_options spf_defaults = {
+	.limits = SPF_SAFELIMITS,
+}; /* spf_defaults */
+
+struct spf_resolver *spf_open(const struct spf_env *env, struct dns_resolver *res, const struct spf_options *opts, int *error_) {
 	struct spf_resolver *spf = 0;
 	int error;
+
+	if (res)
+		dns_res_acquire(res);
 
 	if (!(spf = malloc(sizeof *spf)))
 		goto syerr;
 
 	memset(spf, 0, sizeof *spf);
 
+	spf->opts = (opts)? *opts : spf_defaults;
+
 	spf->env = *env;
 
 	vm_init(&spf->vm, spf);
 
-	if (!(spf->res = dns_res_stub(NULL, &error)))	
+	if (res) {
+		spf->res = res; res = NULL;
+	} else if (!(spf->res = dns_res_stub(NULL, &error)))
 		goto error;
 
 	dns_p_init(&spf->fcrd.ptr, sizeof spf->fcrd.buf);
@@ -3550,13 +3565,16 @@ struct spf_resolver *spf_open(const struct spf_env *env, const struct spf_limits
 	vm_emit(&spf->vm, OP_CHECK);
 	vm_emit(&spf->vm, OP_HALT);
 
+	spf->res = res;
+
 	return spf;
 syerr:
 	error = errno;
 error:
 	*error_ = error;
 
-	free(spf);
+	dns_res_close(res);
+	spf_close(spf);
 
 	return 0;
 } /* spf_open() */
@@ -3676,7 +3694,7 @@ static int vm(const struct spf_env *env, const char *file) {
 	if (file && strcmp(file, "-"))
 		assert((fp = fopen(file, "r")));
 
-	assert((spf = spf_open(env, 0, &error)));
+	assert((spf = spf_open(env, NULL, NULL, &error)));
 	vm = &spf->vm;
 	vm->end = 0;
 
@@ -3786,7 +3804,7 @@ static int check(int argc, char *argv[], const struct spf_env *env) {
 	struct spf_resolver *spf;
 	int error;
 
-	assert((spf = spf_open(env, 0, &error)));
+	assert((spf = spf_open(env, NULL, NULL, &error)));
 
 	while ((error = spf_check(spf))) {
 		switch (error) {
