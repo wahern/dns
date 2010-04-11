@@ -35,6 +35,13 @@ spf.t: spf
 check: spf.t
 
 
+ZONE_CPPFLAGS += -I../compat/bsd -I../compat
+ZONE_CFLAGS   += $(SPF_CFLAGS)
+
+zone: zone.c dns.c
+	$(CC) $(ZONE_CFLAGS) $(ZONE_CPPFLAGS) -DZONE_MAIN -o $@ $^
+
+
 .PHONY: clean
 
 clean:

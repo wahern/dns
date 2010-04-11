@@ -624,6 +624,7 @@ union dns_any {
 	struct dns_ns ns;
 	struct dns_cname cname;
 	struct dns_soa soa;
+	struct dns_ptr ptr;
 	struct dns_srv srv;
 	struct dns_txt txt, rdata;
 }; /* union dns_any */

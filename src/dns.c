@@ -2348,6 +2348,8 @@ size_t dns_soa_print(void *dst, size_t lim, struct dns_soa *soa) {
 	cp	+= dns__printchar(dst, lim, cp, ' ');
 	cp	+= dns__print10(dst, lim, cp, soa->minimum, 0);
 
+	dns__printnul(dst, lim, cp);
+
 	return cp;
 } /* dns_soa_print() */
 
