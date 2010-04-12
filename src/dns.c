@@ -4992,6 +4992,7 @@ void dns_res_close(struct dns_resolver *R) {
 	dns_hints_close(R->hints);
 	dns_hosts_close(R->hosts);
 	dns_resconf_close(R->resconf);
+	dns_cache_close(R->cache);
 
 	free(R);
 } /* dns_res_close() */
@@ -5289,6 +5290,9 @@ exec:
 		goto(R->sp, DNS_R_SWITCH);
 	case DNS_R_CACHE:
 		error = 0;
+
+		if (!F->query && !(F->query = dns_res_mkquery(R, R->qname, R->qtype, R->qclass, &error)))
+			goto error;
 
 		if ((F->answer = R->cache->query(F->query, R->cache, &error))) {
 			if (dns_p_count(F->answer, DNS_S_AN) > 0)
