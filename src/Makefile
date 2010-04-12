@@ -42,6 +42,13 @@ zone: zone.c dns.c
 	$(CC) $(ZONE_CFLAGS) $(ZONE_CPPFLAGS) -DZONE_MAIN -o $@ $^
 
 
+CACHE_CPPFLAGS += -I../compat/bsd -I../compat
+CACHE_CFLAGS   += $(SPF_CFLAGS)
+
+cache: cache.c zone.c dns.c
+	$(CC) $(CACHE_CFLAGS) $(CACHE_CPPFLAGS) -DCACHE_MAIN -o $@ $^
+
+
 .PHONY: clean
 
 clean:
