@@ -3565,8 +3565,6 @@ struct spf_resolver *spf_open(const struct spf_env *env, struct dns_resolver *re
 	vm_emit(&spf->vm, OP_CHECK);
 	vm_emit(&spf->vm, OP_HALT);
 
-	spf->res = res;
-
 	return spf;
 syerr:
 	error = errno;
@@ -3658,11 +3656,68 @@ int spf_poll(struct spf_resolver *spf, int timeout) {
 
 #include <unistd.h>	/* getopt(3) */
 
+#include "cache.h"
+
+
+struct {
+	const char *cache;
+	struct dns_resolver *res;
+} MAIN;
+
 
 #define panic_(fn, ln, fmt, ...) \
 	do { fprintf(stderr, fmt "%.1s", (fn), (ln), __VA_ARGS__); _Exit(EXIT_FAILURE); } while (0)
 
 #define panic(...) panic_(__func__, __LINE__, "spf: (%s:%d) " __VA_ARGS__, "\n")
+
+
+static struct dns_cache *mkcache(void) {
+#if SPF_CACHE
+	struct cache *cache;
+	FILE *fp;
+	int error;
+
+	if (!MAIN.cache)
+		return NULL;
+
+	assert(cache = cache_open(&error));
+
+	if (!strcmp(MAIN.cache, "-")) {
+		assert(!cache_loadfile(cache, stdin, NULL, 0));
+	} else {
+		if (!(fp = fopen(MAIN.cache, "r")))
+			panic("%s: %s", MAIN.cache, strerror(errno));
+
+		assert(!cache_loadfile(cache, fp, NULL, 0));
+
+		fclose(fp);
+	}
+
+	return cache_resi(cache);
+#else
+	return NULL;
+#endif
+} /* mkcache() */
+
+
+static struct dns_resolver *mkres(void) {
+	struct dns_resolv_conf *resconf;
+	unsigned i;
+	int error;
+
+	if (MAIN.res)
+		return MAIN.res;
+
+	assert(resconf = dns_resconf_local(&error));
+
+	resconf->lookup[2] = resconf->lookup[1];
+	resconf->lookup[1] = resconf->lookup[0];
+	resconf->lookup[0] = 'c';
+
+	assert(MAIN.res = dns_res_open(dns_resconf_mortal(resconf), dns_hosts_mortal(dns_hosts_local(&error)), dns_hints_mortal(dns_hints_local(resconf, &error)), mkcache(), dns_opts(), &error));
+
+	return MAIN.res;
+} /* mkres() */
 
 
 static void frepc(int ch, int count, FILE *fp)
@@ -3694,7 +3749,7 @@ static int vm(const struct spf_env *env, const char *file) {
 	if (file && strcmp(file, "-"))
 		assert((fp = fopen(file, "r")));
 
-	assert((spf = spf_open(env, NULL, NULL, &error)));
+	assert((spf = spf_open(env, mkres(), NULL, &error)));
 	vm = &spf->vm;
 	vm->end = 0;
 
@@ -3804,7 +3859,7 @@ static int check(int argc, char *argv[], const struct spf_env *env) {
 	struct spf_resolver *spf;
 	int error;
 
-	assert((spf = spf_open(env, NULL, NULL, &error)));
+	assert((spf = spf_open(env, mkres(), NULL, &error)));
 
 	while ((error = spf_check(spf))) {
 		switch (error) {
@@ -4061,6 +4116,7 @@ int printenv(int argc, char *argv[], const struct spf_env *env) {
 	"  -R DOMAIN  domain name of host performing the check\n" \
 	"  -T TIME    current timestamp\n" \
 	"  -f PATH    path to file (e.g. to load vm instead of stdin)\n" \
+	"  -z PATH    path to zone cache file\n" \
 	"  -W         print version\n" \
 	"  -v         be verbose (use more to increase verboseness)\n" \
 	"  -h         print usage\n" \
@@ -4105,7 +4161,7 @@ int main(int argc, char **argv) {
 	gethostname(env.r, sizeof env.r);
 	spf_itoa(env.t, sizeof env.t, (unsigned)time(0));
 
-	while (-1 != (opt = getopt(argc, argv, "S:L:O:D:I:P:V:H:C:R:T:f:vWh"))) {
+	while (-1 != (opt = getopt(argc, argv, "S:L:O:D:I:P:V:H:C:R:T:f:z:vWh"))) {
 		switch (opt) {
 		case 'S':
 			{
@@ -4161,6 +4217,10 @@ setenv:
 			break;
 		case 'f':
 			file = optarg;
+
+			break;
+		case 'z':
+			MAIN.cache = optarg;
 
 			break;
 		case 'v':

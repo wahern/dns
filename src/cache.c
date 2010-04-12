@@ -295,9 +295,9 @@ static struct dns_resolv_conf *resconf(void) {
 	if (!MAIN.resconf) {
 		assert(MAIN.resconf = dns_resconf_local(&error));
 
+		MAIN.resconf->lookup[2] = MAIN.resconf->lookup[1];
+		MAIN.resconf->lookup[1] = MAIN.resconf->lookup[0];
 		MAIN.resconf->lookup[0] = 'c';
-		MAIN.resconf->lookup[1] = 'f';
-		MAIN.resconf->lookup[2] = 'b';
 	}
 
 	return MAIN.resconf;
