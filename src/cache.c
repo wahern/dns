@@ -239,6 +239,24 @@ error:
 } /* cache_loadfile() */
 
 
+int cache_loadpath(struct cache *C, const char *path, const char *origin, unsigned ttl) {
+	FILE *fp;
+	int error;
+
+	if (!strcmp(path, "-"))
+		return cache_loadfile(C, stdin, origin, ttl);
+
+	if (!(fp = fopen(path, "r")))
+		return errno;
+
+	error = cache_loadfile(C, fp, origin, ttl);
+
+	fclose(fp);
+
+	return error;
+} /* cache_loadpath() */
+
+
 static void cache_showpkt(struct dns_packet *pkt, FILE *fp) {
 	char buf[1024];
 	struct dns_rr rr;

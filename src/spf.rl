@@ -3660,6 +3660,7 @@ int spf_poll(struct spf_resolver *spf, int timeout) {
 
 
 struct {
+	const char *resconf;
 	const char *cache;
 	struct dns_resolver *res;
 } MAIN;
@@ -3673,25 +3674,19 @@ struct {
 
 static struct dns_cache *mkcache(void) {
 #if SPF_CACHE
-	struct cache *cache;
-	FILE *fp;
+	static struct cache *cache;
 	int error;
+
+	if (cache)
+		return cache_resi(cache);
 
 	if (!MAIN.cache)
 		return NULL;
 
 	assert(cache = cache_open(&error));
 
-	if (!strcmp(MAIN.cache, "-")) {
-		assert(!cache_loadfile(cache, stdin, NULL, 0));
-	} else {
-		if (!(fp = fopen(MAIN.cache, "r")))
-			panic("%s: %s", MAIN.cache, strerror(errno));
-
-		assert(!cache_loadfile(cache, fp, NULL, 0));
-
-		fclose(fp);
-	}
+	if ((error = cache_loadpath(cache, MAIN.cache, NULL, 0)))
+		panic("%s: %s", MAIN.cache, strerror(error));
 
 	return cache_resi(cache);
 #else
@@ -3700,21 +3695,38 @@ static struct dns_cache *mkcache(void) {
 } /* mkcache() */
 
 
-static struct dns_resolver *mkres(void) {
-	struct dns_resolv_conf *resconf;
+static struct dns_resolv_conf *mkresconf(void) {
+	static struct dns_resolv_conf *resconf;
 	unsigned i;
+	int error;
+
+	if (resconf)
+		return resconf;
+
+	if (MAIN.resconf) {
+		assert(resconf = dns_resconf_open(&error));
+
+		if ((error = dns_resconf_loadpath(resconf, MAIN.resconf)))
+			panic("%s: %s", MAIN.resconf, strerror(error));
+	} else {
+		assert(resconf = dns_resconf_local(&error));
+
+		resconf->lookup[2] = resconf->lookup[1];
+		resconf->lookup[1] = resconf->lookup[0];
+		resconf->lookup[0] = 'c';
+	}
+
+	return resconf;
+} /* mkresconf() */
+
+
+static struct dns_resolver *mkres(void) {
 	int error;
 
 	if (MAIN.res)
 		return MAIN.res;
 
-	assert(resconf = dns_resconf_local(&error));
-
-	resconf->lookup[2] = resconf->lookup[1];
-	resconf->lookup[1] = resconf->lookup[0];
-	resconf->lookup[0] = 'c';
-
-	assert(MAIN.res = dns_res_open(dns_resconf_mortal(resconf), dns_hosts_mortal(dns_hosts_local(&error)), dns_hints_mortal(dns_hints_local(resconf, &error)), mkcache(), dns_opts(), &error));
+	assert(MAIN.res = dns_res_open(mkresconf(), dns_hosts_mortal(dns_hosts_local(&error)), dns_hints_mortal(dns_hints_local(mkresconf(), &error)), mkcache(), dns_opts(), &error));
 
 	return MAIN.res;
 } /* mkres() */
@@ -4116,6 +4128,7 @@ int printenv(int argc, char *argv[], const struct spf_env *env) {
 	"  -R DOMAIN  domain name of host performing the check\n" \
 	"  -T TIME    current timestamp\n" \
 	"  -f PATH    path to file (e.g. to load vm instead of stdin)\n" \
+	"  -c PATH    path to resolv.conf\n" \
 	"  -z PATH    path to zone cache file\n" \
 	"  -W         print version\n" \
 	"  -v         be verbose (use more to increase verboseness)\n" \
@@ -4161,7 +4174,7 @@ int main(int argc, char **argv) {
 	gethostname(env.r, sizeof env.r);
 	spf_itoa(env.t, sizeof env.t, (unsigned)time(0));
 
-	while (-1 != (opt = getopt(argc, argv, "S:L:O:D:I:P:V:H:C:R:T:f:z:vWh"))) {
+	while (-1 != (opt = getopt(argc, argv, "S:L:O:D:I:P:V:H:C:R:T:f:c:z:vWh"))) {
 		switch (opt) {
 		case 'S':
 			{
@@ -4217,6 +4230,10 @@ setenv:
 			break;
 		case 'f':
 			file = optarg;
+
+			break;
+		case 'c':
+			MAIN.resconf = optarg;
 
 			break;
 		case 'z':

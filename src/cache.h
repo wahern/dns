@@ -39,6 +39,8 @@ void cache_close(struct cache *);
 
 int cache_loadfile(struct cache *, FILE *, const char *, unsigned);
 
+int cache_loadpath(struct cache *, const char *, const char *, unsigned);
+
 struct dns_cache *cache_resi(struct cache *);
 
 int cache_insert(struct cache *, const char *, enum dns_type, unsigned, const void *);
