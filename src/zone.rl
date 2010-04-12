@@ -24,17 +24,21 @@
  * ==========================================================================
  */
 #include <stddef.h>	/* NULL */
+#include <stdlib.h>	/* malloc(3) free(3) */
 #include <stdio.h>	/* fopen(3) fclose(3) fread(3) fputc(3) */
 
-#include <string.h>	/* memset(3) memmove(3) strlcpy(3) */
+#include <string.h>	/* memset(3) memmove(3) strlcpy(3) strlcat(3) */
 
 #include <ctype.h>	/* isspace(3) isgraph(3) isdigit(3) */
 
 #include <assert.h>	/* assert(3) */
 
+#include <errno.h>	/* errno */
+
 #include <arpa/inet.h>	/* inet_pton(3) */
 
 #include "dns.h"
+#include "zone.h"
 
 
 #ifndef lengthof
@@ -57,7 +61,7 @@
 
 
 /*
- * P R E - P R O C E S S O R  R O U T I N E S
+ * P R E - P R O C E S S I N G  R O U T I N E S
  *
  * Outputs an encoded normal form of the RFC1035 master file syntax.
  *
@@ -75,14 +79,14 @@
 
 #define T_LIT 0x0100
 
-struct pp {
+struct zonepp {
 	int escaped, quoted, grouped, comment, lastc;
 	struct { int v, n; } octet;
-}; /* struct pp */
+}; /* struct zonepp */
 
 #define islwsp(ch) ((ch) == ' ' || (ch) == '\t')
 
-size_t fold(short *dst, size_t lim, unsigned char **src, size_t *len, struct pp *state) {
+static size_t fold(short *dst, size_t lim, unsigned char **src, size_t *len, struct zonepp *state) {
 	short *p, *pe;
 	int ch;
 
@@ -205,31 +209,6 @@ skip:
 } /* fold() */
 
 
-static void foldfile(FILE *dst, FILE *src) {
-	struct pp state;
-	unsigned char in[16], *p;
-	short out[16];
-	size_t len, num, i;
-
-	memset(&state, 0, sizeof state);
-
-	while ((len = fread(in, 1, sizeof in, src))) {
-		p = in;
-
-		while ((num = fold(out, sizeof out, &p, &len, &state))) {
-			for (i = 0; i < num; i++) {
-				if ((out[i] & T_LIT)
-				||  (!isgraph(0xff & out[i]) && !isspace(0xff & out[i]))) {
-					fprintf(dst, "\\%.3d", (0xff & out[i]));
-				} else {
-					fputc((0xff & out[i]), dst);
-				}
-			}
-		}
-	}
-} /* foldfile() */
-
-
 struct tokens {
 	short base[4096];
 	unsigned count;
@@ -264,7 +243,7 @@ struct zonefile {
 	struct dns_soa soa;
 
 	struct tokens toks;
-	struct pp ts;
+	struct zonepp pp;
 }; /* struct zonefile */
 
 
@@ -279,26 +258,7 @@ void zone_init(struct zonefile *P, const char *origin, unsigned ttl) {
 } /* zone_init() */
 
 
-size_t zone_parse(struct zonefile *P, const void *src, size_t len) {
-	unsigned char *p = (unsigned char *)src;
-	size_t count;
-
-	while ((count = fold(&P->toks.base[P->toks.count], lengthof(P->toks.base) - P->toks.count, &p, &len, &P->ts)))
-		P->toks.count += count;
-
-	return p - (unsigned char *)src;
-} /* zone_parse() */
-
-
-struct zonerr {
-	char name[DNS_D_MAXNAME + 1];
-	enum dns_class class;
-	enum dns_type type;
-	unsigned ttl;
-	union dns_any data;
-}; /* struct zonerr */
-
-static void zonerr_init(struct zonerr *rr, struct zonefile *P) {
+void zonerr_init(struct zonerr *rr, struct zonefile *P) {
 	memset(rr, 0, sizeof *rr);
 	rr->class = DNS_C_IN;
 	rr->ttl   = P->ttl;
@@ -324,7 +284,7 @@ static void zonerr_init(struct zonerr *rr, struct zonefile *P) {
 	}
 
 	action str_init { sp = str; }
-	action str_copy { if (sp < endof(str)) *sp++ = fc; }
+	action str_copy { if (sp < endof(str)) *sp++ = fc; lc = fc; }
 	action str_end { if (sp >= endof(str)) sp--; *sp = '\0'; }
 
 	string = (any - space)+ >str_init $str_copy %str_end;
@@ -339,11 +299,19 @@ static void zonerr_init(struct zonerr *rr, struct zonefile *P) {
 		("s"i);
 	ttl = number %{ ttl = n; } ttl_unit? space*;
 
-	domain = string;
+	action dom_end {
+		 if (lc != '.') {
+			if (P->origin[0] != '.')
+				strlcat(str, ".", sizeof str);
+			strlcat(str, P->origin, sizeof str); 
+		}
+	}
+
+	domain = string %dom_end;
 
 	SOA_type    = "SOA"i %{ rr->type = DNS_T_SOA; };
 	SOA_mname   = domain %{ strlcpy(rr->data.soa.mname, str, sizeof rr->data.soa.mname); };
-	SOA_rname   = domain %{ strlcpy(rr->data.soa.rname, str, sizeof rr->data.soa.rname); };
+	SOA_rname   = string %{ strlcpy(rr->data.soa.rname, str, sizeof rr->data.soa.rname); };
 	SOA_serial  = number %{ rr->data.soa.serial = n; };
 	SOA_refresh = ttl %{ rr->data.soa.refresh = ttl; };
 	SOA_retry   = ttl %{ rr->data.soa.retry = ttl; };
@@ -401,7 +369,7 @@ static void zonerr_init(struct zonerr *rr, struct zonefile *P) {
 
 	rrname_blank  = " " %{ strlcpy(rr->name, P->lastrr, sizeof rr->name); } " "*;
 	rrname_origin = "@ " %{ strlcpy(rr->name, P->origin, sizeof rr->name); } " "*;
-	rrname_plain  = string %{ if (!rr->name[0]) strlcpy(rr->name, str, sizeof rr->name); } " "+;
+	rrname_plain  = domain %{ if (!rr->name[0]) strlcpy(rr->name, str, sizeof rr->name); } " "+;
 
 	rrname = rrname_blank | rrname_origin | rrname_plain;
 
@@ -422,16 +390,22 @@ static void zonerr_init(struct zonerr *rr, struct zonefile *P) {
 
 struct zonerr *zone_getrr(struct zonerr *rr, struct dns_soa **soa, struct zonefile *P) {
 	%% write data;
-	short *p, *pe, *eof, *ts, *te;
-	int cs, act;
-	char str[1024], *sp = str;
-	unsigned span = 0, ttl = 0, n = 0;
+	short *p, *pe, *eof;
+	int cs;
+	char str[1024], *sp, lc;
+	unsigned span, ttl, n;
 
+	span = 0;
 next:
 	tok_discard(&P->toks, span);
 
 	if (!(span = tok_eol(&P->toks)))
 		return NULL;
+
+	sp  = str;
+	lc  = 0;
+	ttl = 0;
+	n   = 0;
 
 	zonerr_init(rr, P);
 
@@ -447,6 +421,11 @@ next:
 
 	strlcpy(P->lastrr, rr->name, sizeof P->lastrr);
 
+	if (rr->type == DNS_T_SOA)
+		P->soa = rr->data.soa;
+
+	*soa = &P->soa;
+
 	return rr;
 } /* zone_getrr() */
 
@@ -455,7 +434,7 @@ size_t zone_parsesome(struct zonefile *P, const void *src, size_t len) {
 	unsigned char *p = (unsigned char *)src;
 	size_t lim = lengthof(P->toks.base) - P->toks.count;
 
-	P->toks.count += fold(&P->toks.base[P->toks.count], lim, &p, &len, &P->ts);
+	P->toks.count += fold(&P->toks.base[P->toks.count], lim, &p, &len, &P->pp);
 
 	return p - (unsigned char *)src;
 } /* zone_parsesome() */
@@ -477,23 +456,21 @@ size_t zone_parsefile(struct zonefile *P, FILE *fp) {
 } /* zone_parsefile() */
 
 
-int parsefile(FILE *fp, const char *origin, unsigned ttl) {
-	struct zonefile P;
-	struct zonerr rr;
-	struct dns_soa *soa;
+struct zonefile *zone_open(const char *origin, unsigned ttl, int *error) {
+	struct zonefile *P;
 
-	zone_init(&P, origin, ttl);
+	if (!(P = malloc(sizeof *P)))
+		{ *error = errno; return NULL; }
 
-	while (zone_parsefile(&P, fp)) {
-		while (zone_getrr(&rr, &soa, &P)) {
-			char data[512];
-			dns_any_print(data, sizeof data, &rr.data, rr.type);
-			printf("%s %u IN %s %s\n", rr.name, rr.ttl, dns_strtype(rr.type), data);
-		}
-	}
+	zone_init(P, origin, ttl);
 
-	return 0;
-} /* parsefile() */
+	return P;
+} /* zone_open() */
+
+
+void zone_close(struct zonefile *P) {
+	free(P);
+} /* zone_close() */
 
 
 #if ZONE_MAIN
@@ -508,13 +485,58 @@ struct {
 } MAIN;
 
 
+static void parsefile(FILE *fp, const char *origin, unsigned ttl) {
+	struct zonefile P;
+	struct zonerr rr;
+	struct dns_soa *soa;
+
+	zone_init(&P, origin, ttl);
+
+	while (zone_parsefile(&P, fp)) {
+		while (zone_getrr(&rr, &soa, &P)) {
+			char data[512];
+			dns_any_print(data, sizeof data, &rr.data, rr.type);
+			printf("%s %u IN %s %s\n", rr.name, rr.ttl, dns_strtype(rr.type), data);
+		}
+	}
+} /* parsefile() */
+
+
+static void foldfile(FILE *dst, FILE *src) {
+	struct zonepp state;
+	unsigned char in[16], *p;
+	short out[16];
+	size_t len, num, i;
+
+	memset(&state, 0, sizeof state);
+
+	while ((len = fread(in, 1, sizeof in, src))) {
+		p = in;
+
+		while ((num = fold(out, sizeof out, &p, &len, &state))) {
+			for (i = 0; i < num; i++) {
+				if ((out[i] & T_LIT)
+				||  (!isgraph(0xff & out[i]) && !isspace(0xff & out[i]))) {
+					fprintf(dst, "\\%.3d", (0xff & out[i]));
+				} else {
+					fputc((0xff & out[i]), dst);
+				}
+			}
+		}
+	}
+} /* foldfile() */
+
+
 static void usage(FILE *fp) {
 	static const char *usage =
-		" [OPTIONS] COMMAND\n"
+		" [OPTIONS] [COMMAND]\n"
 		"  -o ORIGIN  Zone origin\n"
 		"  -t TTL     Zone TTL\n"
 		"  -V         Print version info\n"
 		"  -h         Print this usage message\n"
+		"\n"
+		"  fold       Fold into simple normal form\n"
+		"  parse      Parse zone file and recompose\n"
 		"\n"
 		"Report bugs to William Ahern <william@25thandClement.com>\n";
 
