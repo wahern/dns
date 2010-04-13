@@ -344,6 +344,9 @@ void zonerr_init(struct zonerr *rr, struct zonefile *P) {
 	TXT_data = string %{ rr->data.txt.len = MIN(rr->data.txt.size - 1, sp - str); memcpy(rr->data.txt.data, str, rr->data.txt.len); };
 	TXT = TXT_type space+ TXT_data space*;
 
+	SPF_type = "SPF"i %{ rr->type = DNS_T_SPF; };
+	SPF = SPF_type space+ TXT_data space*;
+
 	action AAAA_pton {
 		if (1 != inet_pton(AF_INET6, str, &rr->data.aaaa.addr)) {
 			SAY("invalid AAAA address: %s", str);
@@ -365,7 +368,7 @@ void zonerr_init(struct zonerr *rr, struct zonefile *P) {
 	PTR_cname = domain %{ dns_strlcpy(rr->data.ptr.host, str, sizeof rr->data.ptr.host); };
 	PTR = PTR_type space+ PTR_cname space*;
 
-	rrdata = (SOA | NS | MX | CNAME | SRV | TXT | AAAA | A | PTR) space*;
+	rrdata = (SOA | NS | MX | CNAME | SRV | TXT | SPF | AAAA | A | PTR) space*;
 
 	rrname_blank  = " " %{ dns_strlcpy(rr->name, P->lastrr, sizeof rr->name); } " "*;
 	rrname_origin = "@ " %{ dns_strlcpy(rr->name, P->origin, sizeof rr->name); } " "*;
