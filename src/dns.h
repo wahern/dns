@@ -626,7 +626,7 @@ union dns_any {
 	struct dns_soa soa;
 	struct dns_ptr ptr;
 	struct dns_srv srv;
-	struct dns_txt txt, rdata;
+	struct dns_txt txt, spf, rdata;
 }; /* union dns_any */
 
 #define DNS_ANY_INIT(any) { .rdata = { .size = sizeof *(any) } }

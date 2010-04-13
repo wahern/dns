@@ -62,5 +62,5 @@ cache.o: cache.c
 .PHONY: clean
 
 clean:
-	rm -f dns dns.exe spf spf.c cache cache.o zone zone.o zone.c
+	rm -f dns dns.S dns.exe spf spf.c cache cache.o zone zone.o zone.c
 	rm -fr *.dSYM

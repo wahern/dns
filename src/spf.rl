@@ -2515,44 +2515,94 @@ static void op_check(struct spf_vm *vm) {
 
 	sub_init(&sub, vm);
 
-	/*
+	/* Query #1
+	 *
 	 * [-3] reset address
 	 * [-2] return address
 	 * [-1] domain
 	 */
-	I8(&sub, DNS_T_TXT);
+	DUP(&sub);
+	I8(&sub, vm->spf->opts.lookup[0]);
 	SUBMIT(&sub);
 	FETCH(&sub);
 
 	/*
-	 * [-3] reset address
-	 * [-2] return address
+	 * [-4] reset address
+	 * [-3] return address
+	 * [-2] domain
 	 * [-1] packet
 	 */
 	NIL(&sub);
 	TWO(&sub);
 	I8(&sub, DNS_T_TXT);
-	NEG(&sub); /* -DNS_T_TXT asks grep/next to scan for v=spf1 */
+	NEG(&sub); /* -DNS_T_TXT asks grep/next to scan for TXT v=spf1 or SPF  */
 	GREP(&sub);
 	L0(&sub);
+	NEXT(&sub);
+	DUP(&sub);
+	NOT(&sub);
+	sub_jump(&sub, (vm->spf->opts.lookup[1])? 2 : 7);
+	COMP(&sub); /* pushes code address, or 0 if failed. */
+	DUP(&sub);
+	J6(&sub);   /* if not 0, jump to transfer code. */ 
+	NOT(&sub);
+	J0(&sub);   /* otherwise, continue looping */
+
+	if (!vm->spf->opts.lookup[1])
+		goto L6; /* Skip Query #2 bytecode generation */
+
+	/* Query #2
+	 *
+	 * [-6] reset address
+	 * [-5] return address
+	 * [-4] domain
+	 * [-3] packet
+	 * [-2] iterator
+	 * [-1] rdata
+	 */
+	L2(&sub);
+	POP(&sub);
+	POP(&sub);
+	POP(&sub);
+	DUP(&sub);
+	I8(&sub, vm->spf->opts.lookup[1]);
+	SUBMIT(&sub);
+	FETCH(&sub);
+
+	/*
+	 * [-4] reset address
+	 * [-3] return address
+	 * [-2] domain
+	 * [-1] packet
+	 */
+	NIL(&sub);
+	TWO(&sub);
+	I8(&sub, DNS_T_TXT);
+	NEG(&sub); /* -DNS_T_TXT asks grep/next to scan for TXT v=spf1 or SPF  */
+	GREP(&sub);
+	L3(&sub);
 	NEXT(&sub);
 	DUP(&sub);
 	NOT(&sub);
 	J7(&sub);
 	COMP(&sub); /* pushes code address, or 0 if failed. */
 	DUP(&sub);
-	J1(&sub);   /* if not 0, jump to transfer code. */ 
+	J6(&sub);   /* if not 0, jump to transfer code. */ 
 	NOT(&sub);
-	J0(&sub);   /* otherwise, continue looping */
+	J3(&sub);   /* otherwise, continue looping */
 
-	/*
-	 * [-5] reset address
-	 * [-4] return address
+	/* Transfer
+	 * 
+	 * [-6] reset address
+	 * [-5] return address
+	 * [-4] domain
 	 * [-3] packet
 	 * [-2] iterator
 	 * [-1] code address
 	 */
-	L1(&sub);
+L6:	L6(&sub);
+	SWAP(&sub);
+	POP(&sub);
 	SWAP(&sub);
 	POP(&sub);
 	SWAP(&sub);
@@ -2567,14 +2617,17 @@ static void op_check(struct spf_vm *vm) {
 	  */
 	GOTO(&sub);
 
-	/*
-	 * [-5] reset address
-	 * [-4] return address
+	/* Return None
+	 *
+	 * [-6] reset address
+	 * [-5] return address
+	 * [-4] domain
 	 * [-3] packet
 	 * [-2] iterator
 	 * [-1] rdata
 	 */
 	L7(&sub);
+	POP(&sub);
 	POP(&sub);
 	POP(&sub);
 	POP(&sub);
@@ -3530,6 +3583,7 @@ const struct spf_limits spf_safelimits = SPF_SAFELIMITS;
 
 const struct spf_options spf_defaults = {
 	.limits = SPF_SAFELIMITS,
+	.lookup = { SPF_RR_SPF, SPF_RR_TXT },
 }; /* spf_defaults */
 
 struct spf_resolver *spf_open(const struct spf_env *env, struct dns_resolver *res, const struct spf_options *opts, int *error_) {

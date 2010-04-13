@@ -41,6 +41,9 @@
 
 #define SPF_MAXDN 255
 
+#define SPF_RR_TXT 16
+#define SPF_RR_SPF 99
+
 
 /*
  * M I S C .  I N T E R F A C E S
@@ -329,7 +332,10 @@ extern const struct spf_limits spf_safelimits;
 
 struct spf_options {
 	struct spf_limits limits;
+	int lookup[2]; /* lookup order: SPF_RR_TXT SPF_RR_SPF */
 }; /* struct spf_options */
+
+extern const struct spf_options spf_defaults;
 
 struct dns_resolver;
 struct spf_resolver;
