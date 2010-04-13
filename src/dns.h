@@ -64,9 +64,9 @@
 
 #define DNS_VENDOR "william@25thandClement.com"
 
-#define DNS_V_REL  0x20100324
-#define DNS_V_ABI  0x20100210
-#define DNS_V_API  0x20100210
+#define DNS_V_REL  0x20100412
+#define DNS_V_ABI  0x20100412
+#define DNS_V_API  0x20100412
 
 
 const char *dns_vendor(void);
