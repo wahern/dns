@@ -27,7 +27,7 @@
 #include <stdlib.h>	/* malloc(3) free(3) */
 #include <stdio.h>	/* fopen(3) fclose(3) fread(3) fputc(3) */
 
-#include <string.h>	/* memset(3) memmove(3) strlcpy(3) strlcat(3) */
+#include <string.h>	/* memset(3) memmove(3) */
 
 #include <ctype.h>	/* isspace(3) isgraph(3) isdigit(3) */
 
@@ -251,8 +251,8 @@ void zone_init(struct zonefile *P, const char *origin, unsigned ttl) {
 	memset(P, 0, sizeof *P);
 
 	origin = (origin)? origin : ".";
-	strlcpy(P->origin, origin, sizeof P->origin);
-	strlcpy(P->lastrr, origin, sizeof P->lastrr);
+	dns_strlcpy(P->origin, origin, sizeof P->origin);
+	dns_strlcpy(P->lastrr, origin, sizeof P->lastrr);
 
 	P->ttl = (ttl)? ttl : 3600;
 } /* zone_init() */
@@ -302,16 +302,16 @@ void zonerr_init(struct zonerr *rr, struct zonefile *P) {
 	action dom_end {
 		 if (lc != '.') {
 			if (P->origin[0] != '.')
-				strlcat(str, ".", sizeof str);
-			strlcat(str, P->origin, sizeof str); 
+				dns_strlcat(str, ".", sizeof str);
+			dns_strlcat(str, P->origin, sizeof str); 
 		}
 	}
 
 	domain = string %dom_end;
 
 	SOA_type    = "SOA"i %{ rr->type = DNS_T_SOA; };
-	SOA_mname   = domain %{ strlcpy(rr->data.soa.mname, str, sizeof rr->data.soa.mname); };
-	SOA_rname   = string %{ strlcpy(rr->data.soa.rname, str, sizeof rr->data.soa.rname); };
+	SOA_mname   = domain %{ dns_strlcpy(rr->data.soa.mname, str, sizeof rr->data.soa.mname); };
+	SOA_rname   = string %{ dns_strlcpy(rr->data.soa.rname, str, sizeof rr->data.soa.rname); };
 	SOA_serial  = number %{ rr->data.soa.serial = n; };
 	SOA_refresh = ttl %{ rr->data.soa.refresh = ttl; };
 	SOA_retry   = ttl %{ rr->data.soa.retry = ttl; };
@@ -320,23 +320,23 @@ void zonerr_init(struct zonerr *rr, struct zonefile *P) {
 	SOA = SOA_type space+ SOA_mname space+ SOA_rname space+ SOA_serial space+ SOA_refresh space+ SOA_retry space+ SOA_expire space+ SOA_minimum space*;
 
 	NS_type = "NS"i %{ rr->type = DNS_T_NS; };
-	NS_host = domain %{ strlcpy(rr->data.ns.host, str, sizeof rr->data.ns.host); };
+	NS_host = domain %{ dns_strlcpy(rr->data.ns.host, str, sizeof rr->data.ns.host); };
 	NS = NS_type space+ NS_host space*;
 
 	MX_type = "MX"i %{ rr->type = DNS_T_MX; };
 	MX_pref = number %{ rr->data.mx.preference = n; };
-	MX_host = domain %{ strlcpy(rr->data.mx.host, str, sizeof rr->data.mx.host); };
+	MX_host = domain %{ dns_strlcpy(rr->data.mx.host, str, sizeof rr->data.mx.host); };
 	MX = MX_type space+ MX_pref space+ MX_host space*;
 
 	CNAME_type = "CNAME"i %{ rr->type = DNS_T_CNAME; };
-	CNAME_host = domain %{ strlcpy(rr->data.cname.host, str, sizeof rr->data.cname.host); };
+	CNAME_host = domain %{ dns_strlcpy(rr->data.cname.host, str, sizeof rr->data.cname.host); };
 	CNAME = CNAME_type space+ CNAME_host space*;
 
 	SRV_type   = "SRV"i %{ rr->type = DNS_T_SRV; };
 	SRV_pri    = number %{ rr->data.srv.priority = n; };
 	SRV_weight = number %{ rr->data.srv.weight = n; };
 	SRV_port   = number %{ rr->data.srv.port = n; };
-	SRV_target = domain %{ strlcpy(rr->data.srv.target, str, sizeof rr->data.srv.target); };
+	SRV_target = domain %{ dns_strlcpy(rr->data.srv.target, str, sizeof rr->data.srv.target); };
 	SRV = SRV_type space+ SRV_pri space+ SRV_weight space+ SRV_port space+ SRV_target space*;
 
 	# FIXME: Support multiple segments.
@@ -362,14 +362,14 @@ void zonerr_init(struct zonerr *rr, struct zonefile *P) {
 	A = A_type space+ A_addr space*;
 
 	PTR_type  = "PTR"i %{ rr->type = DNS_T_PTR; };
-	PTR_cname = domain %{ strlcpy(rr->data.ptr.host, str, sizeof rr->data.ptr.host); };
+	PTR_cname = domain %{ dns_strlcpy(rr->data.ptr.host, str, sizeof rr->data.ptr.host); };
 	PTR = PTR_type space+ PTR_cname space*;
 
 	rrdata = (SOA | NS | MX | CNAME | SRV | TXT | AAAA | A | PTR) space*;
 
-	rrname_blank  = " " %{ strlcpy(rr->name, P->lastrr, sizeof rr->name); } " "*;
-	rrname_origin = "@ " %{ strlcpy(rr->name, P->origin, sizeof rr->name); } " "*;
-	rrname_plain  = domain %{ if (!rr->name[0]) strlcpy(rr->name, str, sizeof rr->name); } " "+;
+	rrname_blank  = " " %{ dns_strlcpy(rr->name, P->lastrr, sizeof rr->name); } " "*;
+	rrname_origin = "@ " %{ dns_strlcpy(rr->name, P->origin, sizeof rr->name); } " "*;
+	rrname_plain  = domain %{ if (!rr->name[0]) dns_strlcpy(rr->name, str, sizeof rr->name); } " "+;
 
 	rrname = rrname_blank | rrname_origin | rrname_plain;
 
@@ -379,7 +379,7 @@ void zonerr_init(struct zonerr *rr, struct zonefile *P) {
 
 	zonerr = rrname rrttl? rrclass? rrttl? rrdata;
 
-	ORIGIN = "$ORIGIN " domain %{ strlcpy(P->origin, str, sizeof P->origin); goto next; } space*;
+	ORIGIN = "$ORIGIN " domain %{ dns_strlcpy(P->origin, str, sizeof P->origin); goto next; } space*;
 
 	TTL    = "$TTL " ttl %{ P->ttl = ttl; goto next; } space*;
 
@@ -419,7 +419,7 @@ next:
 
 	tok_discard(&P->toks, span);
 
-	strlcpy(P->lastrr, rr->name, sizeof P->lastrr);
+	dns_strlcpy(P->lastrr, rr->name, sizeof P->lastrr);
 
 	if (rr->type == DNS_T_SOA)
 		P->soa = rr->data.soa;

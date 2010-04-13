@@ -649,7 +649,7 @@ static const char *dns_inet_ntop(int af, const void *src, void *dst, unsigned lo
 #endif
 
 
-static size_t dns_strlcpy(char *dst, const char *src, size_t lim) {
+size_t dns_strlcpy(char *dst, const char *src, size_t lim) {
 	char *d		= dst;
 	char *e		= &dst[lim];
 	const char *s	= src;
@@ -668,6 +668,30 @@ static size_t dns_strlcpy(char *dst, const char *src, size_t lim) {
 
 	return s - src - 1;
 } /* dns_strlcpy() */
+
+
+size_t dns_strlcat(char *dst, const char *src, size_t lim) {
+	char *d = memchr(dst, '\0', lim);
+	char *e = &dst[lim];
+	const char *s = src;
+	const char *p;
+
+	if (d && d < e) {
+		do {
+			if ('\0' == (*d++ = *s++))
+				return d - dst - 1;
+		} while (d < e);
+
+		d[-1] = '\0';
+	}
+
+	p = s;
+
+	while (*s++ != '\0')
+		;;
+
+	return lim + (s - p - 1);
+} /* dns_strlcat() */
 
 
 #if _WIN32

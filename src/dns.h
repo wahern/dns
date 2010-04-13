@@ -26,7 +26,7 @@
 #ifndef DNS_H
 #define DNS_H
 
-#include <stddef.h>		/* offsetof() */
+#include <stddef.h>		/* size_t offsetof() */
 #include <stdio.h>		/* FILE */
 
 #include <string.h>		/* strlen(3) */
@@ -948,6 +948,16 @@ int dns_ai_events(struct dns_addrinfo *);
 int dns_ai_pollfd(struct dns_addrinfo *);
 
 int dns_ai_poll(struct dns_addrinfo *, int);
+
+
+/*
+ * U T I L I T Y  I N T E R F A C E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+size_t dns_strlcpy(char *, const char *, size_t);
+
+size_t dns_strlcat(char *, const char *, size_t);
 
 
 /*

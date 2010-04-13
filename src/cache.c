@@ -27,17 +27,16 @@
 #include <stdlib.h>	/* malloc(3) free(3) */
 #include <stdio.h>	/* FILE fprintf(3) */
 
-#include <string.h>	/* strcasecmp(3) memset(3) strlcpy(3) */
+#include <string.h>	/* strcasecmp(3) memset(3) */
 
 #include <errno.h>	/* errno */
 
 #include <assert.h>	/* assert(3) */
 
-#include <sys/tree.h>
-
 #include "dns.h"
 #include "zone.h"
 #include "cache.h"
+#include "tree.h"
 
 
 #define SAY_(fmt, ...) \
@@ -64,7 +63,7 @@ static int rrset_init(struct rrset *set, const char *name, enum dns_type type) {
 
 	memset(set, 0, sizeof *set);
 
-	strlcpy(set->name, name, sizeof set->name);
+	dns_strlcpy(set->name, name, sizeof set->name);
 	set->type = type;
 
 	dns_p_init(&set->packet, sizeof set->pbuf);
@@ -97,7 +96,7 @@ static struct rrset *cache_find(struct cache *C, const char *name, enum dns_type
 	struct rrset key, *set;
 	int error;
 
-	strlcpy(key.name, name, sizeof key.name);
+	dns_strlcpy(key.name, name, sizeof key.name);
 	key.type = type;
 
 	if ((set = RB_FIND(rrcache, &C->root, &key)))

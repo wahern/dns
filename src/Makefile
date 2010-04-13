@@ -24,10 +24,8 @@ SPF_CFLAGS   += -std=gnu99 -Wall -Werror -Wno-unused-function -Wno-unused-variab
 %.c: %.rl
 	ragel -C -o $@ $<
 
-spf: spf.c dns.c
-	@make cache.o zone.o >/dev/null 2>&1 || true
-	@test -f cache.o && test -f zone.o || echo "WARNING: Unable to include cache support" >&2
-	$(CC) $(SPF_CFLAGS) $(SPF_CPPFLAGS) -DSPF_MAIN -DSPF_DEBUG -DSPF_CACHE="!$$(test -f cache.o && test -f zone.o; echo $$?)" -o $@ $^ $$(ls {cache,zone}.o 2>/dev/null)
+spf: spf.c cache.c zone.c dns.c
+	$(CC) $(SPF_CFLAGS) $(SPF_CPPFLAGS) -DSPF_MAIN -DSPF_DEBUG -DSPF_CACHE=1 -o $@ $^
 
 .PHONY: check spf.t
 
@@ -37,26 +35,18 @@ spf.t: spf
 check: spf.t
 
 
-# Requires strlcpy(3) and strlcat(3)
-ZONE_CPPFLAGS += -I../compat/bsd -I../compat
+ZONE_CPPFLAGS += 
 ZONE_CFLAGS   += $(SPF_CFLAGS)
 
 zone: zone.c dns.c
 	$(CC) $(ZONE_CFLAGS) $(ZONE_CPPFLAGS) -DZONE_MAIN -o $@ $^
 
-zone.o: zone.c
-	$(CC) $(ZONE_CFLAGS) $(ZONE_CPPFLAGS) -c -o $@ $^
 
-
-# Requires strlcat(3) and <sys/tree.h>
-CACHE_CPPFLAGS += -I../compat/bsd -I../compat
+CACHE_CPPFLAGS += 
 CACHE_CFLAGS   += $(SPF_CFLAGS)
 
 cache: cache.c zone.c dns.c
 	$(CC) $(CACHE_CFLAGS) $(CACHE_CPPFLAGS) -DCACHE_MAIN -o $@ $^
-
-cache.o: cache.c
-	$(CC) $(CACHE_CFLAGS) $(CACHE_CPPFLAGS) -c -o $@ $^
 
 
 .PHONY: clean
