@@ -2534,7 +2534,7 @@ static void op_check(struct spf_vm *vm) {
 	 */
 	NIL(&sub);
 	TWO(&sub);
-	I8(&sub, DNS_T_TXT);
+	I8(&sub, vm->spf->opts.lookup[0]);
 	NEG(&sub); /* -DNS_T_TXT asks grep/next to scan for TXT v=spf1 or SPF  */
 	GREP(&sub);
 	L0(&sub);
@@ -2577,7 +2577,7 @@ static void op_check(struct spf_vm *vm) {
 	 */
 	NIL(&sub);
 	TWO(&sub);
-	I8(&sub, DNS_T_TXT);
+	I8(&sub, vm->spf->opts.lookup[1]);
 	NEG(&sub); /* -DNS_T_TXT asks grep/next to scan for TXT v=spf1 or SPF  */
 	GREP(&sub);
 	L3(&sub);
