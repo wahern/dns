@@ -5270,6 +5270,8 @@ exec:
 		goto(R->sp, DNS_R_SERVFAIL);	/* FIXME: Right behavior? */
 	case DNS_R_FILE:
 		if (R->sp > 0) {
+			free(F->answer);
+
 			if (!(F->answer = dns_hosts_query(R->hosts, F->query, &error)))
 				goto error;
 
@@ -5302,6 +5304,8 @@ exec:
 				if ((error = dns_p_push(query, DNS_S_QD, host, len, R->qtype, R->qclass, 0, 0)))
 					goto error;
 
+				free(F->answer);
+
 				if (!(F->answer = dns_hosts_query(R->hosts, query, &error)))
 					goto error;
 
@@ -5318,6 +5322,8 @@ exec:
 
 		if (!F->query && !(F->query = dns_res_mkquery(R, R->qname, R->qtype, R->qclass, &error)))
 			goto error;
+
+		free(F->answer);
 
 		if ((F->answer = R->cache->query(F->query, R->cache, &error))) {
 			if (dns_p_count(F->answer, DNS_S_AN) > 0)
@@ -5342,6 +5348,8 @@ exec:
 		F->state++;
 	case DNS_R_FETCH:
 		error = 0;
+
+		free(F->answer);
 
 		if ((F->answer = R->cache->fetch(R->cache, &error))) {
 			if (dns_p_count(F->answer, DNS_S_AN) > 0)
