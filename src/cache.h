@@ -45,5 +45,7 @@ struct dns_cache *cache_resi(struct cache *);
 
 int cache_insert(struct cache *, const char *, enum dns_type, unsigned, const void *);
 
+int cache_dumpfile(struct cache *, FILE *);
+
 
 #endif /* CACHE_H */

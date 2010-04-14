@@ -51,7 +51,7 @@ struct rrset {
 
 	union {
 		struct dns_packet packet;
-		unsigned char pbuf[dns_p_calcsize(512)];
+		unsigned char pbuf[dns_p_calcsize(1024)];
 	};
 
 	RB_ENTRY(rrset) rbe;
@@ -273,7 +273,7 @@ static void cache_showpkt(struct dns_packet *pkt, FILE *fp) {
 } /* cache_showpkt() */
 
 
-static int cache_dump(struct cache *C, FILE *fp) {
+int cache_dumpfile(struct cache *C, FILE *fp) {
 	struct rrset *set;
 
 	RB_FOREACH(set, rrcache, &C->root) {
@@ -281,8 +281,7 @@ static int cache_dump(struct cache *C, FILE *fp) {
 	}
 
 	return 0;
-} /* cache_dump() */
-
+} /* cache_dumpfile() */
 
 
 #if CACHE_MAIN
@@ -465,7 +464,7 @@ int main(int argc, char **argv) {
 
 		dns_res_close(res);
 	} else {
-		cache_dump(cache(), stdout);
+		cache_dumpfile(cache(), stdout);
 	}
 
 	return 0;
