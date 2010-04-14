@@ -2596,13 +2596,13 @@ int dns_txt_push(struct dns_packet *P, struct dns_txt *txt) {
 	if (dst.end - dst.p < 2)
 		return DNS_ENOBUFS;
 
-	n	= txt->len + 1 + (txt->len / 256);
+	n	= txt->len + ((txt->len + 254) / 255);
 
 	dst.b[dst.p++]	= 0xff & (n >> 8);
 	dst.b[dst.p++]	= 0xff & (n >> 0);
 
 	while (src.p < src.end) {
-		n	= 0xff & (src.end - src.p);
+		n	= MIN(255, src.end - src.p);
 
 		if (dst.p >= dst.end)
 			return DNS_ENOBUFS;
