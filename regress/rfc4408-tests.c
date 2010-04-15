@@ -31,10 +31,12 @@
 
 #include <errno.h>
 
-#include <netinet/in.h>
-#include <arpa/inet.h>
+#include <unistd.h>
 
 #include <sys/queue.h>
+
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #include <yaml.h>
 
@@ -159,11 +161,37 @@ struct test {
 
 	char *exp;
 
+	struct {
+		int result;
+		char *exp;
+	} actual;
+
 	CIRCLEQ_ENTRY(test) cqe;
 }; /* struct test */
 
 
-static void test_run(struct test *test, struct dns_resolver *res) {
+static void test_dump(struct test *test, struct cache *zonedata, FILE *fp) {
+	char ip[64];
+	int i;
+
+	fprintf(fp, "[%s]\n", test->name);
+	fprintf(fp, "spec:     %s\n", test->spec);
+	fprintf(fp, "helo:     %s\n", (test->helo)? test->helo : "");
+	inet_ntop(test->host.type, &test->host.ip, ip, sizeof ip);
+	fprintf(fp, "host:     %s\n", ip);
+	fprintf(fp, "mailfrom: %s\n", (test->mailfrom)? test->mailfrom : "");
+	fprintf(fp, "result:   { %s", test->result[0]);
+	for (i = 1; i < test->rcount; i++)
+		fprintf(fp, ", %s", test->result[i]);
+	fprintf(fp, " } (%s)\n", spf_strresult(test->actual.result));
+	fprintf(fp, "exp:      \"%s\" (\"%s\")\n", (test->exp)? test->exp : "", (test->actual.exp)? test->actual.exp : "");
+	fputs("---------------\n", fp);
+	cache_dumpfile(zonedata, fp);
+	fputc('\n', fp);
+} /* test_dump() */
+
+
+static void test_run(struct test *test, struct dns_resolver *res, struct cache *zonedata) {
 	struct spf_env env;
 	struct spf_resolver *spf;
 	int error, result, i, passed = 0;
@@ -177,6 +205,7 @@ static void test_run(struct test *test, struct dns_resolver *res) {
 
 	while ((error = spf_check(spf))) {
 		SAY("spf_check: %s", spf_strerror(error));
+
 		goto done;
 	}
 
@@ -190,6 +219,10 @@ static void test_run(struct test *test, struct dns_resolver *res) {
 		passed = 1;
 	}
 
+	test->actual.result = result;
+
+	if (exp)
+		assert(test->actual.exp = strdup(exp));
 done:
 	if (passed) {
 		MAIN.tests.passed++;
@@ -199,6 +232,8 @@ done:
 		MAIN.tests.failed++;
 
 		printf("%s: FAILED\n", test->name);
+
+		test_dump(test, zonedata, stderr);
 	}
 
 	spf_close(spf);
@@ -215,6 +250,7 @@ static void test_free(struct test *test) {
 	free(test->result[0]);
 	free(test->result[1]);
 	free(test->exp);
+	free(test->actual.exp);
 	free(test);
 } /* test_free() */
 
@@ -228,14 +264,15 @@ struct section {
 }; /* struct section */
 
 
-static void section_run(struct section *section) {
+static void section_run(struct section *section, const char *name) {
 	struct dns_resolver *res;
 	struct test *test;
 
 	res = mkres(section->zonedata);
 
 	CIRCLEQ_FOREACH(test, &section->tests, cqe) {
-		test_run(test, res);
+		if (streq(test->name, name) || streq(name, "all"))
+			test_run(test, res, section->zonedata);
 	}
 
 	dns_res_close(res);
@@ -368,6 +405,7 @@ static struct test *nexttest(yaml_parser_t *parser) {
 			nextscalar(&test->exp, parser);
 		} else {
 			SAY("%s: unknown field", txt);
+
 			discard(parser, SET(YAML_SCALAR_EVENT));
 		}
 
@@ -571,29 +609,45 @@ static void trace(yaml_parser_t *parser) {
 
 
 int main(int argc, char **argv) {
+	extern char *optarg;
+	extern int optind;
+	int opt;
 	yaml_parser_t parser;
 	yaml_event_t event;
-	int done = 0, state = 0;
 	struct section *section;
+	char *test;
 
-	spf_debug = 0;
+	while (-1 != (opt = getopt(argc, argv, "v"))) {
+		switch (opt) {
+		case 'v':
+			spf_debug++;
+			dns_debug++;
+
+			break;
+		} /* switch() */
+	} /* while() */
+
+	argc -= optind;
+	argv += optind;
+
+	test = (argc)? *argv : "all";
 
 	yaml_parser_initialize(&parser);
 	yaml_parser_set_input_file(&parser, stdin);
 
 	discard(&parser, SET(YAML_STREAM_START_EVENT));
 
-#if 1
-	while ((section = nextsection(&parser))) {
-		section_run(section);
-		section_free(section);
-	} /* while() */
+	if (streq(test, "trace")) {
+		trace(&parser);
+	} else {
+		while ((section = nextsection(&parser))) {
+			section_run(section, test);
+			section_free(section);
+		} /* while() */
 
-	printf("PASSED %u of %u\n", MAIN.tests.passed, MAIN.tests.count);
-	printf("FAILED %u of %u\n", MAIN.tests.failed, MAIN.tests.count);
-#else
-	trace(&parser);
-#endif
+		printf("PASSED %u of %u\n", MAIN.tests.passed, MAIN.tests.count);
+		printf("FAILED %u of %u\n", MAIN.tests.failed, MAIN.tests.count);
+	}
 
 	yaml_parser_delete(&parser);
 
