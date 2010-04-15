@@ -23,6 +23,8 @@
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
  * ==========================================================================
  */
+#include <stdlib.h>
+
 #include <stdio.h>
 
 #include <string.h>
@@ -47,11 +49,15 @@
 
 #define lengthof(a) (sizeof (a) / sizeof (a)[0])
 
+#define MIN(a, b) (((a) < (b))? (a) : (b))
+
 #define STRINGIFY_(s) #s
 #define STRINGIFY(s) STRINGIFY_(s)
 
 #define streq(a, b) (!strcmp((a), (b)))
 
+
+static int debug;
 
 #define panic_(fn, ln, fmt, ...) \
 	do { fprintf(stderr, fmt "%.1s", (fn), (ln), __VA_ARGS__); _Exit(EXIT_FAILURE); } while (0)
@@ -59,7 +65,7 @@
 #define panic(...) panic_(__func__, __LINE__, __FILE__ ": (%s:%d) " __VA_ARGS__, "\n")
 
 #define SAY_(fmt, ...) \
-	do { fprintf(stderr, fmt "%.1s", __func__, __LINE__, __VA_ARGS__); } while (0)
+	do { if (debug) fprintf(stderr, fmt "%.1s", __func__, __LINE__, __VA_ARGS__); } while (0)
 #define SAY(...) SAY_(">>>> (%s:%d) " __VA_ARGS__, "\n")
 #define HAI SAY("HAI")
 
@@ -170,11 +176,18 @@ struct test {
 }; /* struct test */
 
 
-static void test_dump(struct test *test, struct cache *zonedata, FILE *fp) {
+static void frepc(int ch, int n, FILE *fp) {
+	while (n--)
+		fputc(ch, fp);
+} /* frepc() */
+
+static void test_dump(struct test *test, struct spf_env *env, struct cache *zonedata, FILE *fp) {
 	char ip[64];
 	int i;
 
-	fprintf(fp, "[%s]\n", test->name);
+	fprintf(fp, "== [%.*s] ", (int)MIN(70, strlen(test->name)), test->name);
+	frepc('=', 70 - MIN(70, strlen(test->name)), fp);
+	fputc('\n', fp);
 	fprintf(fp, "spec:     %s\n", test->spec);
 	fprintf(fp, "helo:     %s\n", (test->helo)? test->helo : "");
 	inet_ntop(test->host.type, &test->host.ip, ip, sizeof ip);
@@ -185,8 +198,11 @@ static void test_dump(struct test *test, struct cache *zonedata, FILE *fp) {
 		fprintf(fp, ", %s", test->result[i]);
 	fprintf(fp, " } (%s)\n", spf_strresult(test->actual.result));
 	fprintf(fp, "exp:      \"%s\" (\"%s\")\n", (test->exp)? test->exp : "", (test->actual.exp)? test->actual.exp : "");
-	fputs("---------------\n", fp);
+	fputs("-- (env) -------------------------------------------------------------------\n", fp);
+	spf_printenv(env, fp);
+	fputs("-- (data) ------------------------------------------------------------------\n", fp);
 	cache_dumpfile(zonedata, fp);
+	fputs("== END ============================================================== END ==\n", fp);
 	fputc('\n', fp);
 } /* test_dump() */
 
@@ -233,7 +249,8 @@ done:
 
 		printf("%s: FAILED\n", test->name);
 
-		test_dump(test, zonedata, stderr);
+		if (debug)
+			test_dump(test, &env, zonedata, stderr);
 	}
 
 	spf_close(spf);
@@ -431,10 +448,16 @@ static void nextspf(struct dns_txt *txt, yaml_parser_t *parser) {
 		txt->len = SCALAR_LEN(&event);
 	} else {
 		while (YAML_SCALAR_EVENT == expect(parser, delete(&event), SET(YAML_SCALAR_EVENT, YAML_SEQUENCE_END_EVENT))) {
+#if 1
+			assert(txt->size - txt->len >= SCALAR_LEN(&event));
+			memcpy(&txt->data[txt->len], SCALAR_STR(&event), SCALAR_LEN(&event));
+			txt->len += SCALAR_LEN(&event);
+#else /* FIXME: Need a way to insert raw rdata. Padding doesn't do the right thing. */
 			assert(txt->size - txt->len >= 255);
 			assert(SCALAR_LEN(&event) <= 255);
 			memcpy(&txt->data[txt->len], SCALAR_STR(&event), SCALAR_LEN(&event));
 			txt->len += 255;
+#endif
 		}
 	}
 
@@ -442,7 +465,7 @@ static void nextspf(struct dns_txt *txt, yaml_parser_t *parser) {
 } /* nextspf() */
 
 
-static struct cache *nextzonedata(yaml_parser_t *parser) {
+static struct cache *nextzonedata(yaml_parser_t *parser, _Bool insert) {
 	struct cache *zonedata;
 	yaml_event_t event;
 	char rrname[256];
@@ -517,7 +540,8 @@ static struct cache *nextzonedata(yaml_parser_t *parser) {
 				goto next;
 			} /* switch() */
 
-			assert(!(error = cache_insert(zonedata, rrname, rrtype, 3600, &anyrr)));
+			if (insert)
+				assert(!(error = cache_insert(zonedata, rrname, rrtype, 3600, &anyrr)));
 next:
 			discard(parser, SET(YAML_MAPPING_END_EVENT));
 		} /* while() */
@@ -527,15 +551,14 @@ next:
 
 	delete(&event);
 
-//	cache_dumpfile(zonedata, stderr);
-
 	return zonedata;
 } /* nextzonedata() */
 
 
-static struct section *nextsection(yaml_parser_t *parser) {
+static struct section *nextsection(yaml_parser_t *parser, const char *testname) {
 	struct section *section;
 	yaml_event_t event;
+	_Bool insert = 0; /* this only works if zonedata follows tests */
 	int type;
 	char *txt;
 
@@ -566,10 +589,15 @@ static struct section *nextsection(yaml_parser_t *parser) {
 			discard(parser, SET(YAML_MAPPING_START_EVENT));
 
 			while ((test = nexttest(parser))) {
-				CIRCLEQ_INSERT_TAIL(&section->tests, test, cqe);
+				if (streq(test->name, testname) || streq("all", testname)) {
+					insert = 1;
+					CIRCLEQ_INSERT_TAIL(&section->tests, test, cqe);
+				} else {
+					test_free(test);
+				}
 			}
 		} else if (streq(txt, "zonedata")) {
-			section->zonedata = nextzonedata(parser);
+			section->zonedata = nextzonedata(parser, insert);
 		} else {
 			panic("%s: unknown top-level field", txt);
 		}
@@ -608,6 +636,13 @@ static void trace(yaml_parser_t *parser) {
 } /* trace() */
 
 
+#define USAGE \
+	"rfc4408-tests [-vh] [TEST]\n" \
+	"  -v  increase verboseness\n" \
+	"  -h  print usage\n" \
+	"\n" \
+	"Report bugs to William Ahern <william@25thandClement.com>\n"
+
 int main(int argc, char **argv) {
 	extern char *optarg;
 	extern int optind;
@@ -617,13 +652,22 @@ int main(int argc, char **argv) {
 	struct section *section;
 	char *test;
 
-	while (-1 != (opt = getopt(argc, argv, "v"))) {
+	while (-1 != (opt = getopt(argc, argv, "vh"))) {
 		switch (opt) {
 		case 'v':
 			spf_debug++;
 			dns_debug++;
+			debug++;
 
 			break;
+		case 'h':
+			fputs(USAGE, stdout);
+
+			return 0;
+		default:
+			fputs(USAGE, stderr);
+
+			return EXIT_FAILURE;
 		} /* switch() */
 	} /* while() */
 
@@ -631,6 +675,12 @@ int main(int argc, char **argv) {
 	argv += optind;
 
 	test = (argc)? *argv : "all";
+
+	/* apologies to anyone harmed by this trick */
+	if (isatty(fileno(stdin))) {
+		if (!freopen("rfc4408-tests.yml", "r", stdin))
+			panic("rfc4408-tests.yml: %s", strerror(errno));
+	}
 
 	yaml_parser_initialize(&parser);
 	yaml_parser_set_input_file(&parser, stdin);
@@ -640,7 +690,7 @@ int main(int argc, char **argv) {
 	if (streq(test, "trace")) {
 		trace(&parser);
 	} else {
-		while ((section = nextsection(&parser))) {
+		while ((section = nextsection(&parser, test))) {
 			section_run(section, test);
 			section_free(section);
 		} /* while() */
