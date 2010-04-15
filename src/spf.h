@@ -59,6 +59,8 @@ const char *spf_strterm(int);
 
 const char *spf_strresult(int);
 
+int spf_iresult(const char *);
+
 
 /*
  * V E R S I O N

@@ -698,6 +698,27 @@ const char *spf_strresult(int result) {
 } /* spf_strresult() */
 
 
+int spf_iresult(const char *result) {
+	if (!strcasecmp(result, "None")) {
+		return SPF_NONE;
+	} else if (!strcasecmp(result, "Neutral")) {
+		return SPF_NEUTRAL;
+	} else if (!strcasecmp(result, "Pass")) {
+		return SPF_PASS;
+	} else if (!strcasecmp(result, "Fail")) {
+		return SPF_FAIL;
+	} else if (!strcasecmp(result, "SoftFail")) {
+		return SPF_SOFTFAIL;
+	} else if (!strcasecmp(result, "TempError")) {
+		return SPF_TEMPERROR;
+	} else if (!strcasecmp(result, "PermError")) {
+		return SPF_PERMERROR;
+	} else {
+		return 0;
+	}
+} /* spf_iresult() */
+
+
 /*
  * S T R I N G  B U F F E R  R O U T I N E S
  *
@@ -1214,8 +1235,9 @@ void spf_parser_init(struct spf_parser *parser, const void *rdata, size_t rdlen)
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-int spf_env_init(struct spf_env *env, int af, const void *ip, const char *domain, const char *sender) {
-	memset(env->r, 0, sizeof env->r);
+int spf_env_init(struct spf_env *env, int af, const void *ip, const char *helo, const char *sender) {
+	struct spf_sbuf mbox = SBUF_INIT(&mbox);
+	char *local, *host;
 
 	if (af == AF_INET6) {
 		spf_6top(env->i, sizeof env->i, ip, SPF_6TOP_NYBBLE);
@@ -1229,8 +1251,45 @@ int spf_env_init(struct spf_env *env, int af, const void *ip, const char *domain
 		spf_strlcpy(env->v, "in-addr", sizeof env->v);
 	}
 
-	spf_strlcpy(env->r, "unknown", sizeof env->r);
+	if (!helo || !*helo)
+		helo = "localhost";
 
+	if (sender && *sender) {
+
+		sbuf_puts(&mbox, sender);
+
+		if ((host = strchr(mbox.str, '@'))) {
+			*host++ = '\0';
+
+			local = (mbox.str[0])? mbox.str : "postmaster";
+			host  = (*host)? host : (char *)helo;
+		} else {
+			local = mbox.str;
+			host  = (char *)helo;
+		}
+	} else {
+		local = "postmaster";
+		host  = (char *)helo;
+	}
+
+	if (strchr(host, '['))
+		host = (char *)helo;
+
+	spf_strlcpy(env->l, local, sizeof env->l);
+	spf_strlcpy(env->o, host, sizeof env->o);
+
+	sbuf_init(&mbox);
+	sbuf_puts(&mbox, env->l);
+	sbuf_putc(&mbox, '@');
+	sbuf_puts(&mbox, env->o);
+	spf_strlcpy(env->s, mbox.str, sizeof env->s);
+
+	spf_strlcpy(env->d, host, sizeof env->d);
+	spf_strlcpy(env->h, helo, sizeof env->h);
+
+	spf_strlcpy(env->p, "unknown", sizeof env->p);
+
+	spf_strlcpy(env->r, "unknown", sizeof env->r);
 	spf_itoa(env->t, sizeof env->t, (unsigned long)time(0));
 
 	return 0;
