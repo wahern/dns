@@ -1144,7 +1144,7 @@ static char *term_comp(struct spf_sbuf *sbuf, void *term) {
 	macro_letter  = ("s"i | "l"i | "o"i | "d"i | "i"i | "p"i | "v"i | "h"i | "c"i | "r"i | "t"i) $term_macro;
 	macro_literal = (0x21 .. 0x24) | (0x26 .. 0x7e);
 	macro_expand  = ("%{" macro_letter transformers delimiter* "}") | "%%" | "%_" | "%-";
-	macro_string  = (macro_expand | macro_literal)*;
+	macro_string  = (macro_expand | macro_literal)+;
 
 	toplabel       = (digit* alpha alnum*) | (alnum+ "-" (alnum | "-")* alnum);
 	domain_end     = ("." toplabel "."?) | macro_expand;
@@ -2904,9 +2904,9 @@ static void op_comp(struct spf_vm *vm) {
 	POP(&sub);  /* otherwise discard the NIL exp */
 
 	if (exp.type) {
-		STR(&sub, (intptr_t)&term.exp.domain[0]);
-		if (term.macros) {
-			if (spf_isset(term.macros, 'p'))
+		STR(&sub, (intptr_t)&exp.domain[0]);
+		if (exp.macros) {
+			if (spf_isset(exp.macros, 'p'))
 				FCRD(&sub);
 			EXPAND(&sub);
 		}
