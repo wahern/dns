@@ -27,6 +27,7 @@
 #define SPF_H
 
 #include <stddef.h>	/* size_t */
+#include <stdio.h>	/* FILE */
 
 #include <netinet/in.h>	/* struct in_addr struct in6_addr */
 
@@ -302,6 +303,8 @@ int spf_env_init(struct spf_env *, int, const void *, const char *, const char *
 size_t spf_setenv(struct spf_env *, int, const char *);
 
 size_t spf_getenv(char *, size_t, int, const struct spf_env *);
+
+void spf_printenv(const struct spf_env *, FILE *);
 
 
 /*

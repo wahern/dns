@@ -26,6 +26,7 @@
 #include <stddef.h>	/* size_t */
 #include <stdint.h>	/* intptr_t */
 #include <stdlib.h>	/* malloc(3) free(3) abs(3) */
+#include <stdio.h>	/* FILE */
 
 #include <ctype.h>	/* isgraph(3) isdigit(3) tolower(3) */
 
@@ -1275,6 +1276,9 @@ int spf_env_init(struct spf_env *env, int af, const void *ip, const char *helo, 
 	if (strchr(host, '['))
 		host = (char *)helo;
 
+	spf_strlcpy(env->d, host, sizeof env->d);
+	spf_strlcpy(env->h, helo, sizeof env->h);
+
 	spf_strlcpy(env->l, local, sizeof env->l);
 	spf_strlcpy(env->o, host, sizeof env->o);
 
@@ -1283,9 +1287,6 @@ int spf_env_init(struct spf_env *env, int af, const void *ip, const char *helo, 
 	sbuf_putc(&mbox, '@');
 	sbuf_puts(&mbox, env->o);
 	spf_strlcpy(env->s, mbox.str, sizeof env->s);
-
-	spf_strlcpy(env->d, host, sizeof env->d);
-	spf_strlcpy(env->h, helo, sizeof env->h);
 
 	spf_strlcpy(env->p, "unknown", sizeof env->p);
 
@@ -1359,6 +1360,21 @@ size_t spf_setenv(struct spf_env *env, int which, const char *src) {
 
 	return SPF_MIN(lim - 1, len);
 } /* spf_setenv() */
+
+
+void spf_printenv(const struct spf_env *env, FILE *fp) {
+	fprintf(fp, "%%{s} : %s\n", env->s);
+	fprintf(fp, "%%{l} : %s\n", env->l);
+	fprintf(fp, "%%{o} : %s\n", env->o);
+	fprintf(fp, "%%{d} : %s\n", env->d);
+	fprintf(fp, "%%{i} : %s\n", env->i);
+	fprintf(fp, "%%{p} : %s\n", env->p);
+	fprintf(fp, "%%{v} : %s\n", env->v);
+	fprintf(fp, "%%{h} : %s\n", env->h);
+	fprintf(fp, "%%{c} : %s\n", env->c);
+	fprintf(fp, "%%{r} : %s\n", env->r);
+	fprintf(fp, "%%{t} : %s\n", env->t);
+} /* spf_printenv() */
 
 
 /*
@@ -4211,17 +4227,7 @@ int sizes(int argc, char *argv[]) {
 
 
 int printenv(int argc, char *argv[], const struct spf_env *env) {
-	printf("%%{s} : %s\n", env->s);
-	printf("%%{l} : %s\n", env->l);
-	printf("%%{o} : %s\n", env->o);
-	printf("%%{d} : %s\n", env->d);
-	printf("%%{i} : %s\n", env->i);
-	printf("%%{p} : %s\n", env->p);
-	printf("%%{v} : %s\n", env->v);
-	printf("%%{h} : %s\n", env->h);
-	printf("%%{c} : %s\n", env->c);
-	printf("%%{r} : %s\n", env->r);
-	printf("%%{t} : %s\n", env->t);
+	spf_printenv(env, stdout);
 
 	return 0;
 } /* printenv() */
