@@ -31,6 +31,7 @@
 
 #include <errno.h>
 
+#include <netinet/in.h>
 #include <arpa/inet.h>
 
 #include <sys/queue.h>
@@ -39,6 +40,7 @@
 
 #include "cache.h"
 #include "dns.h"
+#include "spf.h"
 
 
 #define lengthof(a) (sizeof (a) / sizeof (a)[0])
@@ -58,7 +60,6 @@
 	do { fprintf(stderr, fmt "%.1s", __func__, __LINE__, __VA_ARGS__); } while (0)
 #define SAY(...) SAY_(">>>> (%s:%d) " __VA_ARGS__, "\n")
 #define HAI SAY("HAI")
-
 
 
 static const char *yaml_strevent(int type) {
@@ -102,7 +103,9 @@ static const char *yaml_strevents(int set) {
 
 
 static struct {
-	int foo;
+	struct {
+		unsigned count, passed, failed;
+	} tests;
 } MAIN;
 
 
@@ -112,6 +115,26 @@ static struct {
 #define INSET(set, x) ((set) & (1 << (x)))
 
 
+static struct dns_resolver *mkres(struct cache *zonedata) {
+	struct dns_resolv_conf *resconf;
+	struct dns_hosts *hosts;
+	struct dns_hints *hints;
+	struct dns_resolver *res;
+	int error;
+
+	assert(resconf = dns_resconf_open(&error));
+	memset(resconf->lookup, 0, sizeof resconf->lookup);
+	resconf->lookup[0] = 'c';
+
+	assert(hosts = dns_hosts_open(&error));
+	assert(hints = dns_hints_open(resconf, &error));
+
+	assert(res = dns_res_open(dns_resconf_mortal(resconf), dns_hosts_mortal(hosts), dns_hints_mortal(hints), cache_resi(zonedata), dns_opts(), &error));
+
+	return res;
+} /* mkres() */
+
+
 
 struct test {
 	char *name;
@@ -119,14 +142,81 @@ struct test {
 	char *comment;
 	char *spec;
 	char *helo;
-	char *host;
+
+	struct {
+		int type;
+
+		union {
+			struct in_addr ip4;
+			struct in6_addr ip6;
+		} ip;
+	} host;
+
 	char *mailfrom;
+
 	char *result[2];
-	unsigned rcount;
+	int rcount;
+
 	char *exp;
 
 	CIRCLEQ_ENTRY(test) cqe;
 }; /* struct test */
+
+
+static void test_run(struct test *test, struct dns_resolver *res) {
+	struct spf_env env;
+	struct spf_resolver *spf;
+	int error, result, i, passed = 0;
+	const char *exp;
+
+	if (test->mailfrom && *test->mailfrom) {
+		spf_env_init(&env, test->host.type, &test->host.ip, test->helo, test->mailfrom);
+	}
+
+	assert(spf = spf_open(&env, res, &spf_defaults, &error));
+
+	while ((error = spf_check(spf))) {
+		SAY("spf_check: %s", spf_strerror(error));
+		goto done;
+	}
+
+	result = spf_result(spf);
+	exp    = spf_exp(spf);
+
+	for (i = 0; i < test->rcount; i++) {
+		if (result != spf_iresult(test->result[i]))
+			continue;
+
+		passed = 1;
+	}
+
+done:
+	if (passed) {
+		MAIN.tests.passed++;
+
+		printf("%s: PASSED\n", test->name);
+	} else {
+		MAIN.tests.failed++;
+
+		printf("%s: FAILED\n", test->name);
+	}
+
+	spf_close(spf);
+} /* test_run() */
+
+
+static void test_free(struct test *test) {
+	free(test->name);
+	free(test->descr);
+	free(test->comment);
+	free(test->spec);
+	free(test->helo);
+	free(test->mailfrom);
+	free(test->result[0]);
+	free(test->result[1]);
+	free(test->exp);
+	free(test);
+} /* test_free() */
 
 
 struct section {
@@ -138,11 +228,35 @@ struct section {
 }; /* struct section */
 
 
-struct parser {
-	yaml_parser_t yaml;
+static void section_run(struct section *section) {
+	struct dns_resolver *res;
+	struct test *test;
 
-	struct section section;
-}; /* struct parser */
+	res = mkres(section->zonedata);
+
+	CIRCLEQ_FOREACH(test, &section->tests, cqe) {
+		test_run(test, res);
+	}
+
+	dns_res_close(res);
+} /* section_run() */
+
+
+static void section_free(struct section *section) {
+	struct test *test;
+
+	free(section->descr);
+	free(section->comment);
+	cache_close(section->zonedata);
+
+	while (!CIRCLEQ_EMPTY(&section->tests)) {
+		test = CIRCLEQ_FIRST(&section->tests);
+		CIRCLEQ_REMOVE(&section->tests, test, cqe);
+		test_free(test);
+	}
+
+	free(section);
+} /* section_free() */
 
 
 static int expect(yaml_parser_t *parser, yaml_event_t *event, int set) {
@@ -225,7 +339,19 @@ static struct test *nexttest(yaml_parser_t *parser) {
 		}  else if (streq(txt, "helo")) {
 			nextscalar(&test->helo, parser);
 		}  else if (streq(txt, "host")) {
-			nextscalar(&test->host, parser);
+			char *host;
+
+			nextscalar(&host, parser);
+
+			if (strchr(host, ':')) {
+				test->host.type = AF_INET6;
+			} else {
+				test->host.type = AF_INET;
+			}
+
+			assert(1 == inet_pton(test->host.type, host, &test->host.ip));
+
+			free(host);
 		}  else if (streq(txt, "mailfrom")) {
 			nextscalar(&test->mailfrom, parser);
 		}  else if (streq(txt, "result")) {
@@ -249,6 +375,8 @@ static struct test *nexttest(yaml_parser_t *parser) {
 	} /* while() */
 
 	delete(&event);
+
+	MAIN.tests.count++;
 
 	return test;
 } /* nexttest() */
@@ -367,7 +495,6 @@ next:
 } /* nextzonedata() */
 
 
-
 static struct section *nextsection(yaml_parser_t *parser) {
 	struct section *section;
 	yaml_event_t event;
@@ -418,24 +545,12 @@ static struct section *nextsection(yaml_parser_t *parser) {
 } /* nextsection() */
 
 
-int main(int argc, char **argv) {
-	yaml_parser_t parser;
+static void trace(yaml_parser_t *parser) {
 	yaml_event_t event;
-	int done = 0, state = 0;
-	struct section *section;
+	int done = 0;
 
-	yaml_parser_initialize(&parser);
-	yaml_parser_set_input_file(&parser, stdin);
-
-	discard(&parser, SET(YAML_STREAM_START_EVENT));
-
-#if 1
-	while ((section = nextsection(&parser))) {
-		;;
-	} /* while() */
-#else
 	while (!done) {
-		assert(yaml_parser_parse(&parser, &event));
+		assert(yaml_parser_parse(parser, &event));
 
 		puts(yaml_strevent(event.type));
 
@@ -450,10 +565,37 @@ int main(int argc, char **argv) {
 			break;
 		} /* switch(event.type) */
 
-
 		yaml_event_delete(&event);
 	}
+} /* trace() */
+
+
+int main(int argc, char **argv) {
+	yaml_parser_t parser;
+	yaml_event_t event;
+	int done = 0, state = 0;
+	struct section *section;
+
+	spf_debug = 0;
+
+	yaml_parser_initialize(&parser);
+	yaml_parser_set_input_file(&parser, stdin);
+
+	discard(&parser, SET(YAML_STREAM_START_EVENT));
+
+#if 1
+	while ((section = nextsection(&parser))) {
+		section_run(section);
+		section_free(section);
+	} /* while() */
+
+	printf("PASSED %u of %u\n", MAIN.tests.passed, MAIN.tests.count);
+	printf("FAILED %u of %u\n", MAIN.tests.failed, MAIN.tests.count);
+#else
+	trace(&parser);
 #endif
+
+	yaml_parser_delete(&parser);
 
 	return 0;
 } /* main() */
