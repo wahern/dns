@@ -108,7 +108,7 @@
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-static int dns_debug = 0;
+int dns_debug = 0;
 
 #if DNS_DEBUG
 
@@ -200,6 +200,20 @@ int dns_v_api(void) {
 #define dns_soerr()	errno
 
 #endif
+
+
+const char *dns_strerror(int error) {
+	switch (error) {
+	case DNS_ENOBUFS:
+		return "DNS packet buffer too small";
+	case DNS_EILLEGAL:
+		return "Illegal DNS RR name or data";
+	case DNS_EUNKNOWN:
+		return "Unknown DNS error";
+	default:
+		return strerror(error);
+	} /* switch() */
+} /* dns_strerror() */
 
 
 /*

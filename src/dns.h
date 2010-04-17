@@ -87,6 +87,10 @@ enum dns_errno {
 	DNS_EUNKNOWN,
 }; /* dns_errno */
 
+const char *dns_strerror(int);
+
+extern int dns_debug;
+
 
 /*
  * E V E N T S  I N T E R F A C E S
