@@ -714,14 +714,11 @@ size_t dns_strlcat(char *dst, const char *src, size_t lim) {
 #endif
 
 
-static int dns_poll(int fd, short events, int timeout, const struct dns_options *opts) {
+static int dns_poll(int fd, short events, int timeout) {
 	fd_set rset, wset;
 
 	if (!events)
 		return 0;
-
-	if (opts->events == DNS_LIBEVENT)
-		events = DNS_EV2POLL(events);
 
 	assert(fd >= 0 && fd < FD_SETSIZE);
 
@@ -4767,7 +4764,7 @@ void dns_so_clear(struct dns_socket *so) {
 } /* dns_so_clear() */
 
 
-int dns_so_events(struct dns_socket *so) {
+static int dns_so_events2(struct dns_socket *so, enum dns_events type) {
 	int events = 0;
 
 	switch (so->state) {
@@ -4791,12 +4788,17 @@ int dns_so_events(struct dns_socket *so) {
 		break;
 	} /* switch() */
 
-	switch (so->opts.events) {
+	switch (type) {
 	case DNS_LIBEVENT:
 		return DNS_POLL2EV(events);
 	default:
 		return events;
 	} /* switch() */
+} /* dns_so_events2() */
+
+
+int dns_so_events(struct dns_socket *so) {
+	return dns_so_events2(so, so->opts.events);
 } /* dns_so_events() */
 
 
@@ -4817,7 +4819,7 @@ int dns_so_pollfd(struct dns_socket *so) {
 
 
 int dns_so_poll(struct dns_socket *so, int timeout) {
-	return dns_poll(dns_so_pollfd(so), dns_so_events(so), timeout, &so->opts);
+	return dns_poll(dns_so_pollfd(so), dns_so_events2(so, DNS_SYSPOLL), timeout);
 } /* dns_so_poll() */
 
 
@@ -5725,13 +5727,22 @@ void dns_res_clear(struct dns_resolver *R) {
 } /* dns_res_clear() */
 
 
-int dns_res_events(struct dns_resolver *R) {
+static int dns_res_events2(struct dns_resolver *R, enum dns_events type) {
+	int events;
+
 	switch (R->stack[R->sp].state) {
 	case DNS_R_CHECK:
-		return R->cache->events(R->cache);
+		events = R->cache->events(R->cache);
+
+		return (type == DNS_LIBEVENT)? DNS_POLL2EV(events) : events;
 	default:
-		return dns_so_events(&R->so);
+		return dns_so_events2(&R->so, type);
 	}
+} /* dns_res_events2() */
+
+
+int dns_res_events(struct dns_resolver *R) {
+	return dns_res_events2(R, R->so.opts.events);
 } /* dns_res_events() */
 
 
@@ -5751,7 +5762,7 @@ time_t dns_res_elapsed(struct dns_resolver *R) {
 
 
 int dns_res_poll(struct dns_resolver *R, int timeout) {
-	return dns_poll(dns_res_pollfd(R), dns_res_events(R), timeout, &R->so.opts);
+	return dns_poll(dns_res_pollfd(R), dns_res_events2(R, DNS_SYSPOLL), timeout);
 } /* dns_res_poll() */
 
 
