@@ -77,9 +77,9 @@ int spf_iresult(const char *);
 
 #define SPF_VENDOR "william@25thandClement.com"
 
-#define SPF_V_REL  0x20100412
-#define SPF_V_ABI  0x20100412
-#define SPF_V_API  0x20100412
+#define SPF_V_REL  0x20100416
+#define SPF_V_ABI  0x20100416
+#define SPF_V_API  0x20100416
 
 
 const char *spf_vendor(void);
