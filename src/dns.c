@@ -120,13 +120,11 @@ int dns_debug = 0;
 #define DNS_SAY(...) DNS_SAY_("@@ (%s:%d) " __VA_ARGS__, "\n")
 #define DNS_HAI DNS_SAY("HAI")
 
-static void print_packet();
-
 #define DNS_SHOW_(P, fmt, ...)	do {					\
 	if (DNS_DEBUG > 1) {						\
 	fprintf(stderr, "@@ BEGIN * * * * * * * * * * * *\n");		\
 	fprintf(stderr, "@@ " fmt "%.0s\n", __VA_ARGS__);		\
-	print_packet((P), stderr);					\
+	dns_p_dump((P), stderr);					\
 	fprintf(stderr, "@@ END * * * * * * * * * * * * *\n\n");	\
 	}								\
 } while (0)
@@ -961,6 +959,42 @@ error:
 
 	return error;
 } /* dns_p_push() */
+
+
+static void dns_p_dump3(struct dns_packet *P, struct dns_rr_i *I, FILE *fp) {
+	enum dns_section section;
+	struct dns_rr rr;
+	int error;
+	union dns_any any;
+	char pretty[sizeof any * 2];
+	size_t len;
+
+	fputs(";; [HEADER]\n", fp);
+	fprintf(fp, ";;     qr : %s(%d)\n", (dns_header(P)->qr)? "RESPONSE" : "QUERY", dns_header(P)->qr);
+	fprintf(fp, ";; opcode : %s(%d)\n", dns_stropcode(dns_header(P)->opcode), dns_header(P)->opcode);
+	fprintf(fp, ";;     aa : %s(%d)\n", (dns_header(P)->aa)? "AUTHORITATIVE" : "NON-AUTHORITATIVE", dns_header(P)->aa);
+	fprintf(fp, ";;     tc : %s(%d)\n", (dns_header(P)->tc)? "TRUNCATED" : "NOT-TRUNCATED", dns_header(P)->tc);
+	fprintf(fp, ";;     rd : %s(%d)\n", (dns_header(P)->rd)? "RECURSION-DESIRED" : "RECURSION-NOT-DESIRED", dns_header(P)->rd);
+	fprintf(fp, ";;     ra : %s(%d)\n", (dns_header(P)->ra)? "RECURSION-ALLOWED" : "RECURSION-NOT-ALLOWED", dns_header(P)->ra);
+	fprintf(fp, ";;  rcode : %s(%d)\n", dns_strrcode(dns_header(P)->rcode), dns_header(P)->rcode);
+
+	section	= 0;
+
+	while (dns_rr_grep(&rr, 1, I, P, &error)) {
+		if (section != rr.section)
+			fprintf(fp, "\n;; [%s:%d]\n", dns_strsection(rr.section), dns_p_count(P, rr.section));
+
+		if ((len = dns_rr_print(pretty, sizeof pretty, &rr, P, &error)))
+			fprintf(fp, "%s\n", pretty);
+
+		section	= rr.section;
+	}
+} /* dns_p_dump3() */
+
+
+void dns_p_dump(struct dns_packet *P, FILE *fp) {
+	dns_p_dump3(P, dns_rr_i_new(P, .section = 0), fp);
+} /* dns_p_dump() */
 
 
 /*
@@ -6591,33 +6625,7 @@ static struct dns_hosts *hosts(void) {
 
 
 static void print_packet(struct dns_packet *P, FILE *fp) {
-	enum dns_section section;
-	struct dns_rr rr;
-	int error;
-	union dns_any any;
-	char pretty[sizeof any * 2];
-	size_t len;
-
-	fputs(";; [HEADER]\n", fp);
-	fprintf(fp, ";;     qr : %s(%d)\n", (dns_header(P)->qr)? "RESPONSE" : "QUERY", dns_header(P)->qr);
-	fprintf(fp, ";; opcode : %s(%d)\n", dns_stropcode(dns_header(P)->opcode), dns_header(P)->opcode);
-	fprintf(fp, ";;     aa : %s(%d)\n", (dns_header(P)->aa)? "AUTHORITATIVE" : "NON-AUTHORITATIVE", dns_header(P)->aa);
-	fprintf(fp, ";;     tc : %s(%d)\n", (dns_header(P)->tc)? "TRUNCATED" : "NOT-TRUNCATED", dns_header(P)->tc);
-	fprintf(fp, ";;     rd : %s(%d)\n", (dns_header(P)->rd)? "RECURSION-DESIRED" : "RECURSION-NOT-DESIRED", dns_header(P)->rd);
-	fprintf(fp, ";;     ra : %s(%d)\n", (dns_header(P)->ra)? "RECURSION-ALLOWED" : "RECURSION-NOT-ALLOWED", dns_header(P)->ra);
-	fprintf(fp, ";;  rcode : %s(%d)\n", dns_strrcode(dns_header(P)->rcode), dns_header(P)->rcode);
-
-	section	= 0;
-
-	dns_rr_foreach(&rr, P, .sort = MAIN.sort) {
-		if (section != rr.section)
-			fprintf(fp, "\n;; [%s:%d]\n", dns_strsection(rr.section), dns_p_count(P, rr.section));
-
-		if ((len = dns_rr_print(pretty, sizeof pretty, &rr, P, &error)))
-			fprintf(fp, "%s\n", pretty);
-
-		section	= rr.section;
-	}
+	dns_p_dump3(P, dns_rr_i_new(P, .sort = MAIN.sort), fp);
 
 	if (MAIN.verbose > 2)
 		dump(P->data, P->end, fp);

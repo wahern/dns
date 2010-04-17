@@ -328,6 +328,8 @@ void dns_p_dictadd(struct dns_packet *, unsigned short);
 
 struct dns_packet *dns_p_merge(struct dns_packet *, enum dns_section, struct dns_packet *, enum dns_section, int *);
 
+void dns_p_dump(struct dns_packet *, FILE *);
+
 
 /*
  * D O M A I N  N A M E  I N T E R F A C E S
