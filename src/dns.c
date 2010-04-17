@@ -6499,7 +6499,7 @@ struct {
 };
 
 
-void dump(const unsigned char *src, size_t len, FILE *fp) {
+void hexdump(const unsigned char *src, size_t len, FILE *fp) {
 	static const unsigned char hex[]	= "0123456789abcdef";
 	static const unsigned char tmpl[]	= "                                                    |                |\n";
 	unsigned char ln[sizeof tmpl];
@@ -6532,7 +6532,7 @@ void dump(const unsigned char *src, size_t len, FILE *fp) {
 	}
 
 	return /* void */;
-} /* dump() */
+} /* hexdump() */
 
 
 static void panic(const char *fmt, ...) {
@@ -6628,7 +6628,7 @@ static void print_packet(struct dns_packet *P, FILE *fp) {
 	dns_p_dump3(P, dns_rr_i_new(P, .sort = MAIN.sort), fp);
 
 	if (MAIN.verbose > 2)
-		dump(P->data, P->end, fp);
+		hexdump(P->data, P->end, fp);
 } /* print_packet() */
 
 
@@ -6692,10 +6692,10 @@ static int parse_packet(int argc, char *argv[]) {
 
 	if (MAIN.verbose > 1) {
 		fprintf(stderr, "orig:%zu\n", P->end);
-		dump(P->data, P->end, stdout);
+		hexdump(P->data, P->end, stdout);
 
 		fprintf(stderr, "copy:%zu\n", Q->end);
-		dump(Q->data, Q->end, stdout);
+		hexdump(Q->data, Q->end, stdout);
 	}
 
 	return 0;
@@ -6864,7 +6864,7 @@ int dump_random(int argc, char *argv[]) {
 			}
 		} while (i < n && i < sizeof b);
 
-		dump(b, i, stdout);
+		hexdump(b, i, stdout);
 
 		n	-= i;
 	}
