@@ -692,8 +692,9 @@ int main(int argc, char **argv) {
 			section_free(section);
 		} /* while() */
 
-		printf("PASSED %u of %u\n", MAIN.tests.passed, MAIN.tests.count);
-		printf("FAILED %u of %u\n", MAIN.tests.failed, MAIN.tests.count);
+		#define PCT(a, b) (((float)a / (float)b) * (float)100)
+		printf("PASSED %u of %u (%.2f%%)\n", MAIN.tests.passed, MAIN.tests.count, PCT(MAIN.tests.passed, MAIN.tests.count));
+		printf("FAILED %u of %u (%.2f%%)\n", MAIN.tests.failed, MAIN.tests.count, PCT(MAIN.tests.failed, MAIN.tests.count));
 	}
 
 	yaml_parser_delete(&parser);
