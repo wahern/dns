@@ -51,8 +51,6 @@
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-extern int spf_debug;
-
 /** handles both system errors and (enum dns_errno) errors. */
 const char *spf_strerror(int);
 
@@ -89,6 +87,22 @@ const char *spf_vendor(void);
 int spf_v_rel(void);
 int spf_v_abi(void);
 int spf_v_api(void);
+
+
+/*
+ * E R R O R  I N T E R F A C E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+enum spf_errno {
+	SPF_EQUERYLIMIT	= -(('S' << 24) | ('P' << 16) | ('F' << 8) | 64),
+	SPF_ENOPOLICY,
+	SPF_EBADPOLICY,
+}; /* spf_errno */
+
+const char *spf_strerror(int);
+
+extern int spf_debug;
 
 
 /*
@@ -354,6 +368,15 @@ int spf_check(struct spf_resolver *);
 enum spf_result spf_result(struct spf_resolver *);
 
 const char *spf_exp(struct spf_resolver *);
+
+struct spf_info {
+	struct {
+		enum spf_errno code;
+		char exp[128];
+	} error;
+}; /* struct spf_info */
+
+const struct spf_info *spf_info(struct spf_resolver *);
 
 int spf_elapsed(struct spf_resolver *);
 
