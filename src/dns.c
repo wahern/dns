@@ -6595,9 +6595,6 @@ static struct dns_hosts *hosts(void) {
 	if (hosts)
 		return hosts;
 
-	if (!(hosts = dns_hosts_open(&error)))
-		panic("dns_hosts_open: %s", strerror(error));
-
 	if (!MAIN.hosts.count) {
 		MAIN.hosts.path[MAIN.hosts.count++]	= "/etc/hosts";
 
@@ -6607,6 +6604,9 @@ static struct dns_hosts *hosts(void) {
 
 		return hosts;
 	}
+
+	if (!(hosts = dns_hosts_open(&error)))
+		panic("dns_hosts_open: %s", strerror(error));
 
 	for (i = 0; i < MAIN.hosts.count; i++) {
 		path	= MAIN.hosts.path[i];
@@ -6991,6 +6991,7 @@ static int show_hints(int argc, char *argv[]) {
 static int resolve_query(int argc, char *argv[]) {
 	struct dns_hints *(*hints)()	= (strstr(argv[0], "recurse"))? &dns_hints_root : &dns_hints_local;
 	struct dns_resolver *R;
+	struct dns_packet *ans;
 	int error;
 
 	if (!MAIN.qname)
@@ -7000,7 +7001,7 @@ static int resolve_query(int argc, char *argv[]) {
 
 	resconf()->options.recurse	= (0 != strstr(argv[0], "recurse"));
 
-	if (!(R = dns_res_open(resconf(), hosts(), hints(resconf(), &error), NULL, dns_opts(), &error)))
+	if (!(R = dns_res_open(resconf(), hosts(), dns_hints_mortal(hints(resconf(), &error)), NULL, dns_opts(), &error)))
 		panic("%s: %s", MAIN.qname, strerror(error));
 
 	if ((error = dns_res_submit(R, MAIN.qname, MAIN.qtype, DNS_C_IN)))
@@ -7015,7 +7016,9 @@ static int resolve_query(int argc, char *argv[]) {
 		dns_res_poll(R, 1);
 	}
 
-	print_packet(dns_res_fetch(R, &error), stdout);
+	ans = dns_res_fetch(R, &error);
+	print_packet(ans, stdout);
+	free(ans);
 
 	dns_res_close(R);
 
