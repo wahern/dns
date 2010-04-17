@@ -6565,7 +6565,7 @@ static struct dns_resolv_conf *resconf(void) {
 		return resconf;
 
 	if (!(resconf = dns_resconf_open(&error)))
-		panic("dns_resconf_open: %s", strerror(error));
+		panic("dns_resconf_open: %s", dns_strerror(error));
 
 	if (!MAIN.resconf.count)
 		MAIN.resconf.path[MAIN.resconf.count++]	= "/etc/resolv.conf";
@@ -6579,7 +6579,7 @@ static struct dns_resolv_conf *resconf(void) {
 			error	= dns_resconf_loadpath(resconf, path);
 
 		if (error)
-			panic("%s: %s", path, strerror(error));
+			panic("%s: %s", path, dns_strerror(error));
 	}
 
 	return resconf;
@@ -6600,13 +6600,13 @@ static struct dns_hosts *hosts(void) {
 
 		/* Explicitly test dns_hosts_local() */
 		if (!(hosts = dns_hosts_local(&error)))
-			panic("%s: %s", "/etc/hosts", strerror(error));
+			panic("%s: %s", "/etc/hosts", dns_strerror(error));
 
 		return hosts;
 	}
 
 	if (!(hosts = dns_hosts_open(&error)))
-		panic("dns_hosts_open: %s", strerror(error));
+		panic("dns_hosts_open: %s", dns_strerror(error));
 
 	for (i = 0; i < MAIN.hosts.count; i++) {
 		path	= MAIN.hosts.path[i];
@@ -6617,7 +6617,7 @@ static struct dns_hosts *hosts(void) {
 			error	= dns_hosts_loadpath(hosts, path);
 		
 		if (error)
-			panic("%s: %s", path, strerror(error));
+			panic("%s: %s", path, dns_strerror(error));
 	}
 
 	return hosts;
@@ -6774,17 +6774,17 @@ static int query_hosts(int argc, char *argv[]) {
 		int af	= (strchr(MAIN.qname, ':'))? AF_INET6 : AF_INET;
 
 		if (1 != dns_inet_pton(af, MAIN.qname, &addr))
-			panic("%s: %s", MAIN.qname, strerror(error));
+			panic("%s: %s", MAIN.qname, dns_strerror(error));
 
 		qlen	= dns_ptr_qname(qname, sizeof qname, af, &addr);
 	} else
 		qlen	= dns__printstring(qname, sizeof qname, 0, MAIN.qname);
 
 	if ((error = dns_p_push(Q, DNS_S_QD, qname, qlen, MAIN.qtype, DNS_C_IN, 0, 0)))
-		panic("%s: %s", qname, strerror(error));
+		panic("%s: %s", qname, dns_strerror(error));
 
 	if (!(A = dns_hosts_query(hosts(), Q, &error)))
-		panic("%s: %s", qname, strerror(error));
+		panic("%s: %s", qname, dns_strerror(error));
 
 	print_packet(A, stdout);
 
@@ -6899,7 +6899,7 @@ static int send_query(int argc, char *argv[]) {
 		MAIN.qtype	= DNS_T_AAAA;
 
 	if ((error = dns_p_push(Q, DNS_S_QD, MAIN.qname, strlen(MAIN.qname), MAIN.qtype, DNS_C_IN, 0, 0)))
-		panic("dns_p_push: %s", strerror(error));
+		panic("dns_p_push: %s", dns_strerror(error));
 
 	dns_header(Q)->rd	= 1;
 
@@ -6913,11 +6913,11 @@ static int send_query(int argc, char *argv[]) {
 	fprintf(stderr, "querying %s for %s IN %s\n", host, MAIN.qname, dns_strtype(MAIN.qtype));
 
 	if (!(so = dns_so_open((struct sockaddr *)&resconf()->iface, type, dns_opts(), &error)))
-		panic("dns_so_open: %s", strerror(error));
+		panic("dns_so_open: %s", dns_strerror(error));
 
 	while (!(A = dns_so_query(so, Q, (struct sockaddr *)&ss, &error))) {
 		if (error != EAGAIN)
-			panic("dns_so_query: %s(%d)", strerror(error), error);
+			panic("dns_so_query: %s(%d)", dns_strerror(error), error);
 		if (dns_so_elapsed(so) > 10)
 			panic("query timed-out");
 
@@ -6962,7 +6962,7 @@ static int show_hints(int argc, char *argv[]) {
 		: &dns_hints_root;
 
 	if (!(hints = load(resconf(), &error)))
-		panic("%s: %s", argv[0], strerror(error));
+		panic("%s: %s", argv[0], dns_strerror(error));
 
 	if (0 == strcmp(how, "plain")) {
 		dns_hints_dump(hints, stdout);
@@ -6972,10 +6972,10 @@ static int show_hints(int argc, char *argv[]) {
 		query	= dns_p_new(512);
 
 		if ((error = dns_p_push(query, DNS_S_QUESTION, who, strlen(who), DNS_T_A, DNS_C_IN, 0, 0)))
-			panic("%s: %s", who, strerror(error));
+			panic("%s: %s", who, dns_strerror(error));
 
 		if (!(answer = dns_hints_query(hints, query, &error)))
-			panic("%s: %s", who, strerror(error));
+			panic("%s: %s", who, dns_strerror(error));
 
 		print_packet(answer, stdout);
 
@@ -7002,14 +7002,14 @@ static int resolve_query(int argc, char *argv[]) {
 	resconf()->options.recurse	= (0 != strstr(argv[0], "recurse"));
 
 	if (!(R = dns_res_open(resconf(), hosts(), dns_hints_mortal(hints(resconf(), &error)), NULL, dns_opts(), &error)))
-		panic("%s: %s", MAIN.qname, strerror(error));
+		panic("%s: %s", MAIN.qname, dns_strerror(error));
 
 	if ((error = dns_res_submit(R, MAIN.qname, MAIN.qtype, DNS_C_IN)))
-		panic("%s: %s", MAIN.qname, strerror(error));
+		panic("%s: %s", MAIN.qname, dns_strerror(error));
 
 	while ((error = dns_res_check(R))) {
 		if (error != EAGAIN)
-			panic("dns_res_check: %s(%d)", strerror(error), error);
+			panic("dns_res_check: %s(%d)", dns_strerror(error), error);
 		if (dns_res_elapsed(R) > 30)
 			panic("query timed-out");
 
@@ -7043,10 +7043,10 @@ static int resolve_addrinfo(int argc, char *argv[]) {
 	resconf()->options.recurse	= (0 != strstr(argv[0], "recurse"));
 
 	if (!(res = dns_res_open(resconf(), hosts(), hints(resconf(), &error), NULL, dns_opts(), &error)))
-		panic("%s: %s", MAIN.qname, strerror(error));
+		panic("%s: %s", MAIN.qname, dns_strerror(error));
 
 	if (!(ai = dns_ai_open(MAIN.qname, "80", MAIN.qtype, &ai_hints, res, &error)))
-		panic("%s: %s", MAIN.qname, strerror(error));
+		panic("%s: %s", MAIN.qname, dns_strerror(error));
 
 	do {
 		switch (error = dns_ai_nextent(&ent, ai)) {
@@ -7068,7 +7068,7 @@ static int resolve_addrinfo(int argc, char *argv[]) {
 
 			break;
 		default:
-			panic("dns_ai_nextent: %s(%d)", strerror(error), error);
+			panic("dns_ai_nextent: %s(%d)", dns_strerror(error), error);
 		}
 	} while (error != ENOENT);
 
