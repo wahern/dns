@@ -213,10 +213,7 @@ static void test_run(struct test *test, struct dns_resolver *res, struct cache *
 	int error, result, i, passed = 0;
 	const char *exp;
 
-	if (test->mailfrom && *test->mailfrom) {
-		spf_env_init(&env, test->host.type, &test->host.ip, test->helo, test->mailfrom);
-	}
-
+	spf_env_init(&env, test->host.type, &test->host.ip, test->helo, test->mailfrom);
 	assert(spf = spf_open(&env, res, &spf_defaults, &error));
 
 	while ((error = spf_check(spf))) {
