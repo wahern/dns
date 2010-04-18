@@ -4050,7 +4050,8 @@ static void frepc(int ch, int count, FILE *fp)
 static int vm(const struct spf_env *env, const char *file) {
 #define VM_C(name) { #name, name }
 	static const struct { const char *name; int value; } ctable[] = {
-		VM_C(AF_INET), VM_C(AF_INET6),
+		VM_C(AF_INET), VM_C(AF_INET6), VM_C(PF_UNSPEC),
+		VM_C(PF_INET), VM_C(PF_INET6),
 		VM_C(SPF_NONE), VM_C(SPF_NEUTRAL), VM_C(SPF_PASS),
 		VM_C(SPF_FAIL), VM_C(SPF_SOFTFAIL), VM_C(SPF_TEMPERROR),
 		VM_C(SPF_PERMERROR),
