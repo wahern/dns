@@ -164,6 +164,7 @@ enum dns_type {
 	DNS_T_TXT	= 16,
 	DNS_T_AAAA	= 28,
 	DNS_T_SRV	= 33,
+	DNS_T_SSHFP	= 44,
 	DNS_T_SPF	= 99,
 
 	DNS_T_ALL	= 255
@@ -596,6 +597,34 @@ size_t dns_srv_cname(void *, size_t, struct dns_srv *);
 
 
 /*
+ * SSHFP  R E S O U R C E  R E C O R D
+ */
+
+struct dns_sshfp {
+	enum dns_sshfp_key {
+		DNS_SSHFP_RSA = 1,
+		DNS_SSHFP_DSA = 2,
+	} algo;
+
+	enum dns_sshfp_digest {
+		DNS_SSHFP_SHA1 = 1,
+	} type;
+
+	union {
+		unsigned char sha1[20];
+	} digest;
+}; /* struct dns_sshfp */
+
+int dns_sshfp_parse(struct dns_sshfp *, struct dns_rr *, struct dns_packet *);
+
+int dns_sshfp_push(struct dns_packet *, struct dns_sshfp *);
+
+int dns_sshfp_cmp(const struct dns_sshfp *, const struct dns_sshfp *);
+
+size_t dns_sshfp_print(void *, size_t, struct dns_sshfp *);
+
+
+/*
  * TXT  R E S O U R C E  R E C O R D
  */
 
@@ -632,6 +661,7 @@ union dns_any {
 	struct dns_soa soa;
 	struct dns_ptr ptr;
 	struct dns_srv srv;
+	struct dns_sshfp sshfp;
 	struct dns_txt txt, spf, rdata;
 }; /* union dns_any */
 

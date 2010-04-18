@@ -280,6 +280,7 @@ void zonerr_init(struct zonerr *rr, struct zonefile *P) {
 				if (i == at) fputc(']', stderr);
 			}
 		} while(0);
+		fputc('\n', stderr);
 		goto next;
 	}
 
@@ -339,6 +340,37 @@ void zonerr_init(struct zonerr *rr, struct zonefile *P) {
 	SRV_target = domain %{ dns_strlcpy(rr->data.srv.target, str, sizeof rr->data.srv.target); };
 	SRV = SRV_type space+ SRV_pri space+ SRV_weight space+ SRV_port space+ SRV_target space*;
 
+	action SSHFP_nybble {
+		if (fc >= '0' && fc <= '9') {
+			n = (0x0f & (fc - '0'));
+		} else if (fc >= 'A' && fc <= 'F') {
+			n = (0x0f & (10 + (fc - 'A')));
+		} else if (fc >= 'a' && fc <= 'f') {
+			n = (0x0f & (10 + (fc - 'a')));
+		}
+	}
+
+	SSHFP_nybble = xdigit $SSHFP_nybble;
+
+	action SSHFP_sethi {
+		if (i < sizeof rr->data.sshfp.digest)
+			((unsigned char *)&rr->data.sshfp.digest)[i] = (0xf0 & (n << 4));
+	}
+
+	action SSHFP_setlo {
+		if (i < sizeof rr->data.sshfp.digest)
+			((unsigned char *)&rr->data.sshfp.digest)[i] |= (0x0f & n);
+		i++;
+	}
+
+	SSHFP_octet = SSHFP_nybble %SSHFP_sethi SSHFP_nybble %SSHFP_setlo;
+
+	SSHFP_type   = "SSHFP"i %{ rr->type = DNS_T_SSHFP; };
+	SSHFP_algo   = number %{ rr->data.sshfp.algo = n; };
+	SSHFP_digest = number %{ rr->data.sshfp.type = n; };
+	SSHFP_data   = SSHFP_octet+ >{ i = 0; memset(&rr->data.sshfp.digest, 0, sizeof rr->data.sshfp.digest); };
+	SSHFP = SSHFP_type space+ SSHFP_algo space+ SSHFP_digest space+ SSHFP_data space*;
+
 	# FIXME: Support multiple segments.
 	TXT_type = "TXT"i %{ rr->type = DNS_T_TXT; };
 	TXT_data = string %{ rr->data.txt.len = MIN(rr->data.txt.size - 1, sp - str); memcpy(rr->data.txt.data, str, rr->data.txt.len); };
@@ -368,7 +400,7 @@ void zonerr_init(struct zonerr *rr, struct zonefile *P) {
 	PTR_cname = domain %{ dns_strlcpy(rr->data.ptr.host, str, sizeof rr->data.ptr.host); };
 	PTR = PTR_type space+ PTR_cname space*;
 
-	rrdata = (SOA | NS | MX | CNAME | SRV | TXT | SPF | AAAA | A | PTR) space*;
+	rrdata = (SOA | NS | MX | CNAME | SRV | SSHFP | TXT | SPF | AAAA | A | PTR) space*;
 
 	rrname_blank  = " " %{ dns_strlcpy(rr->name, P->lastrr, sizeof rr->name); } " "*;
 	rrname_origin = "@ " %{ dns_strlcpy(rr->name, P->origin, sizeof rr->name); } " "*;
@@ -396,7 +428,7 @@ struct zonerr *zone_getrr(struct zonerr *rr, struct dns_soa **soa, struct zonefi
 	short *p, *pe, *eof;
 	int cs;
 	char str[1024], *sp, lc;
-	unsigned span, ttl, n;
+	unsigned span, ttl, n, i;
 
 	span = 0;
 next:
@@ -409,6 +441,7 @@ next:
 	lc  = 0;
 	ttl = 0;
 	n   = 0;
+	i   = 0;
 
 	zonerr_init(rr, P);
 

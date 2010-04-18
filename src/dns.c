@@ -2586,6 +2586,109 @@ size_t dns_ptr_cname(void *dst, size_t lim, struct dns_ptr *ptr) {
 } /* dns_ptr_cname() */
 
 
+int dns_sshfp_parse(struct dns_sshfp *fp, struct dns_rr *rr, struct dns_packet *P) {
+	unsigned p = rr->rd.p, pe = rr->rd.p + rr->rd.len;
+
+	if (pe - p < 2)
+		return DNS_EILLEGAL;
+
+	fp->algo = P->data[p++];
+	fp->type = P->data[p++];
+
+	switch (fp->type) {
+	case DNS_SSHFP_SHA1:
+		if (pe - p < sizeof fp->digest.sha1)
+			return DNS_EILLEGAL;
+
+		memcpy(fp->digest.sha1, &P->data[p], sizeof fp->digest.sha1);
+
+		break;
+	default:
+		break;
+	} /* switch() */
+
+	return 0;
+} /* dns_sshfp_parse() */
+
+
+int dns_sshfp_push(struct dns_packet *P, struct dns_sshfp *fp) {
+	unsigned p = P->end, pe = P->size, n;
+
+	if (pe - p < 4)
+		return DNS_ENOBUFS;
+
+	p += 2;
+	P->data[p++] = 0xff & fp->algo;
+	P->data[p++] = 0xff & fp->type;
+
+	switch (fp->type) {
+	case DNS_SSHFP_SHA1:
+		if (pe - p < sizeof fp->digest.sha1)
+			return DNS_ENOBUFS;
+
+		memcpy(&P->data[p], fp->digest.sha1, sizeof fp->digest.sha1);
+		p += sizeof fp->digest.sha1;
+
+		break;
+	default:
+		return DNS_EILLEGAL;
+	} /* switch() */
+
+	n = p - P->end - 2;
+	P->data[P->end++] = 0xff & (n >> 8);
+	P->data[P->end++] = 0xff & (n >> 0);
+	P->end = p;
+
+	return 0;
+} /* dns_sshfp_push() */
+
+
+int dns_sshfp_cmp(const struct dns_sshfp *a, const struct dns_sshfp *b) {
+	int cmp;
+
+	if ((cmp = a->algo - b->algo) || (cmp - a->type - b->type))
+		return cmp;
+
+	switch (a->type) {
+	case DNS_SSHFP_SHA1:
+		return memcmp(a->digest.sha1, b->digest.sha1, sizeof a->digest.sha1);
+	default:
+		return 0;
+	} /* switch() */
+
+	/* NOT REACHED */
+} /* dns_sshfp_cmp() */
+
+
+size_t dns_sshfp_print(void *dst, size_t lim, struct dns_sshfp *fp) {
+	static const unsigned char hex[16] = "0123456789abcdef";
+	size_t i, p = 0;
+
+	p += dns__print10(dst, lim, p, fp->algo, 0);
+	p += dns__printchar(dst, lim, p, ' ');
+	p += dns__print10(dst, lim, p, fp->type, 0);
+	p += dns__printchar(dst, lim, p, ' ');
+
+	switch (fp->type) {
+	case DNS_SSHFP_SHA1:
+		for (i = 0; i < sizeof fp->digest.sha1; i++) {
+			p += dns__printchar(dst, lim, p, hex[0x0f & (fp->digest.sha1[i] >> 4)]);
+			p += dns__printchar(dst, lim, p, hex[0x0f & (fp->digest.sha1[i] >> 0)]);
+		}
+
+		break;
+	default:
+		p += dns__printchar(dst, lim, p, '0');
+
+		break;
+	} /* switch() */
+
+	dns__printnul(dst, lim, p);
+
+	return p;
+} /* dns_sshfp_print() */
+
+
 struct dns_txt *dns_txt_init(struct dns_txt *txt, size_t size) {
 	assert(size > offsetof(struct dns_txt, data));
 
@@ -2732,6 +2835,7 @@ static const struct {
 	{ DNS_T_PTR,    "PTR",    &dns_ptr_parse,    &dns_ptr_push,    &dns_ptr_cmp,    &dns_ptr_print,    &dns_ptr_cname   },
 	{ DNS_T_TXT,    "TXT",    &dns_txt_parse,    &dns_txt_push,    &dns_txt_cmp,    &dns_txt_print,    0                },
 	{ DNS_T_SPF,    "SPF",    &dns_txt_parse,    &dns_txt_push,    &dns_txt_cmp,    &dns_txt_print,    0                },
+	{ DNS_T_SSHFP,  "SSHFP",  &dns_sshfp_parse,  &dns_sshfp_push,  &dns_sshfp_cmp,  &dns_sshfp_print,  0                },
 }; /* dns_rrtypes[] */
 
 
