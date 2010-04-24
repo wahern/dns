@@ -49,6 +49,7 @@
 
 #include <errno.h>		/* errno EINVAL ENOENT */
 
+#undef NDEBUG
 #include <assert.h>		/* assert(3) */
 
 #if _WIN32
