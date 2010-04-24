@@ -285,7 +285,7 @@ struct dns_header {
 		unsigned arcount:16;
 }; /* struct dns_header */
 
-#define dns_header(p)	((struct dns_header *)&(p)->data[0])
+#define dns_header(p)	(&(p)->header)
 
 
 #ifndef DNS_P_QBUFSIZ
@@ -304,7 +304,11 @@ struct dns_packet {
 	size_t size, end, qend;
 
 	unsigned char tcpb[2];
-	unsigned char data[1];
+
+	union {
+		struct dns_header header;
+		unsigned char data[1];
+	};
 }; /* struct dns_packet */
 
 #define dns_p_calcsize(n)	(offsetof(struct dns_packet, data) + (n))

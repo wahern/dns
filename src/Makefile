@@ -1,9 +1,9 @@
 CPPFLAGS	+= -DDNS_DEBUG -DDNS_MAIN
-CFLAGS		+= -std=c99 -Wall -Wextra -Werror -Wno-unused-function -Wno-unused-parameter -O2 -g -fstack-protector
+CFLAGS		+= -std=gnu99 -Wall -Wno-unused-function -Wno-unused-parameter -O2 -g -fstack-protector
 
 EXE_CC		= mingw32-gcc
 EXE_CPPFLAGS	+= $(CPPFLAGS)
-EXE_CFLAGS	+= -std=gnu99 -Wall -Werror -Wno-unused-function -Wno-unused-label -O2 -g -fstack-protector
+EXE_CFLAGS	+= -std=gnu99 -Wall -Wno-unused-function -Wno-unused-label -O2 -g -fstack-protector
 EXE_LIBS	+= -lws2_32 -lgdi32
 
 all: dns
@@ -19,7 +19,7 @@ dns.S: dns.c
 
 
 SPF_CPPFLAGS += 
-SPF_CFLAGS   += -std=gnu99 -Wall -Werror -Wno-unused-function -Wno-unused-variable -O2 -g -fstack-protector
+SPF_CFLAGS   += -std=gnu99 -Wall -Wno-unused-function -Wno-unused-variable -O2 -g -fstack-protector
 
 %.c: %.rl
 	ragel -C -o $@ $<
