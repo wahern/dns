@@ -357,7 +357,7 @@ struct spf_limits {
 extern const struct spf_limits spf_safelimits;
 
 struct spf_options {
-	struct spf_limits limits;
+	struct spf_limits limit;
 	int lookup[2]; /* lookup order: SPF_RR_TXT SPF_RR_SPF */
 }; /* struct spf_options */
 

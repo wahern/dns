@@ -1710,11 +1710,11 @@ enum vm_opcode {
 	OP_ONE,		/* 0/1 Push 1 */
 	OP_TWO,		/* 0/1 Push 2 */
 	OP_THREE,	/* 0/1 Push 3 */
-	OP_I8,		/* 0/1 Decode next op and push as T_INT */ 
-	OP_I16,		/* 0/1 Decode next 2 ops and push as T_INT */ 
+	OP_I8,		/* 0/1 Decode next op and push as T_INT */
+	OP_I16,		/* 0/1 Decode next 2 ops and push as T_INT */
 	OP_I32,		/* 0/1 Decode next 4 ops and push as T_INT */
 	OP_NIL,		/* 0/1 Push 0 as T_REF */
-	OP_REF,		/* 0/1 Decode next sizeof(intptr_t) opts and push as T_REF */
+	OP_REF,		/* 0/1 Decode next sizeof(intptr_t) ops and push as T_REF */
 	OP_MEM,		/* 0/1 Decode next sizeof(intptr_t) ops and push as T_MEM */
 	OP_STR,		/* 0/1 Decode until next NUL, allocate and push as T_MEM. */
 	OP_IN4,		/* 0/1 Decode (struct in_addr) and push as T_MEM. */
@@ -1823,9 +1823,9 @@ static void vm_init(struct spf_vm *vm, struct spf_resolver *spf) {
 
 /** forward definition */
 struct spf_resolver {
-	struct spf_options opts;
+	struct spf_options opt;
 
-	struct spf_limits stats;
+	struct spf_limits stat;
 
 	struct spf_env env;
 
@@ -1873,7 +1873,7 @@ static void vm_throw(struct spf_vm *vm, int error) {
 #define vm_assert1(vm, cond, err, ...) do { \
 	if (spf_unlikely(!(cond))) { \
 		spf_fmt((vm)->spf->info.error.exp, sizeof (vm)->spf->info.error.exp, __VA_ARGS__); \
-		SPF_SAY("fail: (%s) %s", SPF_STRINGIFY(cond), (vm)->spf->info.error.exp); \
+		SPF_SAY("fail: %s", (vm)->spf->info.error.exp); \
 		vm_throw((vm), (err)); \
 	} \
 } while (0)
@@ -1895,10 +1895,10 @@ static void lim_checkterms(struct spf_vm *vm, _Bool inc) {
 	 * check_host() in the very beginning--OP_CHECK instruction--which
 	 * adds an extra lookup to the count.
 	 */
-	vm_assert(vm, (vm->spf->stats.query.terms <= vm->spf->opts.limits.query.terms), SPF_EQUERYLIMIT, "Exceeded term query limit of %u", vm->spf->opts.limits.query.terms);
+	vm_assert(vm, (vm->spf->stat.query.terms <= vm->spf->opt.limit.query.terms), SPF_EQUERYLIMIT, "Exceeded term query limit of %u", vm->spf->opt.limit.query.terms);
 
 	if (inc)
-		vm->spf->stats.query.terms++;
+		vm->spf->stat.query.terms++;
 } /* lim_checkterms() */
 
 
@@ -2815,7 +2815,7 @@ static void op_check(struct spf_vm *vm) {
 	 * [-1] domain
 	 */
 	DUP(&sub);
-	I8(&sub, vm->spf->opts.lookup[0]);
+	I8(&sub, vm->spf->opt.lookup[0]);
 	SUBMIT(&sub);
 	FETCH(&sub);
 
@@ -2827,21 +2827,21 @@ static void op_check(struct spf_vm *vm) {
 	 */
 	NIL(&sub);
 	TWO(&sub);
-	I8(&sub, vm->spf->opts.lookup[0]);
+	I8(&sub, vm->spf->opt.lookup[0]);
 	NEG(&sub); /* -DNS_T_TXT asks grep/next to scan for TXT v=spf1 or SPF  */
 	GREP(&sub);
 	L0(&sub);
 	NEXT(&sub);
 	DUP(&sub);
 	NOT(&sub);
-	sub_jump(&sub, (vm->spf->opts.lookup[1])? 2 : 7);
+	sub_jump(&sub, (vm->spf->opt.lookup[1])? 2 : 7);
 	COMP(&sub); /* pushes code address, or 0 if failed. */
 	DUP(&sub);
 	J6(&sub);   /* if not 0, jump to transfer code. */ 
 	NOT(&sub);
 	J0(&sub);   /* otherwise, continue looping */
 
-	if (!vm->spf->opts.lookup[1])
+	if (!vm->spf->opt.lookup[1])
 		goto L6; /* Skip Query #2 bytecode generation */
 
 	/* Query #2
@@ -2858,7 +2858,7 @@ static void op_check(struct spf_vm *vm) {
 	POP(&sub);
 	POP(&sub);
 	DUP(&sub);
-	I8(&sub, vm->spf->opts.lookup[1]);
+	I8(&sub, vm->spf->opt.lookup[1]);
 	SUBMIT(&sub);
 	FETCH(&sub);
 
@@ -2870,7 +2870,7 @@ static void op_check(struct spf_vm *vm) {
 	 */
 	NIL(&sub);
 	TWO(&sub);
-	I8(&sub, vm->spf->opts.lookup[1]);
+	I8(&sub, vm->spf->opt.lookup[1]);
 	NEG(&sub); /* -DNS_T_TXT asks grep/next to scan for TXT v=spf1 or SPF  */
 	GREP(&sub);
 	L3(&sub);
@@ -3463,7 +3463,7 @@ done:
 	vm_discard(vm, 1);
 	vm_push(vm, T_INT, match);
 
-	vm->spf->stats.query.terms++;
+	vm->spf->stat.query.terms++;
 	vm->pc++;
 } /* op_ptr() */
 
@@ -3975,7 +3975,7 @@ static int vm_exec(struct spf_vm *vm) {
 const struct spf_limits spf_safelimits = SPF_SAFELIMITS;
 
 const struct spf_options spf_defaults = {
-	.limits = SPF_SAFELIMITS,
+	.limit  = SPF_SAFELIMITS,
 	.lookup = { SPF_RR_SPF, SPF_RR_TXT },
 }; /* spf_defaults */
 
@@ -3991,7 +3991,7 @@ struct spf_resolver *spf_open(const struct spf_env *env, struct dns_resolver *re
 
 	memset(spf, 0, sizeof *spf);
 
-	spf->opts = (opts)? *opts : spf_defaults;
+	spf->opt = (opts)? *opts : spf_defaults;
 
 	spf->env = *env;
 
