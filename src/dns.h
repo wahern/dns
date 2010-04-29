@@ -64,9 +64,9 @@
 
 #define DNS_VENDOR "william@25thandClement.com"
 
-#define DNS_V_REL  0x20100423
+#define DNS_V_REL  0x20100428
 #define DNS_V_ABI  0x20100412
-#define DNS_V_API  0x20100417
+#define DNS_V_API  0x20100428
 
 
 const char *dns_vendor(void);
@@ -315,9 +315,14 @@ struct dns_packet {
 
 #define dns_p_sizeof(P)		dns_p_calcsize((P)->end)
 
+/** takes size of maximum desired payload */
 #define dns_p_new(n)		(dns_p_init((struct dns_packet *)&(union { unsigned char b[offsetof(struct dns_packet, data) + (n)]; struct dns_packet p; }){ { 0 } }, (offsetof(struct dns_packet, data) + (n))))
 
+/** takes size of entire packet structure as allocated */
 struct dns_packet *dns_p_init(struct dns_packet *, size_t);
+
+/** takes size of maximum desired payload */
+struct dns_packet *dns_p_make(size_t, int *);
 
 struct dns_packet *dns_p_copy(struct dns_packet *, const struct dns_packet *);
 

@@ -800,6 +800,17 @@ invalid:
 } /* dns_p_qend() */
 
 
+struct dns_packet *dns_p_make(size_t len, int *error) {
+	struct dns_packet *P;
+	size_t size = dns_p_calcsize(len);
+
+	if (!(P = dns_p_init(malloc(size), size)))
+		*error = dns_syerr();
+
+	return P;
+} /* dns_p_make() */
+
+
 struct dns_packet *dns_p_copy(struct dns_packet *P, const struct dns_packet *P0) {
 	if (!P)
 		return 0;
@@ -822,8 +833,8 @@ struct dns_packet *dns_p_merge(struct dns_packet *P0, enum dns_section mask0, st
 
 merge:
 
-	if (!(P[2] = dns_p_init(malloc(dns_p_calcsize(bufsiz)), dns_p_calcsize(bufsiz))))
-		goto syerr;
+	if (!(P[2] = dns_p_make(bufsiz, &error)))
+		goto error;
 
 	for (section = DNS_S_QD; (DNS_S_ALL & section); section <<= 1) {
 		for (i = 0; i < 2; i++) {
@@ -857,8 +868,6 @@ merge:
 	} /* foreach(section) */
 
 	return P[2];
-syerr:
-	error	= dns_syerr();
 error:
 	*error_	= error;
 
@@ -3251,12 +3260,10 @@ loop:		for (ent = hosts->head; ent; ent = ent->next) {
 	} /* switch() */
 
 
-	if (!(A = dns_p_copy(dns_p_init(malloc(dns_p_sizeof(P)), dns_p_sizeof(P)), P)))
-		goto syerr;
+	if (!(A = dns_p_copy(dns_p_make(P->end, &error), P)))
+		goto error;
 
 	return A;
-syerr:
-	error	= dns_syerr();
 error:
 	*error_	= error;
 
@@ -4195,12 +4202,10 @@ struct dns_packet *dns_hints_query(struct dns_hints *hints, struct dns_packet *Q
 		}
 	} while ((zlen = dns_d_cleave(zone, sizeof zone, zone, zlen)));
 
-	if (!(A = dns_p_copy(dns_p_init(malloc(dns_p_sizeof(P)), dns_p_sizeof(P)), P)))
-		goto syerr;
+	if (!(A = dns_p_copy(dns_p_make(P->end, &error), P)))
+		goto error;
 
 	return A;
-syerr:
-	error	= dns_syerr();
 error:
 	*error_	= error;
 
@@ -5203,8 +5208,8 @@ static struct dns_packet *dns_res_merge(struct dns_packet *P0, struct dns_packet
 	enum dns_section section;
 
 retry:
-	if (!(P[2] = dns_p_init(malloc(dns_p_calcsize(bufsiz)), dns_p_calcsize(bufsiz))))
-		goto syerr;
+	if (!(P[2] = dns_p_make(bufsiz, &error)))
+		goto error;
 
 	dns_rr_foreach(&rr[0], P[0], .section = DNS_S_QD) {
 		if ((error = dns_rr_copy(P[2], &rr[0], P[0])))
@@ -5240,8 +5245,6 @@ retry:
 	} /* foreach(section) */
 
 	return P[2];
-syerr:
-	error	= dns_syerr();
 error:
 	*error_	= error;
 
@@ -5300,7 +5303,7 @@ static struct dns_packet *dns_res_glue(struct dns_resolver *R, struct dns_packet
 		return 0;
 
 copy:
-	return dns_p_copy(dns_p_init(malloc(dns_p_sizeof(P)), dns_p_sizeof(P)), P);
+	return dns_p_copy(dns_p_make(P->end, &error), P);
 } /* dns_res_glue() */
 
 
@@ -5531,7 +5534,7 @@ exec:
 		if (!(len = dns_resconf_search(host, sizeof host, R->qname, R->qlen, R->resconf, &R->search)))
 			goto(R->sp, DNS_R_SWITCH);
 
-		if (!(P = dns_p_init(malloc(dns_p_calcsize(DNS_P_QBUFSIZ)), dns_p_calcsize(DNS_P_QBUFSIZ))))
+		if (!(P = dns_p_make(DNS_P_QBUFSIZ, &error)))
 			goto error;
 
 		dns_header(P)->rd	= !R->resconf->options.recurse;
@@ -5574,8 +5577,8 @@ exec:
 
 		dns_res_reset_frame(R, &F[1]);
 
-		if (!(F[1].query = dns_p_init(malloc(dns_p_calcsize(DNS_P_QBUFSIZ)), dns_p_calcsize(DNS_P_QBUFSIZ))))
-			goto syerr;
+		if (!(F[1].query = dns_p_make(DNS_P_QBUFSIZ, &error)))
+			goto error;
 
 		if ((error = dns_ns_parse((struct dns_ns *)host, &F->hints_ns, F->hints)))
 			goto error;
@@ -5698,8 +5701,8 @@ exec:
 
 		dns_res_reset_frame(R, &F[1]);
 
-		if (!(F[1].query = dns_p_init(malloc(dns_p_calcsize(DNS_P_QBUFSIZ)), dns_p_calcsize(DNS_P_QBUFSIZ))))
-			goto syerr;
+		if (!(F[1].query = dns_p_make(DNS_P_QBUFSIZ, &error)))
+			goto error;
 
 		if ((error = dns_p_push(F[1].query, DNS_S_QD, host, strlen(host), dns_rr_type(12, F->query), DNS_C_IN, 0, 0)))
 			goto error;
@@ -5830,8 +5833,8 @@ exec:
 	case DNS_R_SERVFAIL:
 		free(F->answer);
 
-		if (!(F->answer = dns_p_init(malloc(DNS_P_QBUFSIZ), DNS_P_QBUFSIZ)))
-			goto syerr;
+		if (!(F->answer = dns_p_make(DNS_P_QBUFSIZ, &error)))
+			goto error;
 
 		dns_header(F->answer)->qr	= 1;
 		dns_header(F->answer)->rcode	= DNS_RC_SERVFAIL;
@@ -5847,8 +5850,6 @@ exec:
 	} /* switch () */
 
 	return 0;
-syerr:
-	error	= dns_syerr();
 error:
 	return error;
 } /* dns_res_exec() */
