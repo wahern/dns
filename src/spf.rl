@@ -24,8 +24,9 @@
  * ==========================================================================
  */
 #include <stddef.h>	/* size_t */
+#include <stdarg.h>	/* va_list va_start() va_arg() va_end() */
 #include <stdint.h>	/* intptr_t */
-#include <stdlib.h>	/* malloc(3) free(3) abs(3) */
+#include <stdlib.h>	/* malloc(3) free(3) abs(3) labs(3) */
 #include <stdio.h>	/* FILE */
 
 #include <limits.h>	/* UCHAR_MAX USHRT_MAX */ 
@@ -798,6 +799,98 @@ static _Bool sbuf_put6(struct spf_sbuf *sbuf, const struct in6_addr *ip) {
 
 	return sbuf_puts(sbuf, tmp);
 } /* sbuf_put6() */
+
+static _Bool sbuf_vmt(struct spf_sbuf *sbuf, const char *fmt, va_list ap) {
+	unsigned char lc = 0, mc = 0, fc;
+	unsigned ml = 0;
+	const void *p;
+	unsigned long u;
+	long i;
+
+	while ((fc = *fmt++)) {
+		if (lc == '%') {
+			switch (fc) {
+			case '0': case '1': case '2': case '3': case '4':
+			case '5': case '6': case '7': case '8': case '9':
+				ml *= 10; ml += fc - '0';
+
+				/* FALL THROUGH */
+			case 'l':
+				mc = fc;
+				continue;
+			case 'a':
+				if (ml == 4) {
+					p = va_arg(ap, struct in_addr *);
+					sbuf_put4(sbuf, p);
+				} else if (ml == 6) {
+					p = va_arg(ap, struct in6_addr *);
+					sbuf_put6(sbuf, p);
+				} else
+					sbuf_putc(sbuf, '?');
+
+				break;
+			case 'd':
+				/* FALL THROUGH */
+			case 'i':
+				if (mc == 'l')
+					i = va_arg(ap, long);
+				else
+					i = va_arg(ap, int);
+				if (i < 0) {
+					sbuf_putc(sbuf, '-');
+					i = labs(i);
+				}
+				sbuf_puti(sbuf, (unsigned long)i);
+				break;
+			case 'u':
+				if (mc == 'l')
+					u = va_arg(ap, long unsigned);
+				else
+					u = va_arg(ap, int unsigned);
+				sbuf_puti(sbuf, u);
+				break;
+			case 's':
+				p = va_arg(ap, char *);
+				sbuf_puts(sbuf, p);
+				break;
+			case '%':
+				sbuf_putc(sbuf, '%');
+				break;
+			default:
+				sbuf_putc(sbuf, '%');
+				sbuf_putc(sbuf, fc);
+			} /* switch() */
+
+			mc = 0;
+			ml = 0;
+			lc = 0;
+		} else {
+			if (fc != '%')
+				sbuf_putc(sbuf, fc);
+			lc = fc;
+		}
+	} /* while() */
+
+	return !sbuf->overflow;
+} /* sbuf_vmt() */
+
+static _Bool sbuf_fmt(struct spf_sbuf *sbuf, const char *fmt, ...) {
+	va_list ap;
+	va_start(ap, fmt);
+	sbuf_vmt(sbuf, fmt, ap);
+	va_end(ap);
+	return !sbuf->overflow;
+} /* sbuf_fmt() */
+
+static _Bool spf_fmt(void *dst, size_t lim, const char *fmt, ...) {
+	struct spf_sbuf sbuf = SBUF_INIT(&sbuf);
+	va_list ap;
+	va_start(ap, fmt);
+	sbuf_vmt(&sbuf, fmt, ap);
+	va_end(ap);
+	spf_strlcpy(dst, sbuf.str, lim);
+	return !sbuf.overflow;
+} /* spf_fmt() */
 
 
 /*
@@ -1700,8 +1793,13 @@ enum vm_opcode {
 }; /* enum vm_opcode */
 
 
-#define VM_MAXCODE  1024
+#if !defined VM_MAXCODE
+#define VM_MAXCODE 2048
+#endif
+
+#if !defined VM_MAXSTACK
 #define VM_MAXSTACK 64
+#endif
 
 struct spf_resolver;
 
@@ -1726,6 +1824,8 @@ static void vm_init(struct spf_vm *vm, struct spf_resolver *spf) {
 /** forward definition */
 struct spf_resolver {
 	struct spf_options opts;
+
+	struct spf_limits stats;
 
 	struct spf_env env;
 
@@ -1763,12 +1863,43 @@ static void vm_throw(struct spf_vm *vm, int error) {
  * 	vm_assert(vm, (rval = do_something(&error)), error)
  * 	vm_assert(vm, (p = malloc()), errno)
  */
-#define vm_assert(vm, cond, error) do { \
+#define vm_assert0(vm, cond, error) do { \
 	if (spf_unlikely(!(cond))) { \
 		SPF_SAY("fail: %s", SPF_STRINGIFY(cond)); \
 		vm_throw((vm), (error)); \
 	} \
 } while (0)
+
+#define vm_assert1(vm, cond, err, ...) do { \
+	if (spf_unlikely(!(cond))) { \
+		spf_fmt((vm)->spf->info.error.exp, sizeof (vm)->spf->info.error.exp, __VA_ARGS__); \
+		SPF_SAY("fail: (%s) %s", SPF_STRINGIFY(cond), (vm)->spf->info.error.exp); \
+		vm_throw((vm), (err)); \
+	} \
+} while (0)
+
+#define vm_assert2(...) vm_assert1(__VA_ARGS__)
+#define vm_assert3(...) vm_assert1(__VA_ARGS__)
+#define vm_assert4(...) vm_assert1(__VA_ARGS__)
+#define vm_assert5(...) vm_assert1(__VA_ARGS__)
+#define vm_assert6(...) vm_assert1(__VA_ARGS__)
+#define vm_assert7(...) vm_assert1(__VA_ARGS__)
+#define vm_assert8(...) vm_assert1(__VA_ARGS__)
+
+#define vm_assert(...) DNS_PP_CALL(DNS_PP_XPASTE(vm_assert, DNS_PP_DEC(DNS_PP_DEC(DNS_PP_DEC(DNS_PP_NARG(__VA_ARGS__))))), __VA_ARGS__)
+
+
+static void lim_checkterms(struct spf_vm *vm, _Bool inc) {
+	/*
+	 * NOTE: Use greater-than-or-equal because we do an implicit
+	 * check_host() in the very beginning--OP_CHECK instruction--which
+	 * adds an extra lookup to the count.
+	 */
+	vm_assert(vm, (vm->spf->stats.query.terms <= vm->spf->opts.limits.query.terms), SPF_EQUERYLIMIT, "Exceeded term query limit of %u", vm->spf->opts.limits.query.terms);
+
+	if (inc)
+		vm->spf->stats.query.terms++;
+} /* lim_checkterms() */
 
 
 static inline void vm_extend(struct spf_vm *vm, unsigned n) {
@@ -2670,6 +2801,8 @@ static void op_check(struct spf_vm *vm) {
 	struct vm_sub sub;
 	unsigned end, ret;
 
+	lim_checkterms(vm, 1);
+
 	end = vm->end;
 	ret = vm->pc + 1;
 
@@ -3139,6 +3272,8 @@ static void op_exists(struct spf_vm *vm) {
 	struct vm_sub sub;
 	unsigned end, ret;
 
+	lim_checkterms(vm, 1);
+
 	end = vm->end;
 	ret = vm->pc + 1;
 
@@ -3290,11 +3425,13 @@ static void op_a_mx(struct spf_vm *vm, enum dns_type type) {
 
 
 static void op_a(struct spf_vm *vm) {
+	lim_checkterms(vm, 1);
 	op_a_mx(vm, (!strcmp(vm->spf->env.v, "ip6"))? DNS_T_AAAA : DNS_T_A);
 } /* op_a() */
 
 
 static void op_mx(struct spf_vm *vm) {
+	lim_checkterms(vm, 1);
 	op_a_mx(vm, DNS_T_MX);
 } /* op_mx() */
 
@@ -3304,6 +3441,8 @@ static void op_ptr(struct spf_vm *vm) {
 	struct dns_rr rr;
 	char dn[DNS_D_MAXNAME + 1], cn[DNS_D_MAXNAME + 1];
 	int error, match = 0;
+
+	lim_checkterms(vm, 0);
 
 	vm_assert(vm, vm->spf->fcrd.done, EFAULT);
 	vm_assert(vm, (arg = (char *)vm_peek(vm, -1, T_REF|T_MEM)), EFAULT);
@@ -3324,6 +3463,7 @@ done:
 	vm_discard(vm, 1);
 	vm_push(vm, T_INT, match);
 
+	vm->spf->stats.query.terms++;
 	vm->pc++;
 } /* op_ptr() */
 
@@ -3830,7 +3970,7 @@ static int vm_exec(struct spf_vm *vm) {
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-#define SPF_SAFELIMITS { .query = 10 }
+#define SPF_SAFELIMITS { .query = { .terms = 10, .cnames = 10 }, }
 
 const struct spf_limits spf_safelimits = SPF_SAFELIMITS;
 

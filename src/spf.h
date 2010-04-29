@@ -78,8 +78,8 @@ int spf_iresult(const char *);
 #define SPF_VENDOR "william@25thandClement.com"
 
 #define SPF_V_REL  0x20100428
-#define SPF_V_ABI  0x20100416
-#define SPF_V_API  0x20100416
+#define SPF_V_ABI  0x20100428
+#define SPF_V_API  0x20100428
 
 
 const char *spf_vendor(void);
@@ -345,7 +345,13 @@ spf_macros_t spf_macros(const char *, const struct spf_env *);
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 struct spf_limits {
-	unsigned query; /* max # terms which require a query */
+	struct {
+		/* Max. # of term queries. */
+		unsigned terms;
+
+		/* Max. # of cname queries per MX or PTR term. (NOT IMPLEMENTED) */
+		unsigned cnames;
+	} query;
 }; /* struct spf_limits */
 
 extern const struct spf_limits spf_safelimits;

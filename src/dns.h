@@ -1010,12 +1010,24 @@ size_t dns_strlcat(char *, const char *, size_t);
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-#define DNS_PP_NARG_(a, b, c, d, e, f, g, N,...) N
-#define DNS_PP_NARG(...)	DNS_PP_NARG_(__VA_ARGS__, 7, 6, 5, 4, 3, 2, 1, 0)
+#define DNS_PP_NARG_(a, b, c, d, e, f, g, h, i, j, k, N,...) N
+#define DNS_PP_NARG(...)	DNS_PP_NARG_(__VA_ARGS__, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0)
 #define DNS_PP_CALL(F, ...)	F(__VA_ARGS__)
 #define DNS_PP_PASTE(x, y)	x##y
 #define DNS_PP_XPASTE(x, y)	DNS_PP_PASTE(x, y)
 #define DNS_PP_STRINGIFY_(s)	#s
 #define DNS_PP_STRINGIFY(s)	DNS_PP_STRINGIFY_(s)
+#define DNS_PP_D1  0
+#define DNS_PP_D2  1
+#define DNS_PP_D3  2
+#define DNS_PP_D4  3
+#define DNS_PP_D5  4
+#define DNS_PP_D6  5
+#define DNS_PP_D7  6
+#define DNS_PP_D8  7
+#define DNS_PP_D9  8
+#define DNS_PP_D10 9
+#define DNS_PP_D11 10
+#define DNS_PP_DEC(N) DNS_PP_XPASTE(DNS_PP_D, N)
 
 #endif /* DNS_H */
