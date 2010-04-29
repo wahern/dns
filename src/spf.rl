@@ -28,6 +28,8 @@
 #include <stdlib.h>	/* malloc(3) free(3) abs(3) */
 #include <stdio.h>	/* FILE */
 
+#include <limits.h>	/* UCHAR_MAX USHRT_MAX */ 
+
 #include <ctype.h>	/* isgraph(3) isdigit(3) tolower(3) */
 
 #include <string.h>	/* memcpy(3) strlen(3) strsep(3) strcmp(3) */
@@ -146,6 +148,8 @@ const char *spf_strerror(int error) {
 		return "No SPF policy found";
 	case SPF_EBADPOLICY:
 		return "Invalid SPF policy";
+	case SPF_EVMFAULT:
+		return "Virtual machine fault";
 	default:
 		return dns_strerror(error);
 	} /* switch() */
@@ -2080,9 +2084,18 @@ static void sub_link(struct vm_sub *sub) {
 		jp = sub->j[i].cp;
 
 		if (lp < jp) {
+			vm_assert(sub->vm, (jp - lp) <= UCHAR_MAX, SPF_EVMFAULT);
+
 			sub->vm->code[jp-3] = OP_I8;
 			sub->vm->code[jp-2] = jp - lp;
 			sub->vm->code[jp-1] = OP_NEG;
+			sub->vm->code[jp-0] = OP_JMP;
+		} else if (lp - jp > UCHAR_MAX) {
+			vm_assert(sub->vm, (lp - jp) <= USHRT_MAX, SPF_EVMFAULT);
+
+			sub->vm->code[jp-3] = OP_I16;
+			sub->vm->code[jp-2] = 0xffU & ((lp - jp) >> 8U);
+			sub->vm->code[jp-1] = 0xffU & ((lp - jp) >> 0U);
 			sub->vm->code[jp-0] = OP_JMP;
 		} else {
 			sub->vm->code[jp-3] = OP_I8;
@@ -3800,7 +3813,7 @@ static int vm_exec(struct spf_vm *vm) {
 
 	while ((code = vm_opcode(vm))) {
 		if (spf_unlikely(SPF_DEBUG >= 2)) {
-			SPF_SAY("code: %s", vm_op[code].name);
+			SPF_SAY("code: %-7s (%u)", vm_op[code].name, vm->pc);
 		}
 		vm_op[code].exec(vm);
 	}

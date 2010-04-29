@@ -77,7 +77,7 @@ int spf_iresult(const char *);
 
 #define SPF_VENDOR "william@25thandClement.com"
 
-#define SPF_V_REL  0x20100416
+#define SPF_V_REL  0x20100428
 #define SPF_V_ABI  0x20100416
 #define SPF_V_API  0x20100416
 
@@ -98,6 +98,7 @@ enum spf_errno {
 	SPF_EQUERYLIMIT	= -(('S' << 24) | ('P' << 16) | ('F' << 8) | 64),
 	SPF_ENOPOLICY,
 	SPF_EBADPOLICY,
+	SPF_EVMFAULT,
 }; /* spf_errno */
 
 const char *spf_strerror(int);
