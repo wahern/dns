@@ -149,6 +149,8 @@ const char *spf_strerror(int error) {
 		return "No SPF policy found";
 	case SPF_EBADPOLICY:
 		return "Invalid SPF policy";
+	case SPF_ESERVFAIL:
+		return "Query failure";
 	case SPF_EVMFAULT:
 		return "Virtual machine fault";
 	default:
@@ -800,12 +802,28 @@ static _Bool sbuf_put6(struct spf_sbuf *sbuf, const struct in6_addr *ip) {
 	return sbuf_puts(sbuf, tmp);
 } /* sbuf_put6() */
 
+/*
+ * Format specifiers:
+ *
+ * 	%%	Literal `%'
+ * 	%4a	(struct in_addr *)
+ * 	%6a	(struct in6_addr *)
+ * 	%tq	QTYPE of (struct dns_packet *)
+ * 	%nq	QNAME of (struct dns_packet *)
+ * 	%d	(int)
+ * 	%ld	(long int)
+ * 	%u	(unsigned)
+ * 	%lu	(unsigned long int)
+ * 	%s	NUL-terminated (char *)
+ * 	%NNs	NUL-terminated (char *), up to limit.
+ */
 static _Bool sbuf_vmt(struct spf_sbuf *sbuf, const char *fmt, va_list ap) {
 	unsigned char lc = 0, mc = 0, fc;
 	unsigned ml = 0;
-	const void *p;
+	void *p;
 	unsigned long u;
 	long i;
+	int error;
 
 	while ((fc = *fmt++)) {
 		if (lc == '%') {
@@ -827,6 +845,31 @@ static _Bool sbuf_vmt(struct spf_sbuf *sbuf, const char *fmt, va_list ap) {
 					sbuf_put6(sbuf, p);
 				} else
 					sbuf_putc(sbuf, '?');
+
+				break;
+			case 'n': case 't':
+				mc = fc;
+				continue;
+			case 'q':
+				p = va_arg(ap, struct dns_packet *);
+
+				if (mc == 't') {
+					struct dns_rr rr;
+
+					if (!(error = dns_rr_parse(&rr, 12, p))) {
+						sbuf_puts(sbuf, dns_strtype(rr.type));
+					} else {
+						sbuf_putc(sbuf, '?');
+					}
+				} else {
+					char qname[DNS_D_MAXNAME + 1];
+
+					if (dns_d_expand(qname, sizeof qname, 12, p, &error)) {
+						sbuf_puts(sbuf, qname);
+					} else {
+						sbuf_putc(sbuf, '?');
+					}
+				}
 
 				break;
 			case 'd':
@@ -4054,6 +4097,11 @@ int spf_check(struct spf_resolver *spf) {
 			spf->result = SPF_PERMERROR;
 
 			return 0;
+		case SPF_ESERVFAIL:
+			spf->info.error.code = error;
+			spf->result = SPF_TEMPERROR;
+
+			return 0;
 		default:
 			return error;
 		}
@@ -4121,7 +4169,9 @@ int spf_poll(struct spf_resolver *spf, int timeout) {
 
 #include <unistd.h>	/* getopt(3) */
 
+#if SPF_CACHE
 #include "cache.h"
+#endif
 
 
 struct {
@@ -4136,6 +4186,8 @@ struct {
 
 #define panic(...) panic_(__func__, __LINE__, "spf: (%s:%d) " __VA_ARGS__, "\n")
 
+
+struct dns_cache;
 
 static struct dns_cache *mkcache(void) {
 #if SPF_CACHE
@@ -4335,6 +4387,7 @@ search:
 
 static int check(int argc, char *argv[], const struct spf_env *env) {
 	struct spf_resolver *spf;
+	const struct spf_info *info;
 	int error;
 
 	assert((spf = spf_open(env, mkres(), NULL, &error)));
@@ -4352,6 +4405,10 @@ static int check(int argc, char *argv[], const struct spf_env *env) {
 
 	printf("result: %s\n", spf_strresult(spf_result(spf)));
 	printf("exp:    %s\n", (spf_exp(spf))? spf_exp(spf) : "[no exp]");
+
+	info = spf_info(spf);
+	if (info->error.code)
+		printf("error:  %s\n", info->error.exp);
 
 	spf_close(spf);
 

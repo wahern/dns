@@ -98,6 +98,7 @@ enum spf_errno {
 	SPF_EQUERYLIMIT	= -(('S' << 24) | ('P' << 16) | ('F' << 8) | 64),
 	SPF_ENOPOLICY,
 	SPF_EBADPOLICY,
+	SPF_ESERVFAIL,
 	SPF_EVMFAULT,
 }; /* spf_errno */
 
