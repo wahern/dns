@@ -84,6 +84,8 @@ int dns_v_api(void);
 enum dns_errno {
 	DNS_ENOBUFS	= -(('d' << 24) | ('n' << 16) | ('s' << 8) | 64),
 	DNS_EILLEGAL,
+	DNS_EORDER,
+	DNS_ESECTION,
 	DNS_EUNKNOWN,
 }; /* dns_errno */
 
@@ -299,9 +301,13 @@ struct dns_header {
 struct dns_packet {
 	unsigned short dict[DNS_P_DICTSIZE];
 
+	struct dns_s_memo {
+		unsigned short base, end;
+	} qd, an, ns, ar;
+
 	struct { struct dns_packet *cqe_next, *cqe_prev; } cqe;
 
-	size_t size, end, qend;
+	size_t size, end;
 
 	unsigned char tcpb[2];
 
@@ -339,6 +345,8 @@ void dns_p_dictadd(struct dns_packet *, unsigned short);
 struct dns_packet *dns_p_merge(struct dns_packet *, enum dns_section, struct dns_packet *, enum dns_section, int *);
 
 void dns_p_dump(struct dns_packet *, FILE *);
+
+int dns_p_study(struct dns_packet *);
 
 
 /*

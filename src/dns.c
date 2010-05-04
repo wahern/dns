@@ -207,6 +207,10 @@ const char *dns_strerror(int error) {
 		return "DNS packet buffer too small";
 	case DNS_EILLEGAL:
 		return "Illegal DNS RR name or data";
+	case DNS_EORDER:
+		return "Attempt to push RR out of section order";
+	case DNS_ESECTION:
+		return "Invalid section specified";
 	case DNS_EUNKNOWN:
 		return "Unknown DNS error";
 	default:
@@ -742,6 +746,8 @@ static int dns_poll(int fd, short events, int timeout) {
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 unsigned dns_p_count(struct dns_packet *P, enum dns_section section) {
+	unsigned count;
+
 	switch (section) {
 	case DNS_S_QD:
 		return ntohs(dns_header(P)->qdcount);
@@ -751,28 +757,32 @@ unsigned dns_p_count(struct dns_packet *P, enum dns_section section) {
 		return ntohs(dns_header(P)->nscount);
 	case DNS_S_AR:
 		return ntohs(dns_header(P)->arcount);
-	case DNS_S_ALL:
-		return ntohs(dns_header(P)->qdcount)
-		     + ntohs(dns_header(P)->ancount)
-		     + ntohs(dns_header(P)->nscount)
-		     + ntohs(dns_header(P)->arcount);
 	default:
-		return 0;
+		count = 0;
+
+		if (section & DNS_S_QD)
+			count += ntohs(dns_header(P)->qdcount);
+		if (section & DNS_S_AN)
+			count += ntohs(dns_header(P)->ancount);
+		if (section & DNS_S_NS)
+			count += ntohs(dns_header(P)->nscount);
+		if (section & DNS_S_AR)
+			count += ntohs(dns_header(P)->arcount);
+
+		return count;
 	}
 } /* dns_p_count() */
 
 
 struct dns_packet *dns_p_init(struct dns_packet *P, size_t size) {
-	static const struct dns_packet P_initializer;
-
 	if (!P)
 		return 0;
 
 	assert(size >= offsetof(struct dns_packet, data) + 12);
 
-	*P	= P_initializer;
-	P->size	= size - offsetof(struct dns_packet, data);
-	P->end	= 12;
+	memset(P, 0, sizeof *P);
+	P->size = size - offsetof(struct dns_packet, data);
+	P->end  = 12;
 
 	memset(P->data, '\0', 12);
 
@@ -912,60 +922,111 @@ void dns_p_dictadd(struct dns_packet *P, unsigned short dn) {
 
 
 int dns_p_push(struct dns_packet *P, enum dns_section section, const void *dn, size_t dnlen, enum dns_type type, enum dns_class class, unsigned ttl, const void *any) {
-	size_t end	= P->end;
+	size_t end = P->end;
 	int error;
 
 	if ((error = dns_d_push(P, dn, dnlen)))
 		goto error;
 
 	if (P->size - P->end < 4)
-		goto toolong;
+		goto nobufs;
 
-	P->data[P->end++]	= 0xff & (type >> 8);
-	P->data[P->end++]	= 0xff & (type >> 0);
+	P->data[P->end++] = 0xff & (type >> 8);
+	P->data[P->end++] = 0xff & (type >> 0);
 
-	P->data[P->end++]	= 0xff & (class >> 8);
-	P->data[P->end++]	= 0xff & (class >> 0);
+	P->data[P->end++] = 0xff & (class >> 8);
+	P->data[P->end++] = 0xff & (class >> 0);
 
-	if (section == DNS_S_QD) {
-		dns_header(P)->qdcount	= htons(ntohs(dns_header(P)->qdcount) + 1);
-
-		return 0;
-	}
+	if (section == DNS_S_QD)
+		goto update;
 
 	if (P->size - P->end < 6)
-		goto toolong;
+		goto nobufs;
 
-	P->data[P->end++]	= 0x7f & (ttl >> 24);
-	P->data[P->end++]	= 0xff & (ttl >> 16);
-	P->data[P->end++]	= 0xff & (ttl >> 8);
-	P->data[P->end++]	= 0xff & (ttl >> 0);
+	P->data[P->end++] = 0x7f & (ttl >> 24);
+	P->data[P->end++] = 0xff & (ttl >> 16);
+	P->data[P->end++] = 0xff & (ttl >> 8);
+	P->data[P->end++] = 0xff & (ttl >> 0);
 
 	if ((error = dns_any_push(P, (union dns_any *)any, type)))
 		goto error;
 
+update:
 	switch (section) {
+	case DNS_S_QD:
+		if (dns_p_count(P, DNS_S_AN|DNS_S_NS|DNS_S_AR))
+			goto order;
+
+		if (!P->qd.base && (error = dns_p_study(P)))
+			goto error;
+
+		dns_header(P)->qdcount = htons(ntohs(dns_header(P)->qdcount) + 1);
+
+		P->qd.end  = P->end;
+		P->an.base = P->end;
+		P->an.end  = P->end;
+		P->ns.base = P->end;
+		P->ns.end  = P->end;
+		P->ar.base = P->end;
+		P->ar.end  = P->end;
+
+		break;
 	case DNS_S_AN:
-		dns_header(P)->ancount	= htons(ntohs(dns_header(P)->ancount) + 1);
+		if (dns_p_count(P, DNS_S_NS|DNS_S_AR))
+			goto order;
+
+		if (!P->an.base && (error = dns_p_study(P)))
+			goto error;
+
+		dns_header(P)->ancount = htons(ntohs(dns_header(P)->ancount) + 1);
+
+		P->an.end  = P->end;
+		P->ns.base = P->end;
+		P->ns.end  = P->end;
+		P->ar.base = P->end;
+		P->ar.end  = P->end;
 
 		break;
 	case DNS_S_NS:
-		dns_header(P)->nscount	= htons(ntohs(dns_header(P)->nscount) + 1);
+		if (dns_p_count(P, DNS_S_AR))
+			goto order;
+
+		if (!P->ns.base && (error = dns_p_study(P)))
+			goto error;
+
+		dns_header(P)->nscount = htons(ntohs(dns_header(P)->nscount) + 1);
+
+		P->ns.end  = P->end;
+		P->ar.base = P->end;
+		P->ar.end  = P->end;
 
 		break;
 	case DNS_S_AR:
-		dns_header(P)->arcount	= htons(ntohs(dns_header(P)->arcount) + 1);
+		if (!P->ar.base && (error = dns_p_study(P)))
+			goto error;
+
+		dns_header(P)->arcount = htons(ntohs(dns_header(P)->arcount) + 1);
+
+		P->ar.end = P->end;
 
 		break;
 	default:
-		break;
+		error = DNS_ESECTION;
+
+		goto error;
 	} /* switch() */
 
 	return 0;
-toolong:
-	error	= DNS_ENOBUFS;
+nobufs:
+	error = DNS_ENOBUFS;
+
+	goto error;
+order:
+	error = DNS_EORDER;
+
+	goto error;
 error:
-	P->end	= end;
+	P->end = end;
 
 	return error;
 } /* dns_p_push() */
@@ -1005,6 +1066,53 @@ static void dns_p_dump3(struct dns_packet *P, struct dns_rr_i *I, FILE *fp) {
 void dns_p_dump(struct dns_packet *P, FILE *fp) {
 	dns_p_dump3(P, dns_rr_i_new(P, .section = 0), fp);
 } /* dns_p_dump() */
+
+
+static void dns_s_unstudy(struct dns_s_memo *m)
+	{ m->base = 0; m->end = 0; }
+
+static void dns_p_unstudy(struct dns_packet *P) {
+	dns_s_unstudy(&P->qd);
+	dns_s_unstudy(&P->an);
+	dns_s_unstudy(&P->ns);
+	dns_s_unstudy(&P->ar);
+} /* dns_p_unstudy() */
+
+static int dns_s_study(struct dns_s_memo *m, enum dns_section section, unsigned base, struct dns_packet *P) {
+	unsigned short count, rp;
+
+	count = dns_p_count(P, section);
+
+	for (rp = base; count && rp < P->end; count--)
+		rp = dns_rr_skip(rp, P);
+
+	m->base = base;
+	m->end  = rp;
+
+	return 0;
+} /* dns_s_study() */
+
+int dns_p_study(struct dns_packet *P) {
+	int error;
+
+	if ((error = dns_s_study(&P->qd, DNS_S_QD, 12, P)))
+		goto error;
+
+	if ((error = dns_s_study(&P->an, DNS_S_AN, P->qd.end, P)))
+		goto error;
+
+	if ((error = dns_s_study(&P->ns, DNS_S_NS, P->an.end, P)))
+		goto error;
+
+	if ((error = dns_s_study(&P->ar, DNS_S_AR, P->ns.end, P)))
+		goto error;
+
+	return 0;
+error:
+	dns_p_unstudy(P);
+
+	return error;
+} /* dns_p_study() */
 
 
 /*
@@ -1564,20 +1672,29 @@ unsigned short dns_rr_skip(unsigned short src, struct dns_packet *P) {
 
 static enum dns_section dns_rr_section(unsigned short src, struct dns_packet *P) {
 	enum dns_section section;
-	unsigned count, index	= 0;
-	unsigned short rp	= 12;
+	unsigned count, index;
+	unsigned short rp;
 
-	while (rp < src && rp < P->end) {
-		rp	= dns_rr_skip(rp, P);
-		index++;
-	}
+	if (src >= P->qd.base && src < P->qd.end)
+		return DNS_S_QD;
+	if (src >= P->an.base && src < P->an.end)
+		return DNS_S_AN;
+	if (src >= P->ns.base && src < P->ns.end)
+		return DNS_S_NS;
+	if (src >= P->ar.base && src < P->ar.end)
+		return DNS_S_AR;
 
-	section	= DNS_S_QD;
-	count	= dns_p_count(P, section);
+	/* NOTE: Possibly bad memoization. Try it the hard-way. */
+
+	for (rp = 12, index = 0; rp < src && rp < P->end; index++)
+		rp = dns_rr_skip(rp, P);
+
+	section = DNS_S_QD;
+	count   = dns_p_count(P, section);
 
 	while (index >= count && section <= DNS_S_AR) {
-		section	<<= 1;
-		count	+= dns_p_count(P, section);
+		section <<= 1;
+		count += dns_p_count(P, section);
 	}
 
 	return DNS_S_ALL & section;
