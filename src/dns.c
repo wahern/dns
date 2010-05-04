@@ -1811,29 +1811,32 @@ static unsigned short dns_rr_i_start(struct dns_rr_i *i, struct dns_packet *P) {
 		if ((error = dns_rr_parse(&rr, rp, P)))
 			continue;
 
-		rr.section	= dns_rr_section(rp, P);
+		rr.section = dns_rr_section(rp, P);
 
 		if (!dns_rr_i_match(&rr, i, P))
 			continue;
 
-		r0	= rr;
+		r0 = rr;
 
-		goto cont;
+		goto lower;
 	}
 
 	return P->end;
-cont:
+lower:
+	if (i->sort == &dns_rr_i_packet)
+		return dns_rr_offset(&r0);
+
 	while ((rp = dns_rr_skip(rp, P)) < P->end) {
 		if ((error = dns_rr_parse(&rr, rp, P)))
 			continue;
 
-		rr.section	= dns_rr_section(rp, P);
+		rr.section = dns_rr_section(rp, P);
 
 		if (!dns_rr_i_match(&rr, i, P))
 			continue;
 
 		if (i->sort(&rr, &r0, i, P) < 0)
-			r0	= rr;
+			r0 = rr;
 	}
 
 	return dns_rr_offset(&r0);
@@ -1841,19 +1844,19 @@ cont:
 
 
 static unsigned short dns_rr_i_skip(unsigned short rp, struct dns_rr_i *i, struct dns_packet *P) {
-	struct dns_rr r0, rZ, rr;
+	struct dns_rr r0, r1, rr;
 	int error;
 
 	if ((error = dns_rr_parse(&r0, rp, P)))
 		return P->end;
 
-	r0.section	= dns_rr_section(rp, P);
+	r0.section = dns_rr_section(rp, P);
 
 	for (rp = 12; rp < P->end; rp = dns_rr_skip(rp, P)) {
 		if ((error = dns_rr_parse(&rr, rp, P)))
 			continue;
 
-		rr.section	= dns_rr_section(rp, P);
+		rr.section = dns_rr_section(rp, P);
 
 		if (!dns_rr_i_match(&rr, i, P))
 			continue;
@@ -1861,18 +1864,21 @@ static unsigned short dns_rr_i_skip(unsigned short rp, struct dns_rr_i *i, struc
 		if (i->sort(&rr, &r0, i, P) <= 0)
 			continue;
 
-		rZ	= rr;
+		r1 = rr;
 
-		goto cont;
+		goto lower;
 	}
 
 	return P->end;
-cont:
+lower:
+	if (i->sort == &dns_rr_i_packet)
+		return dns_rr_offset(&r1);
+
 	while ((rp = dns_rr_skip(rp, P)) < P->end) {
 		if ((error = dns_rr_parse(&rr, rp, P)))
 			continue;
 
-		rr.section	= dns_rr_section(rp, P);
+		rr.section = dns_rr_section(rp, P);
 
 		if (!dns_rr_i_match(&rr, i, P))
 			continue;
@@ -1880,13 +1886,13 @@ cont:
 		if (i->sort(&rr, &r0, i, P) <= 0)
 			continue;
 
-		if (i->sort(&rr, &rZ, i, P) >= 0)
+		if (i->sort(&rr, &r1, i, P) >= 0)
 			continue;
 
-		rZ	= rr;
+		r1 = rr;
 	}
 
-	return dns_rr_offset(&rZ);
+	return dns_rr_offset(&r1);
 } /* dns_rr_i_skip() */
 
 
