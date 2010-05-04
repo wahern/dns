@@ -1809,6 +1809,17 @@ static unsigned short dns_rr_i_start(struct dns_rr_i *i, struct dns_packet *P) {
 	struct dns_rr r0, rr;
 	int error;
 
+	if ((i->section & DNS_S_QD) && P->qd.base)
+		rp = P->qd.base;
+	else if ((i->section & DNS_S_AN) && P->an.base)
+		rp = P->an.base;
+	else if ((i->section & DNS_S_NS) && P->ns.base)
+		rp = P->ns.base;
+	else if ((i->section & DNS_S_AR) && P->ar.base)
+		rp = P->ar.base;
+	else
+		rp = 12;
+
 	for (rp = 12; rp < P->end; rp = dns_rr_skip(rp, P)) {
 		if ((error = dns_rr_parse(&rr, rp, P)))
 			continue;
@@ -6383,7 +6394,7 @@ exec:
 
 		dns_p_study(ans);
 
-		glue = dns_p_merge(ai->glue, DNS_S_ALL, ans, ~DNS_S_QD, &error);
+		glue = dns_p_merge(ai->glue, DNS_S_ALL, ans, DNS_S_ALL, &error);
 
 		free(ans);
 
