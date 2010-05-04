@@ -330,6 +330,8 @@ struct dns_packet *dns_p_init(struct dns_packet *, size_t);
 /** takes size of maximum desired payload */
 struct dns_packet *dns_p_make(size_t, int *);
 
+int dns_p_grow(struct dns_packet **);
+
 struct dns_packet *dns_p_copy(struct dns_packet *, const struct dns_packet *);
 
 #define dns_p_opcode(P)		(dns_header(P)->opcode)

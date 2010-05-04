@@ -821,6 +821,38 @@ struct dns_packet *dns_p_make(size_t len, int *error) {
 } /* dns_p_make() */
 
 
+int dns_p_grow(struct dns_packet **P) {
+	struct dns_packet *tmp;
+	size_t size;
+	int error;
+
+	if (!*P) {
+		if (!(*P = dns_p_make(DNS_P_QBUFSIZ, &error)))
+			return error;
+
+		return 0;
+	}
+
+	size = dns_p_sizeof(*P);
+	size |= size >> 1;
+	size |= size >> 2;
+	size |= size >> 4;
+	size |= size >> 8;
+	size++;
+
+	if (size > 65536)
+		return DNS_ENOBUFS;
+
+	if (!(tmp = realloc(*P, dns_p_calcsize(size))))
+		return dns_syerr();
+
+	tmp->size = size;
+	*P = tmp;
+
+	return 0;
+} /* dns_p_grow() */
+
+
 struct dns_packet *dns_p_copy(struct dns_packet *P, const struct dns_packet *P0) {
 	if (!P)
 		return 0;
@@ -3965,7 +3997,9 @@ int dns_resconf_dump(struct dns_resolv_conf *resconf, FILE *fp) {
 		fprintf(fp, " rotate");
 	if (resconf->options.recurse)
 		fprintf(fp, " recurse");
-	
+	if (resconf->options.smart)
+		fprintf(fp, " smart");
+
 	fputc('\n', fp);
 
 
@@ -5956,8 +5990,12 @@ exec:
 			if (dns_rr_exists(&rr, F[1].answer, F->answer))
 				continue;
 
-			if ((error = dns_rr_copy(F->answer, &rr, F[1].answer)))
-				goto error;
+			while ((error = dns_rr_copy(F->answer, &rr, F[1].answer))) {
+				if (error != DNS_ENOBUFS)
+					goto error;
+				if ((error = dns_p_grow(&F->answer)))
+					goto error;
+			}
 		}
 
 		goto(R->sp, DNS_R_SMART0_A);
@@ -7166,7 +7204,7 @@ static int send_query(int argc, char *argv[]) {
 
 	while (!(A = dns_so_query(so, Q, (struct sockaddr *)&ss, &error))) {
 		if (error != EAGAIN)
-			panic("dns_so_query: %s(%d)", dns_strerror(error), error);
+			panic("dns_so_query: %s (%d)", dns_strerror(error), error);
 		if (dns_so_elapsed(so) > 10)
 			panic("query timed-out");
 
@@ -7258,7 +7296,7 @@ static int resolve_query(int argc, char *argv[]) {
 
 	while ((error = dns_res_check(R))) {
 		if (error != EAGAIN)
-			panic("dns_res_check: %s(%d)", dns_strerror(error), error);
+			panic("dns_res_check: %s (%d)", dns_strerror(error), error);
 		if (dns_res_elapsed(R) > 30)
 			panic("query timed-out");
 
@@ -7317,7 +7355,7 @@ static int resolve_addrinfo(int argc, char *argv[]) {
 
 			break;
 		default:
-			panic("dns_ai_nextent: %s(%d)", dns_strerror(error), error);
+			panic("dns_ai_nextent: %s (%d)", dns_strerror(error), error);
 		}
 	} while (error != ENOENT);
 
