@@ -7393,6 +7393,34 @@ static int ircode(int argc, char *argv[]) {
 } /* ircode() */
 
 
+#define SIZE1(x) { DNS_PP_STRINGIFY(x), sizeof (x) }
+#define SIZE2(x, ...) SIZE1(x), SIZE1(__VA_ARGS__)
+#define SIZE3(x, ...) SIZE1(x), SIZE2(__VA_ARGS__)
+#define SIZE4(x, ...) SIZE1(x), SIZE3(__VA_ARGS__)
+#define SIZE(...) DNS_PP_CALL(DNS_PP_XPASTE(SIZE, DNS_PP_NARG(__VA_ARGS__)), __VA_ARGS__)
+
+static int sizes(int argc, char *argv[]) {
+	static const struct { const char *name; size_t size; } type[] = {
+		SIZE(struct dns_header, struct dns_packet, struct dns_rr, struct dns_rr_i),
+		SIZE(struct dns_a, struct dns_aaaa, struct dns_mx, struct dns_ns),
+		SIZE(struct dns_cname, struct dns_soa, struct dns_ptr, struct dns_srv),
+		SIZE(struct dns_sshfp, struct dns_txt, union dns_any),
+		SIZE(struct dns_resolv_conf, struct dns_hosts, struct dns_hints, struct dns_hints_i),
+		SIZE(struct dns_options, struct dns_socket, struct dns_resolver, struct dns_addrinfo),
+		SIZE(struct dns_cache),
+	};
+	int i, max;
+
+	for (i = 0, max = 0; i < lengthof(type); i++)
+		max = MAX(max, strlen(type[i].name));
+
+	for (i = 0; i < lengthof(type); i++)
+		printf("%*s : %zu\n", max, type[i].name, type[i].size);
+
+	return 0;
+} /* sizes() */
+
+
 static const struct { const char *cmd; int (*run)(); const char *help; } cmds[] = {
 	{ "parse-packet",	&parse_packet,		"parse raw packet from stdin" },
 	{ "parse-domain",	&parse_domain,		"anchor and iteratively cleave domain" },
@@ -7418,6 +7446,7 @@ static const struct { const char *cmd; int (*run)(); const char *help; } cmds[] 
 	{ "itype",		&itype,			"parse type string" },
 	{ "iopcode",		&iopcode,		"parse opcode string" },
 	{ "ircode",		&ircode,		"parse rcode string" },
+	{ "sizes",		&sizes,			"print data structure sizes" },
 };
 
 
