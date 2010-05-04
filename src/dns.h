@@ -64,9 +64,9 @@
 
 #define DNS_VENDOR "william@25thandClement.com"
 
-#define DNS_V_REL  0x20100428
-#define DNS_V_ABI  0x20100412
-#define DNS_V_API  0x20100428
+#define DNS_V_REL  0x20100503
+#define DNS_V_ABI  0x20100503
+#define DNS_V_API  0x20100503
 
 
 const char *dns_vendor(void);
@@ -291,7 +291,7 @@ struct dns_header {
 
 
 #ifndef DNS_P_QBUFSIZ
-#define DNS_P_QBUFSIZ	dns_p_calcsize(12 + 256 + 4)
+#define DNS_P_QBUFSIZ	dns_p_calcsize(256 + 4)
 #endif
 
 #ifndef DNS_P_DICTSIZE
@@ -317,12 +317,12 @@ struct dns_packet {
 	};
 }; /* struct dns_packet */
 
-#define dns_p_calcsize(n)	(offsetof(struct dns_packet, data) + (n))
+#define dns_p_calcsize(n)	(offsetof(struct dns_packet, data) + DNS_PP_MAX(12, (n)))
 
 #define dns_p_sizeof(P)		dns_p_calcsize((P)->end)
 
 /** takes size of maximum desired payload */
-#define dns_p_new(n)		(dns_p_init((struct dns_packet *)&(union { unsigned char b[offsetof(struct dns_packet, data) + (n)]; struct dns_packet p; }){ { 0 } }, (offsetof(struct dns_packet, data) + (n))))
+#define dns_p_new(n)		(dns_p_init((struct dns_packet *)&(union { unsigned char b[dns_p_calcsize((n))]; struct dns_packet p; }){ { 0 } }, dns_p_calcsize((n))))
 
 /** takes size of entire packet structure as allocated */
 struct dns_packet *dns_p_init(struct dns_packet *, size_t);
@@ -1018,6 +1018,7 @@ size_t dns_strlcat(char *, const char *, size_t);
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+#define DNS_PP_MAX(a, b) (((a) > (b))? (a) : (b))
 #define DNS_PP_NARG_(a, b, c, d, e, f, g, h, i, j, k, N,...) N
 #define DNS_PP_NARG(...)	DNS_PP_NARG_(__VA_ARGS__, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0)
 #define DNS_PP_CALL(F, ...)	F(__VA_ARGS__)

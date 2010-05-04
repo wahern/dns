@@ -833,55 +833,57 @@ struct dns_packet *dns_p_copy(struct dns_packet *P, const struct dns_packet *P0)
 } /* dns_p_copy() */
 
 
-struct dns_packet *dns_p_merge(struct dns_packet *P0, enum dns_section mask0, struct dns_packet *P1, enum dns_section mask1, int *error_) {
-	size_t bufsiz			= ((P0)? P0->end : 0) + ((P1)? P1->end : 0);
-	struct dns_packet *P[3]		= { P0, P1, 0 };
-	enum dns_section mask[2]	= { mask0, mask1 };
-	struct dns_rr rr[3];
+struct dns_packet *dns_p_merge(struct dns_packet *A, enum dns_section Amask, struct dns_packet *B, enum dns_section Bmask, int *error_) {
+	size_t bufsiz = MIN(65535, ((A)? A->end : 0) + ((B)? B->end : 0));
+	struct dns_packet *M;
 	enum dns_section section;
-	int error, copy, i;
+	struct dns_rr rr, mr;
+	int error, copy;
+
+	if (!A && B) {
+		A = B;
+		Amask = Bmask;
+		B = 0;
+	}
 
 merge:
-
-	if (!(P[2] = dns_p_make(bufsiz, &error)))
+	if (!(M = dns_p_make(bufsiz, &error)))
 		goto error;
 
 	for (section = DNS_S_QD; (DNS_S_ALL & section); section <<= 1) {
-		for (i = 0; i < 2; i++) {
-			if (!P[i] || !(section & mask[i]))
-				continue;
-
-			dns_rr_foreach(&rr[i], P[i], .section = section) {
-				copy	= 1;
-
-				dns_rr_foreach(&rr[2], P[2], .type = rr[i].type, .section = DNS_S_ALL) {
-					if (0 == dns_rr_cmp(&rr[i], P[i], &rr[2], P[2])) {
-						copy	= 0;
-
-						break;
-					}
-				}
-
-				if (copy && (error = dns_rr_copy(P[2], &rr[i], P[i]))) {
-					if (error == DNS_ENOBUFS && bufsiz < 65535) {
-						free(P[2]); P[2] = 0;
-
-						bufsiz	= MAX(65535, bufsiz * 2);
-
-						goto merge;
-					}
-
+		if (A && (section & Amask)) {
+			dns_rr_foreach(&rr, A, .section = section) {
+				if ((error = dns_rr_copy(M, &rr, A)))
 					goto error;
+			}
+		}
+
+		if (B && (section & Bmask)) {
+			dns_rr_foreach(&rr, B, .section = section) {
+				copy = 1;
+
+				dns_rr_foreach(&mr, M, .type = rr.type, .section = DNS_S_ALL) {
+					if (!(copy = dns_rr_cmp(&rr, B, &mr, M)))
+						break;
 				}
-			} /* foreach(rr) */
-		} /* foreach(packet) */
-	} /* foreach(section) */
 
-	return P[2];
+				if (copy && (error = dns_rr_copy(M, &rr, B)))
+					goto error;
+			}
+		}
+	}
+
+	return M;
 error:
-	*error_	= error;
+	free(M); M = 0;
 
-	free(P[2]);
+	if (error == DNS_ENOBUFS && bufsiz < 65535) {
+		bufsiz = MIN(65535, bufsiz * 2);
+
+		goto merge;
+	}
+
+	*error_	= error;
 
 	return 0;
 } /* dns_p_merge() */
@@ -1852,7 +1854,9 @@ static unsigned short dns_rr_i_skip(unsigned short rp, struct dns_rr_i *i, struc
 
 	r0.section = dns_rr_section(rp, P);
 
-	for (rp = 12; rp < P->end; rp = dns_rr_skip(rp, P)) {
+	rp = (i->sort == &dns_rr_i_packet)? dns_rr_skip(rp, P) : 12;
+
+	for (; rp < P->end; rp = dns_rr_skip(rp, P)) {
 		if ((error = dns_rr_parse(&rr, rp, P)))
 			continue;
 
@@ -6249,7 +6253,7 @@ int dns_ai_nextent(struct addrinfo **ent, struct dns_addrinfo *ai) {
 	union dns_any any;
 	int error;
 
-	*ent	= 0;
+	*ent = 0;
 
 exec:
 
@@ -6258,13 +6262,13 @@ exec:
 		ai->state++;
 	case DNS_AI_S_NUMERIC:
 		if (1 == dns_inet_pton(AF_INET, ai->qname, &any.a)) {
-			ai->state	= DNS_AI_S_DONE;
+			ai->state = DNS_AI_S_DONE;
 
 			return dns_ai_setent(ent, &any, DNS_T_A, ai);
 		}
 
 		if (1 == dns_inet_pton(AF_INET6, ai->qname, &any.aaaa)) {
-			ai->state	= DNS_AI_S_DONE;
+			ai->state = DNS_AI_S_DONE;
 
 			return dns_ai_setent(ent, &any, DNS_T_AAAA, ai);
 		}
@@ -6287,13 +6291,16 @@ exec:
 		if (!(ai->answer = dns_res_fetch(ai->res, &error)))
 			return error;
 
-		ai->glue	= ai->answer;
+		if ((error = dns_p_study(ai->answer)))
+			return error;
+
+		ai->glue = ai->answer;
 
 		dns_rr_i_init(&ai->i, ai->answer);
 
-		ai->i.section	= DNS_S_AN;
-		ai->i.type	= ai->qtype;
-		ai->i.sort	= &dns_rr_i_order;
+		ai->i.section = DNS_S_AN;
+		ai->i.type    = ai->qtype;
+		ai->i.sort    = &dns_rr_i_order;
 
 		ai->state++;
 	case DNS_AI_S_FOREACH_I:
@@ -6304,7 +6311,7 @@ exec:
 		if (!dns_d_cname(ai->cname, sizeof ai->cname, qname, strlen(qname), ai->answer, &error))
 			return error;
 
-		ai->i.name	= ai->cname;
+		ai->i.name = ai->cname;
 
 		if (!dns_rr_grep(&rr, 1, &ai->i, ai->answer, &error))
 			dns_ai_goto(DNS_AI_S_DONE);
@@ -6312,7 +6319,7 @@ exec:
 		if ((error = dns_any_parse(&any, &rr, ai->answer)))
 			return error;
 
-		ai->port	= ai->qport;
+		ai->port = ai->qport;
 
 		switch (rr.type) {
 		case DNS_T_A:
@@ -6333,16 +6340,16 @@ exec:
 				return error;
 
 			if (rr.type == DNS_T_SRV)
-				ai->port	= any.srv.port;
+				ai->port = any.srv.port;
 
 			break;
 		} /* switch() */
 
 		dns_rr_i_init(&ai->g, ai->glue);
 
-		ai->g.section	= DNS_S_ALL & ~DNS_S_QD;
-		ai->g.name	= ai->cname;
-		ai->g.type	= (ai->hints.ai_family == AF_INET6)? DNS_T_AAAA : DNS_T_A;
+		ai->g.section = DNS_S_ALL & ~DNS_S_QD;
+		ai->g.name    = ai->cname;
+		ai->g.type    = (ai->hints.ai_family == AF_INET6)? DNS_T_AAAA : DNS_T_A;
 
 		ai->state++;
 	case DNS_AI_S_FOREACH_G:
@@ -6374,7 +6381,9 @@ exec:
 		if (!(ans = dns_res_fetch(ai->res, &error)))
 			return error;
 
-		glue	= dns_p_merge(ai->glue, DNS_S_ALL, ans, DNS_S_ALL, &error);
+		dns_p_study(ans);
+
+		glue = dns_p_merge(ai->glue, DNS_S_ALL, ans, ~DNS_S_QD, &error);
 
 		free(ans);
 
