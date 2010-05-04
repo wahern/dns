@@ -1875,7 +1875,12 @@ struct spf_resolver {
 	struct spf_vm vm;
 
 	struct dns_resolver *res;
-	struct dns_addrinfo *ai;
+
+	struct {
+		struct dns_addrinfo *res;
+		char cname[DNS_D_MAXNAME + 1]; /* last canonical name */
+		unsigned count;
+	} ai;
 
 	struct {
 		_Bool done;
@@ -2767,8 +2772,11 @@ static void op_addrinfo(struct spf_vm *vm) {
 
 	SPF_SAY("querying %s IN %s", host, dns_strtype(qtype));
 
-	dns_ai_close(vm->spf->ai);
-	vm_assert(vm, (vm->spf->ai = dns_ai_open(host, serv, qtype, &hints, vm->spf->res, &error)), error);
+	dns_ai_close(vm->spf->ai.res);
+	vm_assert(vm, (vm->spf->ai.res = dns_ai_open(host, serv, qtype, &hints, vm->spf->res, &error)), error);
+
+	*vm->spf->ai.cname = '\0';
+	vm->spf->ai.count  = 0;
 
 	vm_discard(vm, 4);
 
@@ -2781,11 +2789,18 @@ static void op_nextent(struct spf_vm *vm) {
 	int error;
 
 	vm_extend(vm, 1);
-	if ((error = dns_ai_nextent(&ent, vm->spf->ai)))
+	if ((error = dns_ai_nextent(&ent, vm->spf->ai.res)))
 		vm_assert(vm, error == ENOENT, error);
 	vm_push(vm, T_MEM, (intptr_t)ent);
 
 	vm->pc++;
+
+	if (!ent || !ent->ai_canonname || !strcasecmp(ent->ai_canonname, vm->spf->ai.cname))
+		return;
+
+	spf_strlcpy(vm->spf->ai.cname, ent->ai_canonname, sizeof vm->spf->ai.cname);
+	vm->spf->ai.count++;
+	vm_assert(vm, vm->spf->ai.count < vm->spf->opt.limit.query.cnames, SPF_EQUERYLIMIT, "Exceeded canonical name query limit of %u", vm->spf->opt.limit.query.cnames);
 } /* op_nextent() */
 
 
@@ -3787,7 +3802,7 @@ static void op_puta(struct spf_vm *vm) {
 	struct addrinfo *ent = (void *)vm_peek(vm, -1, T_REF|T_MEM);
 	char pretty[1024];
 
-	dns_ai_print(pretty, sizeof pretty, ent, vm->spf->ai);
+	dns_ai_print(pretty, sizeof pretty, ent, vm->spf->ai.res);
 	printf("%s", pretty);
 
 	vm_discard(vm, 1);
@@ -4075,7 +4090,7 @@ void spf_close(struct spf_resolver *spf) {
 		return;
 
 	dns_res_close(spf->res);
-	dns_ai_close(spf->ai);
+	dns_ai_close(spf->ai.res);
 
 	vm_discard(&spf->vm, spf->vm.sp);
 
