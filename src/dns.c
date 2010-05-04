@@ -3983,6 +3983,8 @@ int dns_resconf_dump(struct dns_resolv_conf *resconf, FILE *fp) {
 			fprintf(fp, " bind"); break;
 		case 'f':
 			fprintf(fp, " file"); break;
+		case 'c':
+			fprintf(fp, " cache"); break;
 		}
 	}
 
@@ -6775,6 +6777,11 @@ struct {
 		unsigned count;
 	} hosts;
 
+	struct {
+		const char *path[8];
+		unsigned count;
+	} cache;
+
 	const char *qname;
 	enum dns_type qtype;
 
@@ -6909,6 +6916,40 @@ static struct dns_hosts *hosts(void) {
 
 	return hosts;
 } /* hosts() */
+
+
+#if DNS_CACHE
+#include "cache.h"
+
+struct dns_cache *cache(void) {
+	static struct cache *cache;
+	const char *path;
+	unsigned i;
+	int error;
+
+	if (cache)
+		return cache_resi(cache);
+	if (!MAIN.cache.count)
+		return NULL;
+
+	if (!(cache = cache_open(&error)))
+		panic("%s: %s", MAIN.cache.path[0], dns_strerror(error));
+
+	for (i = 0; i < MAIN.cache.count; i++) {
+		path = MAIN.cache.path[i];
+
+		if (!strcmp(path, "-")) {
+			if ((error = cache_loadfile(cache, stdin, NULL, 0)))
+				panic("%s: %s", path, dns_strerror(error));
+		} else if ((error = cache_loadpath(cache, path, NULL, 0)))
+			panic("%s: %s", path, dns_strerror(error));
+	}
+
+	return cache_resi(cache);
+} /* cache() */
+#else
+struct dns_cache *cache(void) { return NULL; }
+#endif
 
 
 static void print_packet(struct dns_packet *P, FILE *fp) {
@@ -7288,7 +7329,7 @@ static int resolve_query(int argc, char *argv[]) {
 
 	resconf()->options.recurse	= (0 != strstr(argv[0], "recurse"));
 
-	if (!(R = dns_res_open(resconf(), hosts(), dns_hints_mortal(hints(resconf(), &error)), NULL, dns_opts(), &error)))
+	if (!(R = dns_res_open(resconf(), hosts(), dns_hints_mortal(hints(resconf(), &error)), cache(), dns_opts(), &error)))
 		panic("%s: %s", MAIN.qname, dns_strerror(error));
 
 	if ((error = dns_res_submit(R, MAIN.qname, MAIN.qtype, DNS_C_IN)))
@@ -7329,7 +7370,7 @@ static int resolve_addrinfo(int argc, char *argv[]) {
 
 	resconf()->options.recurse	= (0 != strstr(argv[0], "recurse"));
 
-	if (!(res = dns_res_open(resconf(), hosts(), hints(resconf(), &error), NULL, dns_opts(), &error)))
+	if (!(res = dns_res_open(resconf(), hosts(), hints(resconf(), &error), cache(), dns_opts(), &error)))
 		panic("%s: %s", MAIN.qname, dns_strerror(error));
 
 	if (!(ai = dns_ai_open(MAIN.qname, "80", MAIN.qtype, &ai_hints, res, &error)))
@@ -7493,6 +7534,7 @@ static void print_usage(const char *progname, FILE *fp) {
 		" [OPTIONS] COMMAND [ARGS]\n"
 		"  -c PATH   Path to resolv.conf\n"
 		"  -l PATH   Path to local hosts\n"
+		"  -z PATH   Path to zone cache\n"
 		"  -q QNAME  Query name\n"
 		"  -t QTYPE  Query type\n"
 		"  -s HOW    Sort records\n"
@@ -7540,7 +7582,7 @@ int main(int argc, char **argv) {
 	unsigned i;
 	int ch;
 
-	while (-1 != (ch = getopt(argc, argv, "q:t:c:l:s:vVh"))) {
+	while (-1 != (ch = getopt(argc, argv, "q:t:c:l:z:s:vVh"))) {
 		switch (ch) {
 		case 'c':
 			assert(MAIN.resconf.count < lengthof(MAIN.resconf.path));
@@ -7552,6 +7594,12 @@ int main(int argc, char **argv) {
 			assert(MAIN.hosts.count < lengthof(MAIN.hosts.path));
 
 			MAIN.hosts.path[MAIN.hosts.count++]	= optarg;
+
+			break;
+		case 'z':
+			assert(MAIN.cache.count < lengthof(MAIN.cache.path));
+
+			MAIN.cache.path[MAIN.cache.count++]	= optarg;
 
 			break;
 		case 'q':
