@@ -309,7 +309,7 @@ struct dns_packet {
 
 	size_t size, end;
 
-	unsigned char tcpb[2];
+	int:16; /* tcp padding */
 
 	union {
 		struct dns_header header;
