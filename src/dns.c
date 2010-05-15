@@ -5737,8 +5737,12 @@ exec:
 		dns_rr_i_save(&F->hints_i);
 
 		/* Load our next nameserver host. */
-		if (!dns_rr_grep(&F->hints_ns, 1, &F->hints_i, F->hints, &error))
+		if (!dns_rr_grep(&F->hints_ns, 1, &F->hints_i, F->hints, &error)) {
+			if (++F->attempts < R->resconf->options.attempts)
+				goto(R->sp, DNS_R_ITERATE);
+
 			goto(R->sp, DNS_R_SWITCH);
+		}
 
 		dns_rr_i_init(&F->hints_j, F->hints);
 
