@@ -1,0 +1,238 @@
+\documentclass[11pt]{article}
+
+\usepackage{fullpage}
+\usepackage{makeidx}
+\usepackage{xspace}
+\usepackage[colorlinks=true, linkcolor=blue]{hyperref}
+\usepackage{color}
+
+\makeindex
+
+\begin{document}
+
+
+%
+% Internal Commands
+%
+\newcommand*{\dnsc}[0]{\texttt{dns.c}\xspace}
+\newcommand*{\lref}[1]{\hyperref[#1]{#1}\index{#1}}
+\newcommand*{\dn}[1]{\texttt{#1}\xspace}
+
+\newenvironment{todo}[1]{
+	\begin{color}{red}
+	\sf
+	\begin{tabular}{|p{0.9\textwidth}|}
+	\hline
+	TODO---\uppercase{#1} \\\hline
+	\index{TODO!\lowercase{#1}}
+}{
+	\\\hline
+	\end{tabular}
+	\end{color}
+}
+
+%
+% Title page
+%
+\title{\dnsc Userguide [draft]}
+\date{May 2010}
+\author{William Ahern}
+\maketitle
+
+\tableofcontents
+
+\pagenumbering{roman}
+
+\clearpage
+
+\setcounter{page}{1}
+\pagenumbering{arabic}
+
+
+\section{Introduction}
+
+\dnsc is an asynchronous, reentrant, recursive, embeddable DNS resolver.
+There are many resolver libraries available, including
+\href{http://www.chiark.greenend.org.uk/~ian/adns/}{\textit{adns}},
+\href{http://c-ares.haxx.se/}{\textit{c-ares}},
+\href{http://www.corpit.ru/mjt/udns.html}{\textit{udns}}, and
+\href{http://nlnetlabs.nl/projects/ldns/}{\textit{ldns}}. Though often well
+written, none have yet to meet my personal requirements, derived after years
+of writing DNS--intensive, non-blocking server software.
+
+\subsection{Asynchronous}
+
+Asynchronous means that \dnsc does not block on network I/O.\footnote{The
+core resolver does not do file I/O; however, some optional, ancillary
+routines use \texttt{stdio}.} Internally \dnsc directly uses the \textsc{BSD
+Sockets} API for network I/O. Whenever a socket operation would block, the
+\textsc{BSD Sockets} routine immediately returns, setting
+\texttt{EAGAIN}\index{errno!EAGAIN}\footnote{\dnsc translates \texttt{EINPROGRESS}\index{errno!EINPROGRESS}
+and \texttt{EWOULDBLOCK}\index{errno!EWOULDBLOCK} to \texttt{EAGAIN}.}.
+This error value is returned to the calling application with haste.
+
+\dnsc does not presume any particular kind of event loop\footnote{However,
+\texttt{events()} can be configured to return \textit{libevent} event sets},
+nor queues events internally. Instead, resolver objects expose a common set
+of interfaces: \texttt{pollfd()}, \texttt{events()}, \texttt{elapsed()}.
+
+\subsection{Reentrant}
+
+\dnsc rigorously adheres to an object--oriented design pattern. There is no
+global, mutable data. Some types of objects can be shared between resolver
+objects, but once instantiated and configured they're immutable. For
+example, while two resolver objects can share a \texttt{struct dns\_hints}
+object, to query the hints the caller must pass a separate iteration state.
+
+\hfill
+
+\begin{todo}{atomics}
+Most objects use reference counting for
+lifetime management. These reference counts are intended to be incremented
+and decremented by async--signal safe methods, but as these are inherently
+non--portable, and because there is no easy way to detect compiler atomic
+intrinsics, currently a \texttt{volatile sig\_atomic\_t} type is used with
+increment and decrement operators. In the future atomic intrinsics should be
+specifiable at build--time, similar to \texttt{DNS\_RANDOM}.
+\end{todo}
+
+%\begin{color}{red}
+%\sf
+%\begin{tabular}{|p{0.9\textwidth}|}
+%\hline
+%TODO---ATOMICS \\\hline
+%\index{TODO!atomics}Most objects use reference counting for
+%lifetime management. These reference counts are intended to be incremented
+%and decremented by async--signal safe methods, but as these are inherently
+%non--portable, and because there is no easy way to detect compiler atomic
+%intrinsics, currently a \texttt{volatile sig\_atomic\_t} type is used with
+%increment and decrement operators. In the future atomic intrinsics should be
+%specifiable at build--time, similar to \texttt{DNS\_RANDOM}. \\\hline
+%\end{tabular}
+%\end{color}
+
+\subsection{Recursive}
+
+Most client DNS libraries operate in stub mode. A stub resolver acts as a
+simple messenger between the client application and a \lref{recursive
+resolver} on the local network. \hyperref[stub resolver]{Stub
+resolvers}\index{stub resolver} require minimal sophistication, relaying a
+single DNS question and waiting for a single reply. Traditionally, the
+presumption has been that most client applications merely want to resolve a
+hostname to an IP address via an A or AAAA record, and this minimal
+sophistication fully sufficed to address this need.
+
+This presumption has proven costly as SRV and other similar record types
+have become widespread. The reason being, stub resolvers usually have no
+ability to follow the embedded canonical names in the record data of these
+types. For example, an MX record specifies a canonical host name for which
+an IP address should be queried. Usually the A or AAAA record for this
+canonical host name is included as \lref{glue} in the original answer, but
+this is not guaranteed. Indeed, \lref{out--of--bailiwick} host names---names
+which are not in the same lexical zone of the nameserver, and thus for which
+the nameserver is unlikely to be authoritative or able to provide nameserver
+glue for the authoritative server---are becoming increasingly common.
+
+Unfortunately, the burden of following these canonical names inevitably
+falls to the client application. First, as mentioned before stub resolvers
+usually do not have the sophistication to recursively resolve these names.
+Second, recursive nameservers rarely resolve these canonical names. Rather,
+the role of a recursive nameserver is to follow chains of authority and
+CNAME references, not to understand the semantics and data dependencies of
+myriad other record types.
+
+Historically, the only client applications required to implement this logic
+have been mail servers. The move to SRV, NAPTR, and similar record types,
+however, dramatically increases the categories of client applications
+required to support this logic. Clearly, a reusable implementation would be
+desirable for these new classes of applications.
+
+Broadly speaking there are two ways to go about supporting this canonical
+name problem. The easiest would seem to be to hack or wrap existing stub
+resolvers to provide the minimally necessary functionality. Alternatively,
+one could write a full--blown recursive query implementation, which
+inherently provides the lesser capability. \dnsc takes this second approach,
+and thus can operate in a fully recursive query mode, a traditional stub
+mode, or a ``smart'' stub, minimally recursive mode. The result is that
+\dnsc can follow canonical names for known record types, and is easily
+modifiable---and readily composable---to deliver all relevant DNS
+information to a requesting application in one simple operation.
+
+\subsection{Embeddable}
+
+\dnsc is designed to have zero build--time or run--time dependencies,
+requiring only a nominally \textsc{POSIX}\index{POSIX} compliant
+environment. The header and source files, \texttt{dns.h} and \texttt{dns.c},
+compile to a single object file. This object file can be built into the
+application directly, or optionally installed as a static or dynamic
+library. All macros and routines use a ``dns\_'' prefix, and all non--public
+routines are declared \texttt{static}.
+
+The code adheres to the ISO C99\index{C99} standard, with the notable exception
+that the packet structure relies on an anonymous union\footnote{Anonymous
+structures and unions are scheduled for inclusion in the next ISO C
+standard.}. All compilers known by this author support anonymous unions.
+
+Furthermore, the license\index{license} has been deliberately chosen to
+allow integration into all classes of applications, not only those licensed
+as Free Software or Open Source. Niche, novel DNS applications tend to occur
+in commercial and private software with quirky build, execution, and
+maintenance environments. Allowing unrestricted embedding supports the goal
+of providing a simple, easily integrated resolver implementation.
+
+\section{Configuration}
+
+\subsection{\texttt{/etc/resolv.conf}}
+
+\subsection{\texttt{/etc/hosts}}
+
+
+\section{Glossary}
+
+\begin{description}
+\newcommand{\term}[1]{\item[#1]\index{#1}\label{#1}}
+
+\term{glue} packet which resolves a reference so that the resolver does not
+need to execute a separate query. In the case of NS records, especially,
+glue might be necessary to prevent an infinite loop. For example, when
+querying for ``\texttt{www.example.com. IN A}'' the .com nameserver may
+refer the resolver to \dn{ns.example.com.}, the authoritative nameserver for
+example.com domains. But in resolving the IP address to
+\dn{ns.example.com.}---to which the query for www.example.com would be
+sent---the .com nameserver may again refer the resolver to
+\dn{ns.example.com.} The solution is for the .com nameserver to include a
+glue A or AAAA record for \dn{ns.example.com.}, short--circuiting the
+process.
+
+\term{out--of--bailiwick} Describes a domain name which is not in the same
+lexical zone of a reference domain name. For example, in the record
+``\texttt{example.com. IN MX 10 aspmx.l.google.com.}'' aspmx.google.com. is
+not within the lexical zone of example.com. Typically such a response will
+not include glue, necessitating an extra recursive query---in this case an A
+or AAAA query for aspmx.l.google.com. Additionally, implementations will
+often ignore or fail to cache glue records for out--of--bailiwick references
+because of security concerns. Out--of--bailiwick is more commonly used in
+the context of CNAME references.
+
+\term{recursive resolver} A resolver implementation that is capable of
+traversing the hierarchy of global nameserver authorities, starting with the
+root zone. A recursive resolver must already know the IP addresses of the
+root nameservers. Recursive resolvers are usually stand--alone
+implementations residing on the local network.
+
+\term{stub resolver} A resolver implementation which depends on a
+\lref{recursive resolver} to fetch answers from the global domain name
+system. A stub resolver is usually implemented as a library, communicating
+with a recursive resolver over the network on behalf of the client
+application. To function a stub resolver must acquire the IP address of
+local recursive nameservers by some other means. Traditionally, local
+recursive nameservers are listed in \textit{/etc/resolv.conf}, or if
+unspecified presumed to be at \textit{127.0.0.1}. Other protocols such as
+\textit{Multicast DNS} and \textit{DHCP} provide methods to identify local recursive
+nameservers.
+
+\end{description}
+
+\printindex
+
+\end{document}
