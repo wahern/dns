@@ -6204,9 +6204,11 @@ struct dns_addrinfo *dns_ai_open(const char *host, const char *serv, enum dns_ty
 	ai->qtype	= qtype;
 	ai->qport	= 0;
 
-	while (isdigit((unsigned char)*serv)) {
-		ai->qport	*= 10;
-		ai->qport	+= *serv++ - '0';
+	if (serv) {
+		while (isdigit((unsigned char)*serv)) {
+			ai->qport	*= 10;
+			ai->qport	+= *serv++ - '0';
+		}
 	}
 
 	ai->port	= ai->qport;
