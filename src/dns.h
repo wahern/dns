@@ -64,8 +64,8 @@
 
 #define DNS_VENDOR "william@25thandClement.com"
 
-#define DNS_V_REL  0x20100621
-#define DNS_V_ABI  0x20100503
+#define DNS_V_REL  0x20100623
+#define DNS_V_ABI  0x20100623
 #define DNS_V_API  0x20100503
 
 
@@ -906,6 +906,22 @@ struct dns_options {
 
 
 /*
+ * S T A T S  I N T E R F A C E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+struct dns_stat {
+	size_t queries;
+
+	struct {
+		struct {
+			size_t count, bytes;
+		} sent, rcvd;
+	} udp, tcp;
+}; /* struct dns_stat */
+
+
+/*
  * S O C K E T  I N T E R F A C E
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -937,6 +953,8 @@ int dns_so_events(struct dns_socket *);
 int dns_so_pollfd(struct dns_socket *);
 
 int dns_so_poll(struct dns_socket *, int);
+
+const struct dns_stat *dns_so_stat(struct dns_socket *);
 
 
 /*
@@ -978,6 +996,8 @@ int dns_res_poll(struct dns_resolver *, int);
 
 struct dns_packet *dns_res_query(struct dns_resolver *, const char *, enum dns_type, enum dns_class, int, int *);
 
+const struct dns_stat *dns_res_stat(struct dns_resolver *);
+
 
 /*
  * A D D R I N F O  I N T E R F A C E
@@ -1003,6 +1023,8 @@ int dns_ai_events(struct dns_addrinfo *);
 int dns_ai_pollfd(struct dns_addrinfo *);
 
 int dns_ai_poll(struct dns_addrinfo *, int);
+
+const struct dns_stat *dns_ai_stat(struct dns_addrinfo *);
 
 
 /*

@@ -4628,6 +4628,8 @@ struct dns_socket {
 
 	struct dns_k_permutor qids;
 
+	struct dns_stat stat;
+
 	/*
 	 * NOTE: dns_so_reset() zeroes everything from here down.
 	 */
@@ -4827,6 +4829,8 @@ int dns_so_submit(struct dns_socket *so, struct dns_packet *Q, struct sockaddr *
 	so->qid		= dns_header(so->query)->qid;
 	so->state	= (so->type == SOCK_STREAM)? DNS_SO_TCP_INIT : DNS_SO_UDP_INIT;
 
+	so->stat.queries++;
+
 	return 0;
 syerr:
 	error	= dns_syerr();
@@ -4873,18 +4877,21 @@ static int dns_so_tcp_send(struct dns_socket *so) {
 	size_t qend;
 	long n;
 
-	so->query->data[-2]	= 0xff & (so->query->end >> 8);
-	so->query->data[-1]	= 0xff & (so->query->end >> 0);
+	so->query->data[-2] = 0xff & (so->query->end >> 8);
+	so->query->data[-1] = 0xff & (so->query->end >> 0);
 
-	qsrc	= &so->query->data[-2] + so->qout;
-	qend	= so->query->end + 2;
+	qsrc = &so->query->data[-2] + so->qout;
+	qend = so->query->end + 2;
 
 	while (so->qout < qend) {
 		if (0 > (n = send(so->tcp, (void *)&qsrc[so->qout], qend - so->qout, 0)))
 			return dns_soerr();
 
-		so->qout	+= n;
+		so->qout += n;
+		so->stat.tcp.sent.bytes += n;
 	}
+
+	so->stat.tcp.sent.count++;
 
 	return 0;
 } /* dns_so_tcp_send() */
@@ -4896,31 +4903,33 @@ static int dns_so_tcp_recv(struct dns_socket *so) {
 	int error;
 	long n;
 
-	aend	= so->alen + 2;
+	aend = so->alen + 2;
 
 	while (so->apos < aend) {
-		asrc	= &so->answer->data[-2];
+		asrc = &so->answer->data[-2];
 
 		if (0 > (n = recv(so->tcp, (void *)&asrc[so->apos], aend - so->apos, 0)))
 			return dns_soerr();
 		else if (n == 0)
 			return DNS_EUNKNOWN;	/* FIXME */
 
-		so->apos	+= n;
-	
+		so->apos += n;
+		so->stat.tcp.rcvd.bytes += n;
+
 		if (so->alen == 0 && so->apos >= 2) {
-			alen	= ((0xff & so->answer->data[-2]) << 8)
-				| ((0xff & so->answer->data[-1]) << 0);
+			alen = ((0xff & so->answer->data[-2]) << 8)
+			     | ((0xff & so->answer->data[-1]) << 0);
 
 			if ((error = dns_so_newanswer(so, alen)))
 				return error;
 
-			so->alen	= alen;
-			aend		= alen + 2;
+			so->alen = alen;
+			aend = alen + 2;
 		}
 	}
 
 	so->answer->end	= so->alen;
+	so->stat.tcp.rcvd.count++;
 
 	return 0;
 } /* dns_so_tcp_recv() */
@@ -4940,13 +4949,19 @@ retry:
 
 		so->state++;
 	case DNS_SO_UDP_SEND:
-		if (-1 == send(so->udp, (void *)so->query->data, so->query->end, 0))
+		if (0 > (n = send(so->udp, (void *)so->query->data, so->query->end, 0)))
 			goto soerr;
+
+		so->stat.udp.sent.bytes += n;
+		so->stat.udp.sent.count++;
 
 		so->state++;
 	case DNS_SO_UDP_RECV:
 		if (0 > (n = recv(so->udp, (void *)so->answer->data, so->answer->size, 0)))
 			goto soerr;
+
+		so->stat.udp.rcvd.bytes += n;
+		so->stat.udp.rcvd.count++;
 
 		if ((so->answer->end = n) < 12)
 			goto trash;
@@ -5139,6 +5154,11 @@ int dns_so_pollfd(struct dns_socket *so) {
 int dns_so_poll(struct dns_socket *so, int timeout) {
 	return dns_poll(dns_so_pollfd(so), dns_so_events2(so, DNS_SYSPOLL), timeout);
 } /* dns_so_poll() */
+
+
+const struct dns_stat *dns_so_stat(struct dns_socket *so) {
+	return &so->stat;
+} /* dns_so_stat() */
 
 
 /*
@@ -6154,6 +6174,11 @@ error:
 } /* dns_res_query() */
 
 
+const struct dns_stat *dns_res_stat(struct dns_resolver *res) {
+	return dns_so_stat(&res->so);
+} /* dns_res_stat() */
+
+
 /*
  * A D D R I N F O  R O U T I N E S
  *
@@ -6554,6 +6579,11 @@ size_t dns_ai_print(void *dst, size_t lim, struct addrinfo *ent, struct dns_addr
 
 	return cp;
 } /* dns_ai_print() */
+
+
+const struct dns_stat *dns_ai_stat(struct dns_addrinfo *ai) {
+	return dns_res_stat(ai->res);
+} /* dns_ai_stat() */
 
 
 /*
@@ -7326,6 +7356,7 @@ static int resolve_query(int argc, char *argv[]) {
 	struct dns_hints *(*hints)()	= (strstr(argv[0], "recurse"))? &dns_hints_root : &dns_hints_local;
 	struct dns_resolver *R;
 	struct dns_packet *ans;
+	const struct dns_stat *st;
 	int error;
 
 	if (!MAIN.qname)
@@ -7353,6 +7384,14 @@ static int resolve_query(int argc, char *argv[]) {
 	ans = dns_res_fetch(R, &error);
 	print_packet(ans, stdout);
 	free(ans);
+
+	st = dns_res_stat(R);
+	putchar('\n');
+	printf(";; queries:  %zu\n", st->queries);
+	printf(";; udp sent: %zu in %zu bytes\n", st->udp.sent.count, st->udp.sent.bytes);
+	printf(";; udp rcvd: %zu in %zu bytes\n", st->udp.rcvd.count, st->udp.rcvd.bytes);
+	printf(";; tcp sent: %zu in %zu bytes\n", st->tcp.sent.count, st->tcp.sent.bytes);
+	printf(";; tcp rcvd: %zu in %zu bytes\n", st->tcp.rcvd.count, st->tcp.rcvd.bytes);
 
 	dns_res_close(R);
 
