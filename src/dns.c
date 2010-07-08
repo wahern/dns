@@ -4352,6 +4352,8 @@ struct dns_packet *dns_hints_query(struct dns_hints *hints, struct dns_packet *Q
 
 	if (!(zlen = dns_d_expand(zone, sizeof zone, rr.dn.p, Q, &error)))
 		goto error;
+	else if (zlen >= sizeof zone)
+		goto toolong;
 
 	P			= dns_p_new(512);
 	dns_header(P)->qr	= 1;
@@ -4380,6 +4382,8 @@ struct dns_packet *dns_hints_query(struct dns_hints *hints, struct dns_packet *Q
 		goto error;
 
 	return A;
+toolong:
+	error = DNS_EILLEGAL;
 error:
 	*error_	= error;
 
