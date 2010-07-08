@@ -1598,10 +1598,10 @@ int dns_rr_copy(struct dns_packet *P, struct dns_rr *rr, struct dns_packet *Q) {
 	size_t len;
 	int error;
 
-	if (0 == (len = dns_d_expand(dn, sizeof dn, rr->dn.p, Q, &error)))
+	if (!(len = dns_d_expand(dn, sizeof dn, rr->dn.p, Q, &error)))
 		return error;
 	else if (len >= sizeof dn)
-		return DNS_ENOBUFS;
+		return DNS_EILLEGAL;
 
 	if (rr->section != DNS_S_QD && (error = dns_any_parse(dns_any_init(&any, sizeof any), rr, Q)))
 		return error;
@@ -1750,6 +1750,7 @@ int dns_rr_cmp(struct dns_rr *r0, struct dns_packet *P0, struct dns_rr *r1, stru
 	char host0[DNS_D_MAXNAME + 1], host1[DNS_D_MAXNAME + 1];
 	union dns_any any0, any1;
 	int cmp, error;
+	size_t len;
 
 	if ((cmp = r0->type - r1->type))
 		return cmp;
@@ -1757,10 +1758,12 @@ int dns_rr_cmp(struct dns_rr *r0, struct dns_packet *P0, struct dns_rr *r1, stru
 	if ((cmp = r0->class - r1->class))
 		return cmp;
 
-	if (!dns_d_expand(host0, sizeof host0, r0->dn.p, P0, &error))
+	if (!(len = dns_d_expand(host0, sizeof host0, r0->dn.p, P0, &error))
+	||  len >= sizeof host0)
 		return -1;
 
-	if (!dns_d_expand(host1, sizeof host1, r1->dn.p, P1, &error))
+	if (!(len = dns_d_expand(host1, sizeof host1, r1->dn.p, P1, &error))
+	||  len >= sizeof host1)
 		return 1;
 
 	if ((cmp = strcasecmp(host0, host1)))
@@ -1812,9 +1815,11 @@ static _Bool dns_rr_i_match(struct dns_rr *rr, struct dns_rr_i *i, struct dns_pa
 
 	if (i->name) {
 		char dn[DNS_D_MAXNAME + 1];
+		size_t len;
 		int error;
 
-		if (sizeof dn <= dns_d_expand(dn, sizeof dn, rr->dn.p, P, &error))
+		if (!(len = dns_d_expand(dn, sizeof dn, rr->dn.p, P, &error))
+		||  len >= sizeof dn)
 			return 0;
 
 		if (0 != strcasecmp(dn, i->name))
@@ -2091,7 +2096,7 @@ size_t dns_rr_print(void *dst, size_t lim, struct dns_rr *rr, struct dns_packet 
 	if (rr->section == DNS_S_QD)
 		cp	+= dns__printchar(dst, lim, cp, ';');
 
-	if (0 == (n = dns_d_expand(&((unsigned char *)dst)[cp], (cp < lim)? lim - cp : 0, rr->dn.p, P, &error)))
+	if (!(n = dns_d_expand(&((unsigned char *)dst)[cp], (cp < lim)? lim - cp : 0, rr->dn.p, P, &error)))
 		goto error;
 
 	cp	+= n;
@@ -2297,11 +2302,9 @@ int dns_mx_parse(struct dns_mx *mx, struct dns_rr *rr, struct dns_packet *P) {
 	mx->preference	= (0xff00 & (P->data[rr->rd.p + 0] << 8))
 			| (0x00ff & (P->data[rr->rd.p + 1] << 0));
 
-	len	= dns_d_expand(mx->host, sizeof mx->host, rr->rd.p + 2, P, &error);
-
-	if (len == 0)
+	if (!(len = dns_d_expand(mx->host, sizeof mx->host, rr->rd.p + 2, P, &error)))
 		return error;
-	if (len >= sizeof mx->host)
+	else if (len >= sizeof mx->host)
 		return DNS_EILLEGAL;
 
 	return 0;
@@ -2369,11 +2372,9 @@ int dns_ns_parse(struct dns_ns *ns, struct dns_rr *rr, struct dns_packet *P) {
 	size_t len;
 	int error;
 
-	len	= dns_d_expand(ns->host, sizeof ns->host, rr->rd.p, P, &error);
-
-	if (len == 0)
+	if (!(len = dns_d_expand(ns->host, sizeof ns->host, rr->rd.p, P, &error)))
 		return error;
-	if (len >= sizeof ns->host)
+	else if (len >= sizeof ns->host)
 		return DNS_EILLEGAL;
 
 	return 0;
@@ -2467,11 +2468,9 @@ int dns_soa_parse(struct dns_soa *soa, struct dns_rr *rr, struct dns_packet *P) 
 		return DNS_EILLEGAL;
 
 	for (i = 0; i < lengthof(dn); i++) {
-		n	= dns_d_expand(dn[i].dst, dn[i].lim, rp, P, &error);
-
-		if (n == 0)
+		if (!(n = dns_d_expand(dn[i].dst, dn[i].lim, rp, P, &error)))
 			return error;
-		if (n >= dn[i].lim)
+		else if (n >= dn[i].lim)
 			return DNS_EILLEGAL;
 
 		if ((rp = dns_d_skip(rp, P)) >= P->end)
@@ -2631,7 +2630,7 @@ int dns_srv_parse(struct dns_srv *srv, struct dns_rr *rr, struct dns_packet *P) 
 		srv->port	|= (0xff & P->data[rp]);
 	}
 
-	if (0 == (n = dns_d_expand(srv->target, sizeof srv->target, rp, P, &error)))
+	if (!(n = dns_d_expand(srv->target, sizeof srv->target, rp, P, &error)))
 		return error;
 	else if (n >= sizeof srv->target)
 		return DNS_EILLEGAL;
@@ -3389,11 +3388,10 @@ struct dns_packet *dns_hosts_query(struct dns_hosts *hosts, struct dns_packet *Q
 	if ((error = dns_rr_parse(&rr, 12, Q)))
 		goto error;
 
-	if (0 == (qlen = dns_d_expand(qname, sizeof qname, rr.dn.p, Q, &error)))
+	if (!(qlen = dns_d_expand(qname, sizeof qname, rr.dn.p, Q, &error)))
 		goto error;
-
-	if (qlen >= sizeof qname)
-		{ error = EINVAL; goto error; }
+	else if (qlen >= sizeof qname)
+		goto toolong;
 
 	if ((error = dns_p_push(P, DNS_S_QD, qname, qlen, rr.type, rr.class, 0, 0)))
 		goto error;
@@ -3434,6 +3432,8 @@ loop:		for (ent = hosts->head; ent; ent = ent->next) {
 		goto error;
 
 	return A;
+toolong:
+	error = DNS_EILLEGAL;
 error:
 	*error_	= error;
 
@@ -4812,8 +4812,13 @@ int dns_so_submit(struct dns_socket *so, struct dns_packet *Q, struct sockaddr *
 	if ((error = dns_rr_parse(&rr, 12, Q)))
 		goto error;
 
-	if (0 == (so->qlen = dns_d_expand(so->qname, sizeof so->qname, rr.dn.p, Q, &error)))
+	if (!(so->qlen = dns_d_expand(so->qname, sizeof so->qname, rr.dn.p, Q, &error)))
 		goto error;
+	/*
+	 * NOTE: don't bail if expansion is too long; caller may be
+	 * intentionally sending long names. However, we won't be able to
+	 * verify it on return.
+	 */
 
 	so->qtype	= rr.type;
 	so->qclass	= rr.class;
@@ -4863,10 +4868,9 @@ static int dns_so_verify(struct dns_socket *so, struct dns_packet *P) {
 	if (rr.type != so->qtype || rr.class != so->qclass)
 		return DNS_EUNKNOWN;
 
-	if (0 == (qlen = dns_d_expand(qname, sizeof qname, rr.dn.p, P, &error)))
+	if (!(qlen = dns_d_expand(qname, sizeof qname, rr.dn.p, P, &error)))
 		return error;
-
-	if (qlen != so->qlen)
+	else if (qlen >= sizeof qname || qlen != so->qlen)
 		return DNS_EUNKNOWN;
 
 	if (0 != strcasecmp(so->qname, qname))
@@ -5463,6 +5467,8 @@ static struct dns_packet *dns_res_glue(struct dns_resolver *R, struct dns_packet
 	if (!dns_d_expand(qname, sizeof qname, 12, Q, &error))
 		return 0;
 
+	/* FIXME: Should we bail if expansion is too long? */
+
 	if (!(qtype = dns_rr_type(12, Q)))
 		return 0;
 
@@ -5592,6 +5598,7 @@ exec:
 		if (!(F->answer = dns_res_glue(R, F->query)))
 			goto(R->sp, DNS_R_SWITCH);
 
+		/* FIXME: Should we bail if expansion is too long? */
 		if (!dns_d_expand(host, sizeof host, 12, F->query, &error))
 			goto error;
 
@@ -5792,6 +5799,7 @@ exec:
 
 		goto(++R->sp, DNS_R_INIT);
 	case DNS_R_RESOLV1_NS:
+		/* FIXME: Should we bail if expansion is too long? */
 		if (!dns_d_expand(host, sizeof host, 12, F[1].query, &error))
 			goto error;
 
@@ -5864,6 +5872,7 @@ exec:
 		if ((error = dns_rr_parse(&rr, 12, F->query)))
 			goto error;
 
+		/* FIXME: Should we bail if expansion is too long? */
 		if (!dns_d_expand(host, sizeof host, rr.dn.p, F->query, &error))
 			goto error;
 
@@ -6393,6 +6402,8 @@ exec:
 		/* Search generator may have changed our qname. */
 		if (!dns_d_expand(qname, sizeof qname, 12, ai->answer, &error))
 			return error;
+
+		/* FIXME: Should we bail if expansion is too long? */
 
 		if (!dns_d_cname(ai->cname, sizeof ai->cname, qname, strlen(qname), ai->answer, &error))
 			return error;
