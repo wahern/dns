@@ -1758,6 +1758,10 @@ int dns_rr_cmp(struct dns_rr *r0, struct dns_packet *P0, struct dns_rr *r1, stru
 	if ((cmp = r0->class - r1->class))
 		return cmp;
 
+	/*
+	 * FIXME: Do label-by-label comparison to handle illegally long names?
+	 */
+
 	if (!(len = dns_d_expand(host0, sizeof host0, r0->dn.p, P0, &error))
 	||  len >= sizeof host0)
 		return -1;
@@ -5598,9 +5602,10 @@ exec:
 		if (!(F->answer = dns_res_glue(R, F->query)))
 			goto(R->sp, DNS_R_SWITCH);
 
-		/* FIXME: Should we bail if expansion is too long? */
-		if (!dns_d_expand(host, sizeof host, 12, F->query, &error))
+		if (!(len = dns_d_expand(host, sizeof host, 12, F->query, &error)))
 			goto error;
+		else if (len >= sizeof host)
+			goto toolong;
 
 		dns_rr_foreach(&rr, F->answer, .name = host, .type = dns_rr_type(12, F->query), .section = DNS_S_AN) {
 			goto(R->sp, DNS_R_FINISH);
@@ -5799,9 +5804,10 @@ exec:
 
 		goto(++R->sp, DNS_R_INIT);
 	case DNS_R_RESOLV1_NS:
-		/* FIXME: Should we bail if expansion is too long? */
-		if (!dns_d_expand(host, sizeof host, 12, F[1].query, &error))
+		if (!(len = dns_d_expand(host, sizeof host, 12, F[1].query, &error)))
 			goto error;
+		else if (len >= sizeof host)
+			goto toolong;
 
 		dns_rr_foreach(&rr, F[1].answer, .name = host, .type = DNS_T_A, .section = (DNS_S_ALL & ~DNS_S_QD)) {
 			rr.section	= DNS_S_AR;
@@ -5872,9 +5878,10 @@ exec:
 		if ((error = dns_rr_parse(&rr, 12, F->query)))
 			goto error;
 
-		/* FIXME: Should we bail if expansion is too long? */
-		if (!dns_d_expand(host, sizeof host, rr.dn.p, F->query, &error))
+		if (!(len = dns_d_expand(host, sizeof host, rr.dn.p, F->query, &error)))
 			goto error;
+		else if (len >= sizeof host)
+			goto toolong;
 
 		dns_rr_foreach(&rr, F->answer, .section = DNS_S_AN, .name = host, .type = rr.type) {
 			goto(R->sp, DNS_R_FINISH);	/* Found */
@@ -6065,6 +6072,8 @@ exec:
 	} /* switch () */
 
 	return 0;
+toolong:
+	error = DNS_EILLEGAL;
 error:
 	return error;
 } /* dns_res_exec() */
@@ -6346,6 +6355,7 @@ int dns_ai_nextent(struct addrinfo **ent, struct dns_addrinfo *ai) {
 	struct dns_rr rr;
 	char qname[DNS_D_MAXNAME + 1];
 	union dns_any any;
+	size_t len;
 	int error;
 
 	*ent = 0;
@@ -6400,10 +6410,10 @@ exec:
 		ai->state++;
 	case DNS_AI_S_FOREACH_I:
 		/* Search generator may have changed our qname. */
-		if (!dns_d_expand(qname, sizeof qname, 12, ai->answer, &error))
+		if (!(len = dns_d_expand(qname, sizeof qname, 12, ai->answer, &error)))
 			return error;
-
-		/* FIXME: Should we bail if expansion is too long? */
+		else if (len >= sizeof qname)
+			return DNS_EILLEGAL;
 
 		if (!dns_d_cname(ai->cname, sizeof ai->cname, qname, strlen(qname), ai->answer, &error))
 			return error;
