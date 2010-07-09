@@ -5459,15 +5459,15 @@ error:
 static struct dns_packet *dns_res_glue(struct dns_resolver *R, struct dns_packet *Q) {
 	struct dns_packet *P	= dns_p_new(512);
 	char qname[DNS_D_MAXNAME + 1];
+	size_t qlen;
 	enum dns_type qtype;
 	struct dns_rr rr;
 	unsigned sp;
 	int error;
 
-	if (!dns_d_expand(qname, sizeof qname, 12, Q, &error))
+	if (!(qlen = dns_d_expand(qname, sizeof qname, 12, Q, &error))
+	||  qlen >= sizeof qname)
 		return 0;
-
-	/* FIXME: Should we bail if expansion is too long? */
 
 	if (!(qtype = dns_rr_type(12, Q)))
 		return 0;
