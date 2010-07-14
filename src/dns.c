@@ -38,7 +38,7 @@
 #include <stdlib.h>		/* malloc(3) realloc(3) free(3) rand(3) random(3) arc4random(3) */
 #include <stdio.h>		/* FILE fopen(3) fclose(3) getc(3) rewind(3) */
 
-#include <string.h>		/* memcpy(3) strlen(3) memmove(3) memchr(3) memcmp(3) strchr(3) strsep(3) */
+#include <string.h>		/* memcpy(3) strlen(3) memmove(3) memchr(3) memcmp(3) strchr(3) strsep(3) strcspn(3) */
 #include <strings.h>		/* strcasecmp(3) strncasecmp(3) */
 
 #include <ctype.h>		/* isspace(3) isdigit(3) */
@@ -182,6 +182,7 @@ int dns_v_api(void) {
 #define DNS_EWOULDBLOCK	WSAEWOULDBLOCK
 #define DNS_EALREADY	WSAEALREADY
 #define DNS_EAGAIN	EAGAIN
+#define DNS_ETIMEDOUT	WSAETIMEDOUT
 
 #define dns_syerr()	((int)GetLastError())
 #define dns_soerr()	((int)WSAGetLastError())
@@ -194,6 +195,7 @@ int dns_v_api(void) {
 #define DNS_EWOULDBLOCK	EWOULDBLOCK
 #define DNS_EALREADY	EALREADY
 #define DNS_EAGAIN	EAGAIN
+#define DNS_ETIMEDOUT	ETIMEDOUT
 
 #define dns_syerr()	errno
 #define dns_soerr()	errno
@@ -709,6 +711,30 @@ size_t dns_strlcat(char *dst, const char *src, size_t lim) {
 
 	return lim + (s - p - 1);
 } /* dns_strlcat() */
+
+
+#if _WIN32
+
+static char *dns_strsep(char **sp, const char *delim) {
+	char *p;
+
+	if (!(p = *sp))
+		return 0;
+
+	*sp += strcspn(p, delim);
+
+	if (**sp != '\0') {
+		**sp = '\0';
+		++*sp;
+	} else
+		*sp = NULL;
+
+	return p;
+} /* dns_strsep() */
+
+#else
+#define dns_strsep(...)	strsep(__VA_ARGS__)
+#endif
 
 
 #if _WIN32
@@ -6179,9 +6205,9 @@ struct dns_packet *dns_res_query(struct dns_resolver *res, const char *qname, en
 
 	while ((error = dns_res_check(res))) {
 		if (dns_res_elapsed(res) > timeout)
-			error = ETIMEDOUT;
+			error = DNS_ETIMEDOUT;
 
-		if (error != EAGAIN)
+		if (error != DNS_EAGAIN)
 			goto error;
 
 		if ((error == dns_res_poll(res, 1)))
@@ -6662,7 +6688,7 @@ enum dns_section dns_isection(const char *src) {
 	dns_strlcpy(sbuf, src, sizeof sbuf);
 	next = sbuf;
 
-	while ((name = strsep(&next, "|+, \t"))) {
+	while ((name = dns_strsep(&next, "|+, \t"))) {
 		for (i = 0; i < lengthof(dns_sections); i++) {
 			if (!strcasecmp(dns_sections[i].name, name)) {
 				section |= dns_sections[i].type;
