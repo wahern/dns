@@ -14,5 +14,6 @@ rfc4408-tests: rfc4408-tests.c ../src/cache.c ../src/zone.c ../src/spf.c ../src/
 	ragel -C -o $@ $<
 
 clean:
-	rm -f rfc4408-tests
+	rm -f rfc4408-tests fpack
+	rm -fr *.dSYM
 
