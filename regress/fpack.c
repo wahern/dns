@@ -84,6 +84,10 @@ static enum {
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+#ifndef MIN
+#define MIN(a, b) (((a) < (b))? (a) : (b))
+#endif
+
 #ifndef MAX
 #define MAX(a, b) (((a) > (b))? (a) : (b))
 #endif
@@ -97,46 +101,55 @@ static enum {
 struct buffer {
 	unsigned char *data;
 	size_t size, count;
+
+	unsigned long bucket;
+	unsigned nobits;
 }; /* struct buffer */
 
 
-static void append(struct buffer *buffer, int ch) {
-	if (buffer->count >= buffer->size) {
-		size_t size = MAX(1024U, buffer->size * 2U);
-		void *tmp   = realloc(buffer->data, size);
+static void append(struct buffer *buffer, unsigned long bits, unsigned nobits) {
+	unsigned n;
 
-		OOPS(!tmp, "realloc: %s", strerror(errno));
+	do {
+		if (nobits) {
+			n = MIN((sizeof buffer->bucket * CHAR_BIT) - 1, nobits);
 
-		buffer->data = tmp;
-		buffer->size = size;
-	}
+			buffer->bucket <<= n;
+			buffer->bucket |= bits >> (nobits - n);
+			buffer->nobits += n;
+			nobits -= n;
+		}
 
-	buffer->data[buffer->count++] = 0xffU & ch;
+		while (buffer->nobits >= 8) {
+			while (buffer->count >= buffer->size) {
+				size_t size = MAX(1024U, buffer->size * 2U);
+				void *tmp   = realloc(buffer->data, size);
+
+				OOPS(!tmp, "realloc: %s", strerror(errno));
+
+				buffer->data = tmp;
+				buffer->size = size;
+			}
+
+			n = buffer->nobits - 8;
+			buffer->nobits -= 8;
+
+			buffer->data[buffer->count++] = 0xffU & (buffer->bucket >> n);
+		}
+	} while (nobits);
 } /* append() */
 
+#define append_(a, b, c, ...) append((a), (b), (c))
+#define append(...) append_(__VA_ARGS__, 8)
 
 
-/*
- * W O R D  R O U T I N E S
- *
- * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-
-struct word {
-	unsigned long value;
-	unsigned bits;
-}; /* struct word */
-
-static void appendw(struct buffer *buffer, struct word *word) {
-	unsigned bytes = (word->bits + 7) / 8;
-
-	SAY("word(%.8X)(%u)", (unsigned int)word->value, word->bits);
-
-	while (bytes--)
-		append(buffer, 0xff & (word->value >> (8 * bytes)));
-
-	word->value = 0;
-	word->bits  = 0;
-} /* appendw() */
+static void flush(struct buffer *buffer) {
+	if (buffer->nobits) {
+		buffer->bucket <<= 8 - buffer->nobits;
+		buffer->nobits = 8;
+		append(buffer, 0, 0);
+	}
+} /* flush() */
 
 
 /*
@@ -150,6 +163,9 @@ static void appendw(struct buffer *buffer, struct word *word) {
  * 	o `\' begins an escape sequence
  * 		- `\[0-9A-Fa-f]' begins a hexadecimal encoded sequence
  * 		  ending at the first non-hexadecimal character
+ * 			- if immediately followed by a `:', then succeeding
+ * 			  [0-9] characters specify the bit width in
+ * 			  decimal notation of the preceding encoded sequence
  * 		- '\n' is a two-character sequence for new line / line feed 
  * 		- '\r' is a two-character sequence for carriage return
  * 		- '\t' is a two-character sequence for vertical tab
@@ -160,11 +176,20 @@ static void appendw(struct buffer *buffer, struct word *word) {
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+struct word { unsigned long value; unsigned count; };
+
+static void flushword(struct buffer *buffer, struct word *word) {
+	append(buffer, word->value, word->count);
+	word->value = 0;
+	word->count = 0;
+} /* flushword() */
+
+
 static size_t fetch(struct buffer *buffer, FILE *fp) {
 	struct word w = { 0, 0 };
-	_Bool escaped = 0;
-	_Bool encoded = 0;
-	_Bool comment = 0;
+	int escaped = 0;
+	int encoded = 0;
+	int comment = 0;
 	int ch;
 
 	while (EOF != (ch = getc(fp))) {
@@ -172,37 +197,37 @@ static size_t fetch(struct buffer *buffer, FILE *fp) {
 		case '#':
 			if (escaped)
 				goto copy;
-			if (encoded)
-				goto word;
 
 			comment = 1;
+			encoded = 0;
 
 			break;
 		case '\\':
 			if (escaped)
 				goto copy;
-			if (encoded)
-				goto word;
 			if (comment)
 				break;
 
 			escaped = 1;
+			encoded = 0;
 
 			break;
 		case ' ': case '\t': case '\r':
 			if (escaped)
 				goto copy;
-			if (encoded)
-				goto word;
+
+			encoded = 0;
 
 			break;
 		case '\n':
 			if (escaped)
 				goto copy;
-			if (encoded)
-				goto word;
 
 			comment = 0;
+			encoded = 0;
+
+			flushword(buffer, &w);
+			flush(buffer);
 
 			if (buffer->count)
 				return buffer->count;
@@ -211,28 +236,28 @@ static size_t fetch(struct buffer *buffer, FILE *fp) {
 		case 'n':
 			if (escaped)
 				{ ch = '\n'; goto copy; }
-			if (encoded)
-				goto word;
 			if (comment)
 				break;
+
+			encoded = 0;
 
 			goto copy;
 		case 'r':
 			if (escaped)
 				{ ch = '\r'; goto copy; }
-			if (encoded)
-				goto word;
 			if (comment)
 				break;
+
+			encoded = 0;
 
 			goto copy;
 		case 't':
 			if (escaped)
 				{ ch = '\t'; goto copy; }
-			if (encoded)
-				goto word;
 			if (comment)
 				break;
+
+			encoded = 0;
 
 			goto copy;
 		case '0': case '1': case '2': case '3': case '4':
@@ -262,31 +287,38 @@ static size_t fetch(struct buffer *buffer, FILE *fp) {
 
 			ch = 0x0a + (ch - 'a');
 nybb:
-			if (w.bits >= sizeof w.value * CHAR_BIT)
-				appendw(buffer, &w);
+			if (encoded == ':') {
+				w.count *= 10;
+				w.count += 0x0f & ch;
+			} else {
+				if (!encoded)
+					flushword(buffer, &w);
 
-			w.value <<= 4;
-			w.value |= 0x0f & ch;
-			w.bits  += 4;
+				w.value <<= 4;
+				w.value |= 0x0f & ch;
+				w.count += 4;
 
-			escaped = 0;
-			encoded = 1;
+				escaped = 0;
+				encoded = 1;
+			}
 
 			break;
-word:
-			ungetc(ch, fp);
+		case ':':
+			if (comment)
+				break;
+			if (!encoded)
+				goto copy;
 
-			appendw(buffer, &w);
-
-			encoded = 0;
+			encoded = ':';
+			w.count = 0;
 
 			break;
 		default:
-			if (encoded)
-				goto word;
 			if (comment)
 				break;
 copy:
+			flushword(buffer, &w);
+
 			if (isprint(ch))
 				SAY("char(`%c')", ch);
 			else
@@ -295,13 +327,14 @@ copy:
 			append(buffer, ch);
 
 			escaped = 0;
+			encoded = 0;
 
 			break;
 		} /* switch() */
 	} /* while (getchar()) */
 
-	if (w.bits)
-		appendw(buffer, &w);
+	flushword(buffer, &w);
+	flush(buffer);
 
 	return buffer->count;
 } /* fetch() */
