@@ -6936,6 +6936,49 @@ static void panic(const char *fmt, ...) {
 	panic_(__func__, __LINE__, "(%s:%d) " __VA_ARGS__, "")
 
 
+static void *grow(unsigned char *p, size_t size) {
+	void *tmp;
+
+	if (!(tmp = realloc(p, size)))
+		panic("realloc(%zu): %s", size, dns_strerror(errno));
+
+	return tmp;
+} /* grow() */
+
+
+static size_t add(size_t a, size_t b) {
+	if (~a < b)
+		panic("%zu + %zu: integer overflow", a, b);
+
+	return a + b;
+} /* add() */
+
+
+static size_t append(unsigned char **dst, size_t osize, const void *src, size_t len) {
+	size_t size = add(osize, len);
+
+	*dst = grow(*dst, size);
+	memcpy(*dst + osize, src, len);
+
+	return size;
+} /* append() */
+
+
+static size_t slurp(unsigned char **dst, size_t osize, FILE *fp, const char *path) {
+	size_t size = osize;
+	unsigned char buf[1024];
+	size_t count;
+
+	while ((count = fread(buf, 1, sizeof buf, fp)))
+		size = append(dst, size, buf, count);
+
+	if (ferror(fp))
+		panic("%s: %s", path, dns_strerror(errno));
+
+	return size;
+} /* slurp() */
+
+
 static struct dns_resolv_conf *resconf(void) {
 	static struct dns_resolv_conf *resconf;
 	const char *path;
@@ -7132,6 +7175,47 @@ static int parse_domain(int argc, char *argv[]) {
 
 	return 0;
 } /* parse_domain() */
+
+
+static int expand_domain(int argc, char *argv[]) {
+	unsigned short rp = 0;
+	unsigned char *src = NULL;
+	unsigned char *dst;
+	struct dns_packet *pkt;
+	size_t lim = 0, len;
+	int error;
+
+	if (argv[1])
+		rp = atoi(argv[1]);
+
+	len = slurp(&src, 0, stdin, "-");
+
+	if (!(pkt = dns_p_make(len, &error)))
+		panic("malloc(%zu): %s", len, dns_strerror(error));
+
+	memcpy(pkt->data, src, len);
+	pkt->end += len;
+
+	lim = 1;
+	dst = grow(NULL, lim);
+
+	while (lim <= (len = dns_d_expand(dst, lim, rp, pkt, &error))) {
+		lim = add(len, 1);
+		dst = grow(dst, lim);
+	}
+
+	if (!len)
+		panic("expand: %s", dns_strerror(error));
+
+	fwrite(dst, 1, len, stdout);
+	fflush(stdout);
+
+	free(src);
+	free(dst);
+	free(pkt);
+
+	return 0;
+} /* expand_domain() */
 
 
 static int show_resconf(int argc, char *argv[]) {
@@ -7597,8 +7681,9 @@ static int sizes(int argc, char *argv[]) {
 
 
 static const struct { const char *cmd; int (*run)(); const char *help; } cmds[] = {
-	{ "parse-packet",	&parse_packet,		"parse raw packet from stdin" },
+	{ "parse-packet",	&parse_packet,		"parse binary packet from stdin" },
 	{ "parse-domain",	&parse_domain,		"anchor and iteratively cleave domain" },
+	{ "expand-domain",	&expand_domain,		"expand domain at offset NN in packet from stdin" },
 	{ "show-resconf",	&show_resconf,		"show resolv.conf data" },
 	{ "show-hosts",		&show_hosts,		"show hosts data" },
 	{ "query-hosts",	&query_hosts,		"query A, AAAA or PTR in hosts data" },
