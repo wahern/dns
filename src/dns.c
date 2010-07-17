@@ -7194,7 +7194,7 @@ static int expand_domain(int argc, char *argv[]) {
 		panic("malloc(%zu): %s", len, dns_strerror(error));
 
 	memcpy(pkt->data, src, len);
-	pkt->end += len;
+	pkt->end = len;
 
 	lim = 1;
 	dst = grow(NULL, lim);
