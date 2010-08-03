@@ -5388,11 +5388,12 @@ static void dns_res_reset_frame(struct dns_resolver *R, struct dns_res_frame *fr
 
 
 void dns_res_reset(struct dns_resolver *R) {
+	unsigned i;
+
 	dns_so_reset(&R->so);
 
-	do {
-		dns_res_reset_frame(R, &R->stack[R->sp]);
-	} while (R->sp--);
+	for (i = 0; i < lengthof(R->stack); i++)
+		dns_res_reset_frame(R, &R->stack[i]);
 
 	memset(&R->qname, '\0', sizeof *R - offsetof(struct dns_resolver, qname));
 } /* dns_res_reset() */
