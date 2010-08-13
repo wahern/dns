@@ -6318,6 +6318,8 @@ static int dns_ai_setent(struct addrinfo **ent, union dns_any *any, enum dns_typ
 	struct sockaddr *saddr;
 	struct sockaddr_in sin;
 	struct sockaddr_in6 sin6;
+	const char *cname;
+	size_t clen;
 
 	switch (type) {
 	case DNS_T_A:
@@ -6342,7 +6344,15 @@ static int dns_ai_setent(struct addrinfo **ent, union dns_any *any, enum dns_typ
 		return EINVAL;
 	} /* switch() */
 
-	if (!(*ent = malloc(sizeof **ent + dns_sa_len(saddr) + ((ai->hints.ai_flags & AI_CANONNAME)? strlen(ai->cname) + 1 : 0))))
+	if (ai->hints.ai_flags & AI_CANONNAME) {
+		cname	= (*ai->cname)? ai->cname : ai->qname;
+		clen	= strlen(cname);
+	} else {
+		cname	= NULL;
+		clen	= 0;
+	}
+
+	if (!(*ent = malloc(sizeof **ent + dns_sa_len(saddr) + ((ai->hints.ai_flags & AI_CANONNAME)? clen + 1 : 0))))
 		return dns_syerr();
 
 	memset(*ent, '\0', sizeof **ent);
@@ -6355,7 +6365,7 @@ static int dns_ai_setent(struct addrinfo **ent, union dns_any *any, enum dns_typ
 	(*ent)->ai_addrlen	= dns_sa_len(saddr);
 
 	if (ai->hints.ai_flags & AI_CANONNAME)
-		(*ent)->ai_canonname	= memcpy((unsigned char *)*ent + sizeof **ent + dns_sa_len(saddr), ai->cname, strlen(ai->cname) + 1);
+		(*ent)->ai_canonname	= memcpy((unsigned char *)*ent + sizeof **ent + dns_sa_len(saddr), cname, clen + 1);
 
 	return 0;
 } /* dns_ai_setent() */
