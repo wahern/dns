@@ -1600,6 +1600,8 @@ void socket_init(void) {
 
 
 struct {
+	char arg0[64];
+
 	struct {
 		char scheme[32];
 		char authority[128];
@@ -1858,18 +1860,20 @@ int main(int argc, char **argv) {
 	extern int optind;
 	int opt;
 
+	dns_strlcpy(MAIN.arg0, (strrchr(argv[0], '/')? strrchr(argv[0], '/') + 1 : argv[0]), sizeof MAIN.arg0);
+
 	while (-1 != (opt = getopt(argc, argv, "vVh"))) {
 		switch (opt) {
 		case 'v':
 #if !defined(so_trace) /* macro expanding to void statement if no debug support */
 			socket_debug++;
 #else
-			fprintf(stderr, "%s: not compiled with tracing support\n", argv[0]);
+			fprintf(stderr, "%s: not compiled with tracing support\n", MAIN.arg0);
 #endif
 
 			break;
 		case 'V':
-			printf("%s (socket.c) %.8X\n", (strrchr(argv[0], '/')? strrchr(argv[0], '/') + 1 : argv[0]), socket_v_rel());
+			printf("%s (socket.c) %.8X\n", MAIN.arg0, socket_v_rel());
 			printf("vendor  %s\n", socket_vendor());
 			printf("release %.8X\n", socket_v_rel());
 			printf("abi     %.8X\n", socket_v_abi());
@@ -1881,7 +1885,7 @@ int main(int argc, char **argv) {
 		case 'h':
 			/* FALL THROUGH */
 usage:		default:
-			fprintf(stderr, USAGE, getprogname());
+			fprintf(stderr, USAGE, MAIN.arg0);
 
 			return (opt == 'h')? 0: EXIT_FAILURE;
 		} /* switch() */
