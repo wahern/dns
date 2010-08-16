@@ -1717,7 +1717,9 @@ int httpget(const char *url) {
 
 	req = fifo_new(1024);
 
-	fifo_puts(req, "GET / HTTP/1.0\r\n");
+	fifo_puts(req, "GET ");
+	fifo_puts(req, MAIN.url.path);
+	fifo_puts(req, " HTTP/1.0\r\n");
 	fifo_puts(req, "Host: ");
 	fifo_puts(req, MAIN.url.host);
 	fifo_putc(req, ':');
