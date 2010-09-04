@@ -27,6 +27,7 @@
 #define FIFO_H
 
 #include <stddef.h>	/* size_t */
+#include <stdint.h>	/* SIZE_MAX */
 #include <stdio.h>	/* EOF FILE fputc(3) */
 #include <stdlib.h>	/* realloc(3) free(3) */
 
@@ -34,7 +35,7 @@
 
 #include <ctype.h>	/* isgraph(3) */
 
-#include <errno.h>	/* ENOMEM errno */
+#include <errno.h>	/* ENOMEM EOVERFLOW errno */
 
 #include <assert.h>	/* assert(3) */
 
@@ -210,11 +211,30 @@ static void fifo_realign(struct fifo *fifo) {
 
 
 static inline size_t fifo_power2(size_t i) {
-	size_t j = 2U;
-	while (j < i)
-		j <<= 1U;
-	return j;
+#if defined SIZE_MAX
+	i--;
+	i |= i >> 1;
+	i |= i >> 2;
+	i |= i >> 4;
+	i |= i >> 8;
+	i |= i >> 16;
+#if SIZE_MAX != 0xffffffffu
+	i |= i >> 32;
+#endif
+	return ++i;
+#else
+#error No SIZE_MAX defined
+#endif
 } /* fifo_power2() */
+
+
+static inline size_t fifo_roundup(size_t i) {
+	if (i > ~(((size_t)-1) >> 1u))
+		return (size_t)-1;
+	else
+		return fifo_power2(i);
+} /* fifo_roundup() */
+
 
 static int fifo_realloc(struct fifo *fifo, size_t size) {
 	void *tmp;
@@ -226,7 +246,7 @@ static int fifo_realloc(struct fifo *fifo, size_t size) {
 
 	fifo_realign(fifo);
 
-	size = fifo_power2(size);
+	size = fifo_roundup(size);
 
 	if (!(tmp = realloc(fifo->base, size)))
 		return errno;
@@ -241,6 +261,9 @@ static int fifo_realloc(struct fifo *fifo, size_t size) {
 static inline int fifo_grow(struct fifo *fifo, size_t size) {
 	if (fifo->size - fifo->count >= size)
 		return 0;
+
+	if (~fifo->count < size)
+		return EOVERFLOW;
 
 	return fifo_realloc(fifo, fifo->count + size);
 } /* fifo_grow() */
