@@ -58,7 +58,7 @@
 
 #define FIFO_VENDOR "william@25thandClement.com"
 
-#define FIFO_V_REL  0x20100815
+#define FIFO_V_REL  0x20100904
 #define FIFO_V_ABI  0x20100815
 #define FIFO_V_API  0x20100815
 
