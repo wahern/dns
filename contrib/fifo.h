@@ -31,7 +31,7 @@
 #include <stdio.h>	/* EOF FILE fputc(3) */
 #include <stdlib.h>	/* realloc(3) free(3) */
 
-#include <string.h>	/* memcpy(3) memmove(3) strlen(3) */
+#include <string.h>	/* memcpy(3) memmove(3) strlen(3) memchr(3) */
 
 #include <ctype.h>	/* isgraph(3) */
 
@@ -60,7 +60,7 @@
 
 #define FIFO_V_REL  0x20100904
 #define FIFO_V_ABI  0x20100815
-#define FIFO_V_API  0x20100815
+#define FIFO_V_API  0x20100904
 
 static inline const char *fifo_vendor(void) { return FIFO_VENDOR; }
 
@@ -340,6 +340,38 @@ static size_t fifo_slice(struct fifo *fifo, struct iovec *iov, size_t p, size_t 
 
 	return count;
 } /* fifo_slice() */
+
+
+static size_t fifo_tvec(struct fifo *fifo, struct iovec *iov, int ch) {
+	unsigned char *p;
+
+	if (fifo_rvec(fifo, iov)) {
+		if ((p = memchr(iov->iov_base, ch, iov->iov_len)))
+			return iov->iov_len = (p - (unsigned char *)iov->iov_base) + 1;
+
+		if (fifo->count > iov->iov_len) {
+			iov->iov_len = fifo->count - iov->iov_len;
+			iov->iov_base = fifo->base;
+
+			if ((p = memchr(iov->iov_base, ch, iov->iov_len))) {
+				iov->iov_len = (p - fifo->base) + (fifo->size - fifo->head) + 1;
+				iov->iov_base = fifo->base;
+				fifo_realign(fifo);
+
+				return iov->iov_len;
+			}
+		}
+
+		iov->iov_len = 0;
+	}
+
+	return 0;
+} /* fifo_tvec() */
+
+
+static size_t fifo_lvec(struct fifo *fifo, struct iovec *iov) {
+	return fifo_tvec(fifo, iov, '\n');
+} /* fifo_lvec() */
 
 
 /*
