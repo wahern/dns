@@ -379,10 +379,18 @@ static size_t fifo_lvec(struct fifo *fifo, struct iovec *iov) {
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+#ifndef FIFO_AUTOALIGN
+#define FIFO_AUTOALIGN 1
+#endif
+
 static inline size_t fifo_discard(struct fifo *fifo, size_t count) {
 	count       = FIFO_MIN(count, fifo->count);
 	fifo->head  = (fifo->head + count) % fifo->size;
 	fifo->count -= count;
+#if FIFO_AUTOALIGN
+	if (!fifo->count)
+		fifo->head = 0;
+#endif
 	return count;
 } /* fifo_discard() */
 
