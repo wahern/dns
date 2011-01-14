@@ -5,6 +5,7 @@
 \usepackage{xspace}
 \usepackage[colorlinks=true, linkcolor=blue]{hyperref}
 \usepackage{color}
+\usepackage{listings}
 
 \makeindex
 
@@ -17,6 +18,8 @@
 \newcommand*{\dnsc}[0]{\texttt{dns.c}\xspace}
 \newcommand*{\lref}[1]{\hyperref[#1]{#1}\index{#1}}
 \newcommand*{\dn}[1]{\texttt{#1}\xspace}
+\newcommand*{\key}[1]{#1\index{#1}\xspace}
+%\newcommand*{\todo}[2]{\textcolor{red}{\fbox{\textbf{#1}\index{TODO!\lowercase{#1}} #2}}}
 
 \newenvironment{todo}[1]{
 	\begin{color}{red}
@@ -49,7 +52,7 @@
 \pagenumbering{arabic}
 
 
-\section{Introduction}
+\section{Overview}
 
 \dnsc is an asynchronous, reentrant, recursive, embeddable DNS resolver.
 There are many resolver libraries available, including
@@ -95,21 +98,6 @@ intrinsics, currently a \texttt{volatile sig\_atomic\_t} type is used with
 increment and decrement operators. In the future atomic intrinsics should be
 specifiable at build--time, similar to \texttt{DNS\_RANDOM}.
 \end{todo}
-
-%\begin{color}{red}
-%\sf
-%\begin{tabular}{|p{0.9\textwidth}|}
-%\hline
-%TODO---ATOMICS \\\hline
-%\index{TODO!atomics}Most objects use reference counting for
-%lifetime management. These reference counts are intended to be incremented
-%and decremented by async--signal safe methods, but as these are inherently
-%non--portable, and because there is no easy way to detect compiler atomic
-%intrinsics, currently a \texttt{volatile sig\_atomic\_t} type is used with
-%increment and decrement operators. In the future atomic intrinsics should be
-%specifiable at build--time, similar to \texttt{DNS\_RANDOM}. \\\hline
-%\end{tabular}
-%\end{color}
 
 \subsection{Recursive}
 
@@ -180,11 +168,45 @@ in commercial and private software with quirky build, execution, and
 maintenance environments. Allowing unrestricted embedding supports the goal
 of providing a simple, easily integrated resolver implementation.
 
-\section{Configuration}
+\section{Resolver Configuration}
 
-\subsection{\texttt{/etc/resolv.conf}}
+\subsection{Policy}
 
-\subsection{\texttt{/etc/hosts}}
+\subsubsection{\texttt{struct dns\_resolv\_conf}}
+
+Resolver policy is controlled by setting the appropriate fields of the
+\texttt{struct dns\_resolv\_conf} object. The fields and layout reflect the
+syntax of the traditional BSD \texttt{/etc/resolv.conf} file format. This
+explains the somewhat quirky split between the top--level fields and the
+``options'' fields.
+
+\begin{itemize}
+\item[\texttt{.nameserver}] Addresses of local recursive nameservers, used
+to initialize a stub--mode \texttt{struct dns\_hints} object.
+\item[\texttt{.search}] List of domain aliases.
+\item[\texttt{.lookup}]
+\item[\texttt{.options}] Option fields use a colon to delimit any arguments.
+\begin{itemize}
+\item[\texttt{.edns0}] Enable EDNS0 support. \\
+\begin{todo}{EDNS0}
+EDNS0 support is still in the draft stage, though there is no limitation
+to manually adding EDNS0 record or to the size of packets.
+\end{todo}
+\end{itemize}
+\item[\texttt{.iface}] The network address to bind sockets. Defaults to \texttt{INADDR\_ANY}.
+\end{itemize}
+
+\subsubsection{\texttt{/etc/resolv.conf}}
+
+\subsection{Local Hosts}
+
+\subsubsection{\texttt{struct dns\_hosts}}
+
+\subsubsection{\texttt{/etc/hosts}}
+
+\subsection{Nameserver Hints}
+
+\subsubsection{\texttt{struct dns\_hints}}
 
 
 \section{Glossary}
