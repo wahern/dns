@@ -2750,6 +2750,8 @@ size_t dns_srv_print(void *dst, size_t lim, struct dns_srv *srv) {
 	cp	+= dns__printchar(dst, lim, cp, ' ');
 	cp	+= dns__printstring(dst, lim, cp, srv->target, strlen(srv->target));
 
+	dns__printnul(dst, lim, cp);
+
 	return cp;
 } /* dns_srv_print() */
 
