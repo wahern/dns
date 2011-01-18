@@ -587,7 +587,7 @@ static size_t dns_af_len(int af) {
 #define dns_sa_len(sa)		dns_af_len(dns_sa_family(sa))
 
 
-#define DNS_SA_NOPORT	&dns_sa_noport;
+#define DNS_SA_NOPORT	&dns_sa_noport
 static unsigned short dns_sa_noport;
 
 static unsigned short *dns_sa_port(int af, void *sa) {
