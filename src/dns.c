@@ -7600,6 +7600,52 @@ static int resolve_addrinfo(int argc, char *argv[]) {
 } /* resolve_addrinfo() */
 
 
+static int echo_port(int argc, char *argv[]) {
+	union {
+		struct sockaddr sa;
+		struct sockaddr_in sin;
+	} port;
+	int fd;
+	
+	memset(&port, 0, sizeof port);
+	port.sin.sin_family = AF_INET;
+	port.sin.sin_port = htons(5354);
+	port.sin.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+	if (-1 == (fd = socket(PF_INET, SOCK_DGRAM, 0)))
+		panic("socket: %s", strerror(errno));
+
+	if (0 != bind(fd, &port.sa, sizeof port.sa))
+		panic("127.0.0.1:5353: %s", dns_strerror(errno));
+
+	for (;;) {
+		struct dns_packet *pkt = dns_p_new(512);
+		struct sockaddr_storage ss;
+		socklen_t slen = sizeof ss;
+		ssize_t count;
+#if defined(MSG_WAITALL) /* MinGW issue */
+		int rflags = MSG_WAITALL;
+#else
+		int rflags = 0;
+#endif
+
+		count = recvfrom(fd, (char *)pkt->data, pkt->size, rflags, (struct sockaddr *)&ss, &slen);
+
+
+		if (!count || count < 0)
+			panic("recvfrom: %s", strerror(errno));
+
+		pkt->end = count;
+
+		dns_p_dump(pkt, stdout);
+
+		(void)sendto(fd, (char *)pkt->data, pkt->end, 0, (struct sockaddr *)&ss, slen);
+	}
+
+	return 0;
+} /* echo_port() */
+
+
 static int isection(int argc, char *argv[]) {
 	const char *name = (argv[1])? argv[1] : "";
 	int type;
@@ -7714,6 +7760,7 @@ static const struct { const char *cmd; int (*run)(); const char *help; } cmds[] 
 	{ "addrinfo-stub",	&resolve_addrinfo,	"resolve through getaddrinfo clone" },
 	{ "addrinfo-recurse",	&resolve_addrinfo,	"resolve through getaddrinfo clone" },
 /*	{ "resolve-nameinfo",	&resolve_query,		"resolve as recursive resolver" }, */
+	{ "echo",		&echo_port,		"server echo mode, for nmap fuzzing" },
 	{ "isection",		&isection,		"parse section string" },
 	{ "iclass",		&iclass,		"parse class string" },
 	{ "itype",		&itype,			"parse type string" },
