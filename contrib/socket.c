@@ -689,9 +689,10 @@ enum so_state {
 	SO_S_LISTEN   = 1<<4,
 	SO_S_CONNECT  = 1<<5,
 	SO_S_STARTTLS = 1<<6,
-	SO_S_SHUTRD   = 1<<7,
-	SO_S_SHUTWR   = 1<<8,
-	SO_S_SHUTDOWN = 1<<9,
+	SO_S_RSTLOWAT = 1<<7,
+	SO_S_SHUTRD   = 1<<8,
+	SO_S_SHUTWR   = 1<<9,
+	SO_S_SHUTDOWN = 1<<10,
 
 	SO_S_END,
 	SO_S_ALL = ((SO_S_END - 1) << 1) - 1
@@ -716,6 +717,8 @@ struct socket {
 	short events;
 
 	int done, todo;
+
+	int olowat;
 
 	struct {
 		SSL *ctx;
@@ -914,6 +917,14 @@ error:
 } /* so_starttls_() */
 
 
+static int so_rstlowat_(struct socket *so) {
+	if (0 != setsockopt(so->fd, SOL_SOCKET, SO_RCVLOWAT, &so->olowat, sizeof so->olowat))
+		return so_soerr();
+
+	return 0;
+} /* so_rstlowat_() */
+
+
 static int so_shutrd_(struct socket *so) {
 	if (so->fd != -1 && 0 != shutdown(so->fd, SHUT_RD))
 		return so_syerr();
@@ -961,12 +972,15 @@ static int so_shutdown_(struct socket *so) {
 
 
 static inline int so_state(const struct socket *so) {
-	int i = 1;
+	if (so->todo & ~so->done) {
+		int i = 1;
 
-	while (i < SO_S_END && !(i & (so->todo & ~so->done)))
-		i <<= 1;
+		while (i < SO_S_END && !(i & (so->todo & ~so->done)))
+			i <<= 1;
 
-	return (i < SO_S_END)? i : 0;
+		return (i < SO_S_END)? i : 0;
+	} else
+		return 0;
 } /* so_state() */
 
 
@@ -1044,6 +1058,13 @@ exec:
 			goto error;
 
 		so->done |= state;
+
+		goto exec;
+	case SO_S_RSTLOWAT:
+		if ((error = so_rstlowat_(so)))
+			goto error;
+
+		so->todo &= ~state;
 
 		goto exec;
 	case SO_S_SHUTRD:
@@ -1479,6 +1500,78 @@ error:
 
 	return 0;
 } /* so_write() */
+
+
+size_t so_peek(struct socket *so, void *dst, size_t lim, int flags, int *_error) {
+	int rstlowat = so->todo & SO_S_RSTLOWAT;
+	long count;
+	int lowat, error;
+
+	so->todo &= ~SO_S_RSTLOWAT;
+
+	error = so_exec(so);
+
+	so->todo |= rstlowat;
+
+	if (error)
+		goto error;
+
+	if (flags & SO_F_PEEKALL)
+		so->events &= ~POLLIN;
+
+retry:
+	count = recv(so->fd, dst, lim, MSG_PEEK);
+
+	if (count == -1)
+		goto soerr;
+
+	if (count == lim || !(flags & SO_F_PEEKALL))
+		return count;
+pollin:
+	if (!(so->todo & SO_S_RSTLOWAT)) {
+		if (0 != getsockopt(so->fd, SOL_SOCKET, SO_RCVLOWAT, &so->olowat, &(socklen_t){ sizeof so->olowat }))
+			goto soerr;
+
+		if (lim > INT_MAX) {
+			error = EOVERFLOW;
+
+			goto error;
+		}
+
+		lowat = (int)lim;
+
+		if (0 != setsockopt(so->fd, SOL_SOCKET, SO_RCVLOWAT, &lowat, sizeof lowat))
+			goto soerr;
+
+		so->todo |= SO_S_RSTLOWAT;
+	}
+
+	so->events |= POLLIN;
+
+	*_error = SO_EAGAIN;
+
+	return 0;
+soerr:
+	error = so_soerr();
+
+	switch (error) {
+	case SO_EINTR:
+		goto retry;
+#if SO_EWOULDBLOCK != SO_EAGAIN
+	case SO_EWOULDBLOCK:
+		/* FALL THROUGH */
+#endif
+	case SO_EAGAIN:
+		if (flags & SO_F_PEEKALL)
+			goto pollin;
+
+		break;
+	} /* switch() */
+error:
+	*_error = error;
+
+	return 0;
+} /* so_peek() */
 
 
 const struct so_stat *so_stat(struct socket *so) {

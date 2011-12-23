@@ -1,7 +1,7 @@
 /* ==========================================================================
  * socket.h - Simple Sockets
  * --------------------------------------------------------------------------
- * Copyright (c) 2009, 2010  William Ahern
+ * Copyright (c) 2009, 2010, 2011  William Ahern
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
@@ -60,9 +60,9 @@
 
 #define SOCKET_VENDOR "william@25thandClement.com"
 
-#define SOCKET_V_REL  0x20100815
-#define SOCKET_V_ABI  0x20100813
-#define SOCKET_V_API  0x20100813
+#define SOCKET_V_REL  0x20111222
+#define SOCKET_V_ABI  0x20111222
+#define SOCKET_V_API  0x20111222
 
 
 const char *socket_vendor(void);
@@ -410,6 +410,13 @@ int so_shutdown(struct socket *, int /* SHUT_RD, SHUT_WR, SHUT_RDWR */);
 size_t so_read(struct socket *, void *, size_t, int *);
 
 size_t so_write(struct socket *, const void *, size_t, int *);
+
+#define SO_F_PEEKALL 0x01
+
+size_t so_peek(struct socket *, void *, size_t, int, int *);
+
+#define so_peekall(so, dst, lim, ep) so_peek((so), (dst), (lim), SO_F_PEEKALL, (ep))
+#define so_peekany(so, dst, lim, ep) so_peek((so), (dst), (lim), 0, (ep))
 
 struct so_stat {
 	struct st_log {
