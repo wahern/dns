@@ -29,7 +29,7 @@
 
 #include <string.h>	/* strlen(3) memset(3) strncpy(3) memcpy(3) strerror(3) */
 
-#include <errno.h>	/* EINVAL EAGAIN EWOULDBLOCK EINPROGRESS EALREADY ENAMETOOLONG */
+#include <errno.h>	/* EINVAL EAGAIN EWOULDBLOCK EINPROGRESS EALREADY ENAMETOOLONG EOPNOTSUPP */
 
 #include <assert.h>	/* assert(3) */
 
@@ -45,6 +45,8 @@
 #endif
 
 #include <netinet/in.h>	/* struct sockaddr_in struct sockaddr_in6 */
+
+#include <netinet/tcp.h> /* IPPROTO_TCP TCP_NODELAY TCP_NOPUSH TCP_CORK */
 
 #include <arpa/inet.h>	/* inet_ntop(3) inet_pton(3) ntohs(3) htons(3) */
 
@@ -345,7 +347,7 @@ const char *so_strerror(int error) {
 
 	if (error == SO_EOPENSSL) {
 #if _REENTRANT
-		__thread char sslstr[256];
+		static __thread char sslstr[256];
 #else
 		static char sslstr[256];
 #endif
@@ -563,6 +565,12 @@ int so_socket(int domain, int type, const struct so_options *opts, int *_error) 
 	if ((error = so_reuseaddr(fd, opts->sin_reuseaddr)))
 		goto error;
 
+	if ((error = so_nodelay(fd, opts->sin_nodelay)))
+		goto error;
+
+	if ((error = so_nopush(fd, opts->sin_nopush)))
+		goto error;
+
 	return fd;
 syerr:
 	error = so_syerr();
@@ -639,6 +647,32 @@ int so_reuseaddr(int fd, _Bool reuseaddr) {
 
 	return 0;
 } /* so_reuseaddr() */
+
+
+int so_nodelay(int fd, _Bool nodelay) {
+	if (0 != setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &(int){ nodelay }, sizeof (int)))
+		return so_syerr();
+
+	return 0;
+} /* so_nodelay() */
+
+
+#ifndef TCP_NOPUSH
+#ifdef TCP_CORK
+#define TCP_NOPUSH TCP_CORK
+#endif
+#endif
+
+int so_nopush(int fd, _Bool nopush) {
+#ifdef TCP_NOPUSH
+	if (0 != setsockopt(fd, IPPROTO_TCP, TCP_NOPUSH, &(int){ nopush }, sizeof (int)))
+		return so_syerr();
+#else
+	return EOPNOTSUPP;
+#endif
+
+	return 0;
+} /* so_nopush() */
 
 
 static void x509_discard(X509 **cert) {

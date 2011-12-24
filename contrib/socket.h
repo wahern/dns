@@ -60,9 +60,9 @@
 
 #define SOCKET_VENDOR "william@25thandClement.com"
 
-#define SOCKET_V_REL  0x20111222
-#define SOCKET_V_ABI  0x20111222
-#define SOCKET_V_API  0x20111222
+#define SOCKET_V_REL  0x20111224
+#define SOCKET_V_ABI  0x20111224
+#define SOCKET_V_API  0x20111224
 
 
 const char *socket_vendor(void);
@@ -134,6 +134,7 @@ struct so_options {
 
 	_Bool sin_reuseaddr;
 	_Bool sin_nodelay;
+	_Bool sin_nopush;
 
 	_Bool fd_nonblock;
 	_Bool fd_cloexec;
@@ -368,6 +369,10 @@ int so_nonblock(int, _Bool);
 int so_cloexec(int, _Bool);
 
 int so_reuseaddr(int, _Bool);
+
+int so_nodelay(int, _Bool);
+
+int so_nopush(int, _Bool);
 
 
 /*
