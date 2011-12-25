@@ -1693,6 +1693,11 @@ int so_poll(struct socket *so, int timeout) {
 } /* so_poll() */
 
 
+int so_peerfd(struct socket *so) {
+	return so->fd;
+} /* so_peerfd() */
+
+
 /*
  * L I B R A R Y  R O U T I N E S
  *
