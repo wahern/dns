@@ -1698,6 +1698,11 @@ int so_peerfd(struct socket *so) {
 } /* so_peerfd() */
 
 
+int so_uncork(struct socket *so) {
+	return so_nopush(so->fd, 0);
+} /* so_uncork() */
+
+
 /*
  * L I B R A R Y  R O U T I N E S
  *
