@@ -115,6 +115,7 @@ enum so_errno {
 	SO_EOPENSSL = SO_ERRNO0,
 	SO_EX509INT,	/* See SSL_ERROR_WANT_X509_LOOKUP in SSL_get_error(3). */
 	SO_ENOTVRFD,
+	SO_ECLOSURE,
 	SO_EEND,
 }; /* enum so_errno */
 

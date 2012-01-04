@@ -341,7 +341,8 @@ const char *so_strerror(int error) {
 	static const char *errlist[] = {
 		[SO_EOPENSSL - SO_ERRNO0] = "TLS/SSL error",
 		[SO_EX509INT - SO_ERRNO0] = "X.509 certificate lookup interrupt",
-		[SO_ENOTVRFD - SO_ERRNO0] = "absent or unverified peer certificate"
+		[SO_ENOTVRFD - SO_ERRNO0] = "absent or unverified peer certificate",
+		[SO_ECLOSURE - SO_ERRNO0] = "peers elected to shutdown secure transport",
 	};
 
 	if (error >= 0)
@@ -380,7 +381,7 @@ static int ssl_error(SSL *ctx, int rval, short *events) {
 
 	switch (SSL_get_error(ctx, rval)) {
 	case SSL_ERROR_ZERO_RETURN:
-		return SO_EOPENSSL;
+		return SO_ECLOSURE;
 	case SSL_ERROR_WANT_READ:
 		*events |= POLLIN;
 
@@ -899,13 +900,8 @@ static int so_starttls_(struct socket *so) {
 		if (rval > 0) {
 			/* SUCCESS (continue to next state) */
 			;;
-		} else if (rval == 0) {
-			/* SHUTDOWN (return as an error; see also SSL_ERROR_ZERO_RETURN) */
-			error = SO_EOPENSSL;
-
-			goto error;
 		} else {
-			/* ERROR (either need I/O or a plain error) */
+			/* ERROR (either need I/O or a plain error) or SHUTDOWN */
 			so->events &= ~(POLLIN|POLLOUT);
 
 			error = ssl_error(so->ssl.ctx, rval, &so->events);
