@@ -316,6 +316,7 @@ static void so_initdebug(void) {
 #define SO_EWOULDBLOCK	WSAEWOULDBLOCK
 #define SO_EALREADY	WSAEALREADY
 #define SO_EAGAIN	WSAEWOULDBLOCK
+#define SO_ENOTCONN	WSAENOTCONN
 
 #define so_syerr()	((int)GetLastError())
 #define so_soerr()	((int)WSAGetLastError())
@@ -328,6 +329,7 @@ static void so_initdebug(void) {
 #define SO_EWOULDBLOCK	EWOULDBLOCK
 #define SO_EALREADY	EALREADY
 #define SO_EAGAIN	EAGAIN
+#define SO_ENOTCONN	ENOTCONN
 
 #define so_syerr()	errno
 #define so_soerr()	errno
@@ -959,9 +961,26 @@ static int so_rstlowat_(struct socket *so) {
 } /* so_rstlowat_() */
 
 
+static _Bool so_isconn(int fd) {
+		struct sockaddr sa;
+		socklen_t slen = sizeof sa;
+
+		return 0 == getpeername(fd, &sa, &slen) || so_soerr() != SO_ENOTCONN;
+} /* so_isconn() */
+
 static int so_shutrd_(struct socket *so) {
-	if (so->fd != -1 && 0 != shutdown(so->fd, SHUT_RD))
-		return so_syerr();
+	if (so->fd != -1 && 0 != shutdown(so->fd, SHUT_RD)) {
+		/*
+		 * NOTE: OS X will fail with ENOTCONN if the requested
+		 * SHUT_RD or SHUT_WR flag is already set, including if the
+		 * SHUT_RD flag is set from the peer sending eof. Other OSs
+		 * just treat this as a noop and return successfully.
+		 */
+		if (so_soerr() != SO_ENOTCONN)
+			return so_soerr();
+		else if (!so_isconn(so->fd))
+			return SO_ENOTCONN;
+	}
 
 	so->shut.rd = 1;
 
@@ -974,7 +993,7 @@ static int so_shutrd_(struct socket *so) {
 
 static int so_shutwr_(struct socket *so) {
 	if (so->fd != -1 && 0 != shutdown(so->fd, SHUT_WR))
-		return so_syerr();
+		return so_soerr();
 
 	so->shut.wr = 1;
 	so->st.sent.eof = 1;
