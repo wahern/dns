@@ -446,6 +446,8 @@ int so_poll(struct socket *, int);
 
 int so_peerfd(struct socket *);
 
+int so_uncork(struct socket *);
+
 
 /*
  * L I B R A R Y  I N T E R F A C E S
