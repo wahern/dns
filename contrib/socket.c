@@ -568,11 +568,13 @@ int so_socket(int domain, int type, const struct so_options *opts, int *_error) 
 	if ((error = so_reuseaddr(fd, opts->sin_reuseaddr)))
 		goto error;
 
-	if ((error = so_nodelay(fd, opts->sin_nodelay)))
-		goto error;
+	if (domain == SOCK_STREAM) {
+		if ((error = so_nodelay(fd, opts->sin_nodelay)))
+			goto error;
 
-	if ((error = so_nopush(fd, opts->sin_nopush)))
-		goto error;
+		if ((error = so_nopush(fd, opts->sin_nopush)))
+			goto error;
+	}
 
 	return fd;
 syerr:
