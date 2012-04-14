@@ -6,6 +6,10 @@ override CPPFLAGS := $(CPPFLAGS) -I../src -DSOCKET_DEBUG -DSOCKET_MAIN
 override CFLAGS   := $(CFLAGS) -std=gnu99 -Wall -Wno-unused-function -Wno-unused-parameter $(call cc-option, -Wno-initializer-overrides,) -O2 -g -fstack-protector
 override LIBS     := -lssl -lcrypto
 
+ifeq ($(shell uname -s), Darwin)
+override CFLAGS += $(CFLAGS) -Wno-deprecated-declarations
+endif
+
 all: socket
 
 socket: socket.c ../src/dns.c
