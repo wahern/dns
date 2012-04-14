@@ -1,7 +1,7 @@
 /* ==========================================================================
  * fifo.h - Simple byte FIFO with simple bit packing.
  * --------------------------------------------------------------------------
- * Copyright (c) 2008-2010  William Ahern
+ * Copyright (c) 2008-2011  William Ahern
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
@@ -58,9 +58,9 @@
 
 #define FIFO_VENDOR "william@25thandClement.com"
 
-#define FIFO_V_REL  0x20100904
-#define FIFO_V_ABI  0x20100815
-#define FIFO_V_API  0x20100904
+#define FIFO_V_REL  0x20111113 /* 0x20100904 */
+#define FIFO_V_ABI  0x20111113 /* 0x20100815 */
+#define FIFO_V_API  0x20111113 /* 0x20100904 */
 
 static inline const char *fifo_vendor(void) { return FIFO_VENDOR; }
 
@@ -294,7 +294,7 @@ static size_t fifo_rvec(struct fifo *fifo, struct iovec *iov, _Bool realign) {
 	return iov->iov_len;
 } /* fifo_rvec() */
 
-#define fifo_rvec3(fifo, iov, realign) (fifo_rvec)((fifo), (iov), (realign))
+#define fifo_rvec3(fifo, iov, realign, ...) (fifo_rvec)((fifo), (iov), (realign))
 #define fifo_rvec(...) fifo_rvec3(__VA_ARGS__, 0)
 
 
@@ -313,7 +313,7 @@ static size_t fifo_wvec(struct fifo *fifo, struct iovec *iov, _Bool realign) {
 	return iov->iov_len;
 } /* fifo_wvec() */
 
-#define fifo_wvec3(fifo, iov, realign) (fifo_wvec)((fifo), (iov), (realign))
+#define fifo_wvec3(fifo, iov, realign, ...) (fifo_wvec)((fifo), (iov), (realign))
 #define fifo_wvec(...) fifo_wvec3(__VA_ARGS__, 0)
 
 
@@ -369,7 +369,7 @@ static size_t fifo_tvec(struct fifo *fifo, struct iovec *iov, int ch) {
 } /* fifo_tvec() */
 
 
-static size_t fifo_lvec(struct fifo *fifo, struct iovec *iov) {
+static inline size_t fifo_lvec(struct fifo *fifo, struct iovec *iov) {
 	return fifo_tvec(fifo, iov, '\n');
 } /* fifo_lvec() */
 
@@ -420,7 +420,7 @@ static int fifo_write(struct fifo *fifo, const void *src, size_t len) {
 
 	do {
 		while (fifo_wvec(fifo, &iov) && p < pe) {
-			n = FIFO_MIN(iov.iov_len, pe - p);
+			n = FIFO_MIN(iov.iov_len, (size_t)(pe - p));
 			memcpy(iov.iov_base, p, n);
 			p += n;
 			fifo_update(fifo, n);
@@ -439,7 +439,7 @@ static size_t fifo_read(struct fifo *fifo, void *dst, size_t lim) {
 	size_t n;
 
 	while (p < pe && fifo_rvec(fifo, &iov)) {
-		n = FIFO_MIN(iov.iov_len, pe - p);
+		n = FIFO_MIN(iov.iov_len, (size_t)(pe - p));
 		memcpy(p, iov.iov_base, n);
 		p += n;
 		fifo_discard(fifo, n);
@@ -583,7 +583,7 @@ static inline size_t fifo_wbits(struct fifo *fifo) {
 
 static unsigned long long fifo_unpack() __attribute__((unused));
 
-static unsigned long long fifo_unpack(struct fifo *fifo, int count) {
+static unsigned long long fifo_unpack(struct fifo *fifo, unsigned count) {
 	unsigned long long bits = 0;
 	unsigned mask, nbits;
 
@@ -612,7 +612,7 @@ static unsigned long long fifo_unpack(struct fifo *fifo, int count) {
 
 static int fifo_pack() __attribute__((unused));
 
-static int fifo_pack(struct fifo *fifo, unsigned long long bits, int count) {
+static int fifo_pack(struct fifo *fifo, unsigned long long bits, unsigned count) {
 	unsigned mask, nbits;
 	int error;
 
@@ -620,7 +620,7 @@ static int fifo_pack(struct fifo *fifo, unsigned long long bits, int count) {
 		return error;
 
 	while (count) {
-		nbits = FIFO_MIN(count, 8 - fifo->wbits.count);
+		nbits = FIFO_MIN(count, 8U - fifo->wbits.count);
 		mask  = (1U << nbits) - 1;
 
 		fifo->wbits.byte  <<= nbits;
