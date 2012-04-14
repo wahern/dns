@@ -1,7 +1,7 @@
 /* ==========================================================================
  * socket.h - Simple Sockets
  * --------------------------------------------------------------------------
- * Copyright (c) 2009, 2010, 2011  William Ahern
+ * Copyright (c) 2009, 2010, 2011, 2012  William Ahern
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
@@ -60,7 +60,7 @@
 
 #define SOCKET_VENDOR "william@25thandClement.com"
 
-#define SOCKET_V_REL  0x20120104
+#define SOCKET_V_REL  0x20120413
 #define SOCKET_V_ABI  0x20111224
 #define SOCKET_V_API  0x20111224
 

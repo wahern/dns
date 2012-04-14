@@ -1,7 +1,7 @@
 /* ==========================================================================
  * socket.c - Simple Sockets
  * --------------------------------------------------------------------------
- * Copyright (c) 2009, 2010  William Ahern
+ * Copyright (c) 2009, 2010, 2011, 2012  William Ahern
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
@@ -731,7 +731,6 @@ enum so_state {
 	SO_S_RSTLOWAT = 1<<7,
 	SO_S_SHUTRD   = 1<<8,
 	SO_S_SHUTWR   = 1<<9,
-	SO_S_SHUTDOWN = 1<<10,
 
 	SO_S_END,
 	SO_S_ALL = ((SO_S_END - 1) << 1) - 1
@@ -982,9 +981,6 @@ static int so_shutrd_(struct socket *so) {
 
 	so->shut.rd = 1;
 
-	if (so->shut.wr)
-		so->todo |= SO_S_SHUTDOWN;
-
 	return 0;
 } /* so_shutrd_() */
 
@@ -996,30 +992,8 @@ static int so_shutwr_(struct socket *so) {
 	so->shut.wr = 1;
 	so->st.sent.eof = 1;
 
-	if (so->shut.rd)
-		so->todo |= SO_S_SHUTDOWN;
-
 	return 0;
 } /* so_shutwr_() */
-
-
-#define so_destroy(so) so_shutdown_((so))
-
-static int so_shutdown_(struct socket *so) {
-	ssl_discard(&so->ssl.ctx);
-
-	dns_ai_close(so->res);
-	so->res = 0;
-
-	free(so->host);
-	so->host = 0;
-
-	so_closesocket(&so->fd);
-
-	so->events = 0;
-
-	return 0;
-} /* so_shutdown_() */
 
 
 static inline int so_state(const struct socket *so) {
@@ -1132,11 +1106,6 @@ exec:
 		so->done |= state;
 
 		goto exec;
-	case SO_S_SHUTDOWN:
-		if ((error = so_shutdown_(so)))
-			goto error;
-
-		break;
 	} /* so_exec() */
 
 	return 0;
@@ -1156,6 +1125,23 @@ static struct socket *so_init(struct socket *so, const struct so_options *opts) 
 
 	return so;
 } /* so_init() */
+
+
+static int so_destroy(struct socket *so) {
+	ssl_discard(&so->ssl.ctx);
+
+	dns_ai_close(so->res);
+	so->res = 0;
+
+	free(so->host);
+	so->host = 0;
+
+	so_closesocket(&so->fd);
+
+	so->events = 0;
+
+	return 0;
+} /* so_destroy() */
 
 
 struct socket *(so_open)(const char *host, const char *port, int qtype, int domain, int type, const struct so_options *opts, int *error_) {
