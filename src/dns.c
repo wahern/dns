@@ -6213,7 +6213,7 @@ struct dns_packet *dns_res_query(struct dns_resolver *res, const char *qname, en
 		if (error != DNS_EAGAIN)
 			goto error;
 
-		if ((error == dns_res_poll(res, 1)))
+		if ((error = dns_res_poll(res, 1)))
 			goto error;
 	}
 
@@ -7727,7 +7727,7 @@ static int sizes(int argc, char *argv[]) {
 		SIZE(struct dns_options, struct dns_socket, struct dns_resolver, struct dns_addrinfo),
 		SIZE(struct dns_cache),
 	};
-	int i, max;
+	unsigned i, max;
 
 	for (i = 0, max = 0; i < lengthof(type); i++)
 		max = MAX(max, strlen(type[i].name));
