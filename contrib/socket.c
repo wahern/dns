@@ -1300,7 +1300,7 @@ error:
 
 int so_starttls(struct socket *so, SSL_CTX *ctx) {
 	SSL_CTX *tmp = 0;
-	SSL_METHOD *method;
+	const SSL_METHOD *method;
 
 	if (so->done & SO_S_STARTTLS)
 		return 0;
@@ -1336,7 +1336,7 @@ int so_starttls(struct socket *so, SSL_CTX *ctx) {
 		goto error;
 
 	/*
-	 * NOTE: SSLv2_server_method()->ssl_connect should be a reference to
+	 * NOTE: SSLv3_server_method()->ssl_connect should be a reference to
 	 * OpenSSL's internal ssl_undefined_function().
 	 *
 	 * Server methods such as SSLv23_server_method(), etc. should have
@@ -1344,7 +1344,7 @@ int so_starttls(struct socket *so, SSL_CTX *ctx) {
 	 */
 	method = SSL_get_ssl_method(so->ssl.ctx);
 
-	if (!method->ssl_connect || method->ssl_connect == SSLv2_server_method()->ssl_connect)
+	if (!method->ssl_connect || method->ssl_connect == SSLv3_server_method()->ssl_connect)
 		so->ssl.accept = 1;
 
 	if (tmp)
