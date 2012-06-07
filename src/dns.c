@@ -53,6 +53,9 @@
 #include <assert.h>		/* assert(3) */
 
 #if _WIN32
+#ifndef FD_SETSIZE
+#define FD_SETSIZE 256
+#endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #else
@@ -101,6 +104,18 @@
 
 #ifndef endof
 #define endof(a)	(&(a)[lengthof((a))])
+#endif
+
+
+/*
+ * M I S C E L L A N E O U S  C O M P A T
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+#if _WIN32 || _WIN64
+#define PRIuZ "Iu"
+#else
+#define PRIuZ "zu"
 #endif
 
 
@@ -6953,7 +6968,7 @@ static void *grow(unsigned char *p, size_t size) {
 	void *tmp;
 
 	if (!(tmp = realloc(p, size)))
-		panic("realloc(%zu): %s", size, dns_strerror(errno));
+		panic("realloc(%"PRIuZ"): %s", size, dns_strerror(errno));
 
 	return tmp;
 } /* grow() */
@@ -6961,7 +6976,7 @@ static void *grow(unsigned char *p, size_t size) {
 
 static size_t add(size_t a, size_t b) {
 	if (~a < b)
-		panic("%zu + %zu: integer overflow", a, b);
+		panic("%"PRIuZ" + %"PRIuZ": integer overflow", a, b);
 
 	return a + b;
 } /* add() */
@@ -7162,10 +7177,10 @@ static int parse_packet(int argc, char *argv[]) {
 	}
 
 	if (MAIN.verbose > 1) {
-		fprintf(stderr, "orig:%zu\n", P->end);
+		fprintf(stderr, "orig:%"PRIuZ"\n", P->end);
 		hexdump(P->data, P->end, stdout);
 
-		fprintf(stderr, "copy:%zu\n", Q->end);
+		fprintf(stderr, "copy:%"PRIuZ"\n", Q->end);
 		hexdump(Q->data, Q->end, stdout);
 	}
 
@@ -7204,7 +7219,7 @@ static int expand_domain(int argc, char *argv[]) {
 	len = slurp(&src, 0, stdin, "-");
 
 	if (!(pkt = dns_p_make(len, &error)))
-		panic("malloc(%zu): %s", len, dns_strerror(error));
+		panic("malloc(%"PRIuZ"): %s", len, dns_strerror(error));
 
 	memcpy(pkt->data, src, len);
 	pkt->end = len;
@@ -7428,7 +7443,7 @@ static int send_query(int argc, char *argv[]) {
 		panic("dns_so_open: %s", dns_strerror(error));
 
 	while (!(A = dns_so_query(so, Q, (struct sockaddr *)&ss, &error))) {
-		if (error != EAGAIN)
+		if (error != DNS_EAGAIN)
 			panic("dns_so_query: %s (%d)", dns_strerror(error), error);
 		if (dns_so_elapsed(so) > 10)
 			panic("query timed-out");
@@ -7521,7 +7536,7 @@ static int resolve_query(int argc, char *argv[]) {
 		panic("%s: %s", MAIN.qname, dns_strerror(error));
 
 	while ((error = dns_res_check(R))) {
-		if (error != EAGAIN)
+		if (error != DNS_EAGAIN)
 			panic("dns_res_check: %s (%d)", dns_strerror(error), error);
 		if (dns_res_elapsed(R) > 30)
 			panic("query timed-out");
@@ -7535,11 +7550,11 @@ static int resolve_query(int argc, char *argv[]) {
 
 	st = dns_res_stat(R);
 	putchar('\n');
-	printf(";; queries:  %zu\n", st->queries);
-	printf(";; udp sent: %zu in %zu bytes\n", st->udp.sent.count, st->udp.sent.bytes);
-	printf(";; udp rcvd: %zu in %zu bytes\n", st->udp.rcvd.count, st->udp.rcvd.bytes);
-	printf(";; tcp sent: %zu in %zu bytes\n", st->tcp.sent.count, st->tcp.sent.bytes);
-	printf(";; tcp rcvd: %zu in %zu bytes\n", st->tcp.rcvd.count, st->tcp.rcvd.bytes);
+	printf(";; queries:  %"PRIuZ"\n", st->queries);
+	printf(";; udp sent: %"PRIuZ" in %"PRIuZ" bytes\n", st->udp.sent.count, st->udp.sent.bytes);
+	printf(";; udp rcvd: %"PRIuZ" in %"PRIuZ" bytes\n", st->udp.rcvd.count, st->udp.rcvd.bytes);
+	printf(";; tcp sent: %"PRIuZ" in %"PRIuZ" bytes\n", st->tcp.sent.count, st->tcp.sent.bytes);
+	printf(";; tcp rcvd: %"PRIuZ" in %"PRIuZ" bytes\n", st->tcp.rcvd.count, st->tcp.rcvd.bytes);
 
 	dns_res_close(R);
 
@@ -7581,7 +7596,7 @@ static int resolve_addrinfo(int argc, char *argv[]) {
 			break;
 		case ENOENT:
 			break;
-		case EAGAIN:
+		case DNS_EAGAIN:
 			if (dns_ai_elapsed(ai) > 30)
 				panic("query timed-out");
 
@@ -7725,7 +7740,7 @@ static int sizes(int argc, char *argv[]) {
 		SIZE(struct dns_sshfp, struct dns_txt, union dns_any),
 		SIZE(struct dns_resolv_conf, struct dns_hosts, struct dns_hints, struct dns_hints_i),
 		SIZE(struct dns_options, struct dns_socket, struct dns_resolver, struct dns_addrinfo),
-		SIZE(struct dns_cache),
+		SIZE(struct dns_cache), SIZE(size_t), SIZE(void *), SIZE(long)
 	};
 	unsigned i, max;
 
@@ -7733,7 +7748,7 @@ static int sizes(int argc, char *argv[]) {
 		max = MAX(max, strlen(type[i].name));
 
 	for (i = 0; i < lengthof(type); i++)
-		printf("%*s : %zu\n", max, type[i].name, type[i].size);
+		printf("%*s : %"PRIuZ"\n", max, type[i].name, type[i].size);
 
 	return 0;
 } /* sizes() */

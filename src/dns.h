@@ -64,7 +64,7 @@
 
 #define DNS_VENDOR "william@25thandClement.com"
 
-#define DNS_V_REL  0x20110117
+#define DNS_V_REL  0x20120610
 #define DNS_V_ABI  0x20100709
 #define DNS_V_API  0x20100709
 
