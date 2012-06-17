@@ -4929,6 +4929,11 @@ static int dns_so_verify(struct dns_socket *so, struct dns_packet *P) {
 } /* dns_so_verify() */
 
 
+#if defined __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warray-bounds"
+#endif
+
 static int dns_so_tcp_send(struct dns_socket *so) {
 	unsigned char *qsrc;
 	size_t qend;
@@ -4990,6 +4995,10 @@ static int dns_so_tcp_recv(struct dns_socket *so) {
 
 	return 0;
 } /* dns_so_tcp_recv() */
+
+#if __clang__
+#pragma clang diagnostic pop
+#endif
 
 
 int dns_so_check(struct dns_socket *so) {

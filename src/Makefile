@@ -22,8 +22,8 @@
 # attribution in several areas in the codebase.
 #
 #
-# Presently there are two warning types in GCC and clang which cause false
-# positives with dns.c, and which cannot be easily remedied because the fix
+# Presently there's one warning type in GCC and clang which causes false
+# positives with dns.c and which cannot be easily remedied because the fix
 # would be foolish.
 #
 # 1) With named initializers one can redefine the value of a member multiple
@@ -32,7 +32,7 @@
 #    is relied upon to allow user code to override default values set from
 #    macroized initializers. Combined with compound literals, this behavior
 #    allows for some concise and convenient constructs. It would be a
-#    headache, and the result needlessly obstrusive, to refactor code using
+#    headache, and the result needlessly obtrusive, to refactor code using
 #    these macros.
 #
 #    a) GCC emits initializer warnings with -Wextra. To disable, use
@@ -43,21 +43,10 @@
 #
 #       -Wno-initializer-overrides
 #
-#  2) The socket code uses negative indexing to load and store the TCP
-#     header. The packet structure uses an anonymous member to provide
-#     padding, making this a safe operation. Refactoring TCP header
-#     manipulation would add almost infinite complexity over the existing,
-#     exceedingly clear and concise code.
-#
-#     a) clang emits array-bounds warnings by default. To disable, use
-#
-#        -Wno-array-bounds
-#
-#
 cc-option = $(shell if $(CC) $(1) -S -o /dev/null -xc /dev/null > /dev/null 2>&1; then echo "$(1)"; else echo "$(2)"; fi;)
 
 CPPFLAGS	+= -DDNS_DEBUG -DDNS_MAIN
-CFLAGS		+= -std=gnu99 -Wall -O2 -g -fstack-protector $(call cc-option, -Wno-override-init) $(call cc-option, -Wno-initializer-overrides) $(call cc-option, -Wno-array-bounds)
+CFLAGS		+= -std=gnu99 -Wall -O2 -g -fstack-protector $(call cc-option, -Wno-override-init) $(call cc-option, -Wno-initializer-overrides)
 
 EXE_CC		= $(shell find $$(echo $${PATH} | tr ':' ' ') -maxdepth 1 -name \*mingw32-gcc -o -name gcc-\* | while read GCC; do echo $$($$GCC -v 2>&1 | tail -n1 | cut -d' ' -f3) $$GCC; done | sort -nr | head -n1 | cut -d' ' -f2)
 EXE_CPPFLAGS	+= $(CPPFLAGS)
