@@ -118,6 +118,8 @@
 #define PRIuZ "zu"
 #endif
 
+#define DNS_NOTUSED __attribute__((unused))
+
 
 /*
  * D E B U G  M A C R O S
@@ -241,7 +243,7 @@ const char *dns_strerror(int error) {
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-static void dns_atomic_fence(void) {
+DNS_NOTUSED static void dns_atomic_fence(void) {
 	return;
 } /* dns_atomic_fence() */
 
@@ -261,7 +263,7 @@ static unsigned dns_atomic_load(dns_atomic_t *i) {
 } /* dns_atomic_load() */
 
 
-static unsigned dns_atomic_store(dns_atomic_t *i, unsigned n) {
+DNS_NOTUSED static unsigned dns_atomic_store(dns_atomic_t *i, unsigned n) {
 	unsigned o;
 
 	o	= dns_atomic_load(i);
@@ -455,7 +457,7 @@ static unsigned dns_k_permutor_E(struct dns_k_permutor *p, unsigned n) {
 } /* dns_k_permutor_E() */
 
 
-static unsigned dns_k_permutor_D(struct dns_k_permutor *p, unsigned n) {
+DNS_NOTUSED static unsigned dns_k_permutor_D(struct dns_k_permutor *p, unsigned n) {
 	unsigned l[2], r[2];
 	unsigned i;
 
@@ -4637,7 +4639,7 @@ soerr:
 	error	= dns_soerr();
 
 	goto error;
-syerr:
+syerr: DNS_NOTUSED
 	error	= dns_syerr();
 
 	goto error;

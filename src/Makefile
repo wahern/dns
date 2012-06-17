@@ -1,9 +1,9 @@
 CPPFLAGS	+= -DDNS_DEBUG -DDNS_MAIN
-CFLAGS		+= -std=gnu99 -Wall -Wno-unused-function -Wno-unused-parameter -O2 -g -fstack-protector
+CFLAGS		+= -std=gnu99 -Wall -O2 -g -fstack-protector
 
-EXE_CC		= mingw32-gcc
+EXE_CC		= $(shell find $$(echo $${PATH} | tr ':' ' ') -maxdepth 1 -name \*mingw32-gcc -o -name gcc-\* | while read GCC; do echo $$($$GCC -v 2>&1 | tail -n1 | cut -d' ' -f3) $$GCC; done | sort -nr | head -n1 | cut -d' ' -f2)
 EXE_CPPFLAGS	+= $(CPPFLAGS)
-EXE_CFLAGS	+= -std=gnu99 -Wall -Wno-unused-function -Wno-unused-label -O2 -g -fstack-protector
+EXE_CFLAGS	+= -std=gnu99 -Wall -O2 -g
 EXE_LIBS	+= -lws2_32 -lgdi32
 
 all: dns
