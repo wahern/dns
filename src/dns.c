@@ -7303,7 +7303,7 @@ static int query_hosts(int argc, char *argv[]) {
 		int af	= (strchr(MAIN.qname, ':'))? AF_INET6 : AF_INET;
 
 		if (1 != dns_inet_pton(af, MAIN.qname, &addr))
-			panic("%s: %s", MAIN.qname, dns_strerror(error));
+			panic("%s: invalid address", MAIN.qname);
 
 		qlen	= dns_ptr_qname(qname, sizeof qname, af, &addr);
 	} else
