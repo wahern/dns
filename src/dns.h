@@ -420,7 +420,16 @@ int dns_rr_cmp(struct dns_rr *, struct dns_packet *, struct dns_rr *, struct dns
 size_t dns_rr_print(void *, size_t, struct dns_rr *, struct dns_packet *, int *);
 
 
-#define dns_rr_i_new(P, ...)		dns_rr_i_init(&(struct dns_rr_i){ 0, __VA_ARGS__ }, (P))
+#if defined __clang__
+#define dns_rr_i_new(P, ...) \
+	_Pragma("clang diagnostic push") \
+	_Pragma("clang diagnostic ignored \"-Winitializer-overrides\"") \
+	dns_rr_i_init(&(struct dns_rr_i){ 0, __VA_ARGS__ }, (P)) \
+	_Pragma("clang diagnostic pop")
+#else
+#define dns_rr_i_new(P, ...) \
+	dns_rr_i_init(&(struct dns_rr_i){ 0, __VA_ARGS__ }, (P))
+#endif
 
 struct dns_rr_i {
 	enum dns_section section;
