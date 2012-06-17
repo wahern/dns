@@ -57,6 +57,28 @@
 
 
 /*
+ * C O M P I L E R  A N N O T A T I O N S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+#define SPF_NOTUSED __attribute__((unused))
+
+#if __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-parameter"
+#pragma clang diagnostic ignored "-Wunused-function"
+#pragma clang diagnostic ignored "-Winitializer-overrides"
+#pragma clang diagnostic ignored "-Wmissing-field-initializers"
+#elif (__GNUC__ == 4 && __GNUC_MINOR__ >= 6) || __GNUC__ > 4
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#pragma GCC diagnostic ignored "-Wunused-function"
+#pragma GCC diagnostic ignored "-Woverride-init"
+#pragma GCC diagnostic ignored "-Wstrict-aliasing" /* IN6_IS_ADDR_V4COMPAT, ... */
+#endif
+
+
+/*
  * D E B U G  R O U T I N E S
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -767,7 +789,7 @@ static _Bool sbuf_puts(struct spf_sbuf *sbuf, const char *src) {
 	return !sbuf->overflow;
 } /* sbuf_puts() */
 
-static _Bool sbuf_putv(struct spf_sbuf *sbuf, const void *src, size_t len) {
+SPF_NOTUSED static _Bool sbuf_putv(struct spf_sbuf *sbuf, const void *src, size_t len) {
 	size_t lim = SPF_MIN(len, (sizeof sbuf->str - 1) - sbuf->end);
 
 	memcpy(&sbuf->str[sbuf->end], src, lim);
@@ -917,7 +939,7 @@ static _Bool sbuf_vmt(struct spf_sbuf *sbuf, const char *fmt, va_list ap) {
 	return !sbuf->overflow;
 } /* sbuf_vmt() */
 
-static _Bool sbuf_fmt(struct spf_sbuf *sbuf, const char *fmt, ...) {
+SPF_NOTUSED static _Bool sbuf_fmt(struct spf_sbuf *sbuf, const char *fmt, ...) {
 	va_list ap;
 	va_start(ap, fmt);
 	sbuf_vmt(sbuf, fmt, ap);
@@ -2334,7 +2356,7 @@ static void op_load(struct spf_vm *vm) {
 
 
 static void op_store(struct spf_vm *vm) {
-	int p, t;
+	int p;
 	intptr_t v;
 	p = vm_indexof(vm, vm_pop(vm, T_INT));
 	v = vm_pop(vm, T_INT); /* restrict to T_INT so we don't have to worry about GC. */
@@ -2651,7 +2673,7 @@ static void op_grep(struct spf_vm *vm) {
 	struct dns_packet *pkt;
 	char *name;
 	struct vm_grep *grep;
-	int sec, type, error;
+	int sec, type;
 
 	pkt  = (void *)vm_peek(vm, -4, T_REF|T_MEM);
 	name = (void *)vm_peek(vm, -3, T_REF|T_MEM);
@@ -2806,7 +2828,6 @@ static void op_nextent(struct spf_vm *vm) {
 
 static void op_getenv(struct spf_vm *vm) {
 	char dst[512];
-	int error;
 
 	spf_getenv(dst, sizeof dst, vm_pop(vm, T_INT), &vm->spf->env);
 	vm_strdup(vm, dst);
@@ -2817,7 +2838,6 @@ static void op_getenv(struct spf_vm *vm) {
 
 static void op_setenv(struct spf_vm *vm) {
 	char *src;
-	int error;
 
 	vm_assert(vm, (src = (char *)vm_peek(vm, -2, T_REF|T_MEM)), EINVAL);
 	spf_setenv(&vm->spf->env, vm_pop(vm, T_INT), src);
@@ -3383,7 +3403,7 @@ static void op_a_mxv(struct spf_vm *vm) {
 	int prefix4 = vm_peek(vm, -2, T_INT);
 	struct addrinfo *ent = (void *)vm_peek(vm, -1, T_REF|T_MEM);
 	union { struct in_addr a4; struct in6_addr a6; } a, b;
-	int af, prefix, error, match = 0;
+	int af, prefix, match = 0;
 
 	if (!strcmp(vm->spf->env.v, "ip6")) {
 		af     = AF_INET6;
@@ -3984,7 +4004,7 @@ static const struct {
 	[OP_EXP] = { "exp", &op_exp, },
 }; /* vm_op[] */
 
-static const char *vm_strcode(int code) {
+SPF_NOTUSED static const char *vm_strcode(int code) {
 	return vm_op[code].name;
 } /* vm_strcode() */
 
@@ -4084,8 +4104,6 @@ error:
 
 
 void spf_close(struct spf_resolver *spf) {
-	struct spf_rr *rr;
-
 	if (!spf)
 		return;
 
@@ -4229,7 +4247,6 @@ static struct dns_cache *mkcache(void) {
 
 static struct dns_resolv_conf *mkresconf(void) {
 	static struct dns_resolv_conf *resconf;
-	unsigned i;
 	int error;
 
 	if (resconf)
@@ -4286,7 +4303,7 @@ static int vm(const struct spf_env *env, const char *file) {
 	FILE *fp = stdin;
 	struct spf_resolver *spf;
 	struct spf_vm *vm;
-	char line[256], *str, *eos;
+	char line[256], *eos;
 	long i;
 	struct vm_sub sub;
 	int code, error;
@@ -4822,5 +4839,11 @@ vm:		return vm(&env, file);
 	return 0;
 } /* main() */
 
-
 #endif /* SPF_MAIN */
+
+
+#if __clang__
+#pragma clang diagnostic pop
+#elif (__GNUC__ == 4 && __GNUC_MINOR__ >= 6) || __GNUC__ > 4
+#pragma GCC diagnostic pop
+#endif

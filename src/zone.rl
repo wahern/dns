@@ -60,6 +60,15 @@
 #define HAI SAY("HAI")
 
 
+#if __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-variable"
+#elif (__GNUC__ == 4 && __GNUC_MINOR__ >= 6) || __GNUC__ > 4
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-variable"
+#endif
+
+
 /*
  * P R E - P R O C E S S I N G  R O U T I N E S
  *
@@ -701,3 +710,10 @@ int main(int argc, char **argv) {
 } /* main() */
 
 #endif /* ZONE_MAIN */
+
+
+#if __clang__
+#pragma clang diagnostic pop
+#elif (__GNUC__ == 4 && __GNUC_MINOR__ >= 6) || __GNUC__ > 4
+#pragma GCC diagnostic pop
+#endif

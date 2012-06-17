@@ -35,7 +35,7 @@ dns.S: dns.c
 
 
 SPF_CPPFLAGS += 
-SPF_CFLAGS   += -std=gnu99 -Wall -Wno-unused-function -Wno-unused-variable -O2 -g -fstack-protector
+SPF_CFLAGS   += -std=gnu99 -Wall -O2 -g -fstack-protector
 
 %.c: %.rl
 	ragel -C -o $@ $<
