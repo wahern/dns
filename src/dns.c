@@ -96,7 +96,6 @@
 #elif (__GNUC__ == 4 && __GNUC_MINOR__ >= 6) || __GNUC__ > 4
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
-#pragma GCC diagnostic ignored "-Woverride-init"
 #endif
 
 

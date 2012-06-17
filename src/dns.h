@@ -64,7 +64,7 @@
 
 #define DNS_VENDOR "william@25thandClement.com"
 
-#define DNS_V_REL  0x20120616
+#define DNS_V_REL  0x20120617
 #define DNS_V_ABI  0x20100709
 #define DNS_V_API  0x20100709
 
@@ -426,6 +426,15 @@ size_t dns_rr_print(void *, size_t, struct dns_rr *, struct dns_packet *, int *)
 	_Pragma("clang diagnostic ignored \"-Winitializer-overrides\"") \
 	dns_rr_i_init(&(struct dns_rr_i){ 0, __VA_ARGS__ }, (P)) \
 	_Pragma("clang diagnostic pop")
+#elif (__GNUC__ == 4 && __GNUC_MINOR__ >= 6) || __GNUC__ > 4
+/* GCC parses the _Pragma operator less elegantly than clang. */
+#define dns_rr_i_new(P, ...) \
+	dns_rr_i_init(&({ \
+		_Pragma("GCC diagnostic push") \
+		_Pragma("GCC diagnostic ignored \"-Woverride-init\"") \
+		(struct dns_rr_i){ 0, __VA_ARGS__ }; \
+		_Pragma("GCC diagnostic pop") \
+	}), (P))
 #else
 #define dns_rr_i_new(P, ...) \
 	dns_rr_i_init(&(struct dns_rr_i){ 0, __VA_ARGS__ }, (P))
