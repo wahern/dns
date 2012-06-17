@@ -84,6 +84,23 @@
 
 
 /*
+ * C O M P I L E R  A N N O T A T I O N S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+#define DNS_NOTUSED __attribute__((unused))
+
+#if __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-parameter"
+#elif (__GNUC__ == 4 && __GNUC_MINOR__ >= 6) || __GNUC__ > 4
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#pragma GCC diagnostic ignored "-Woverride-init"
+#endif
+
+
+/*
  * S T A N D A R D  M A C R O S
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -117,8 +134,6 @@
 #else
 #define PRIuZ "zu"
 #endif
-
-#define DNS_NOTUSED __attribute__((unused))
 
 
 /*
@@ -7936,3 +7951,14 @@ int main(int argc, char **argv) {
 
 
 #endif /* DNS_MAIN */
+
+
+/*
+ * pop file-scoped compiler annotations
+ */
+#if __clang__
+#pragma clang diagnostic pop
+#elif (__GNUC__ == 4 && __GNUC_MINOR__ >= 6) || __GNUC__ > 4
+#pragma GCC diagnostic pop
+#endif
+
