@@ -64,7 +64,7 @@
 
 #define DNS_VENDOR "william@25thandClement.com"
 
-#define DNS_V_REL  0x20120617
+#define DNS_V_REL  0x20120618
 #define DNS_V_ABI  0x20100709
 #define DNS_V_API  0x20100709
 
@@ -92,6 +92,44 @@ enum dns_errno {
 const char *dns_strerror(int);
 
 extern int dns_debug;
+
+
+/*
+ * C O M P I L E R  A N N O T A T I O N S
+ *
+ * GCC with -Wextra, and clang by default, complain about overrides in
+ * initializer lists. Overriding previous member initializers is well
+ * defined behavior in C. dns.c relies on this behavior to define default,
+ * overrideable member values when instantiating configuration objects.
+ *
+ * dns_quietinit() guards a compound literal expression with pragmas to
+ * silence these shrill warnings. This alleviates the burden of requiring
+ * third-party projects to adjust their compiler flags.
+ *
+ * NOTE: If you take the address of the compound literal, take the address
+ * of the transformed expression, otherwise the compound literal lifetime is
+ * tied to the scope of the GCC statement expression.
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+#if defined __clang__
+#define dns_quietinit(...) \
+	_Pragma("clang diagnostic push") \
+	_Pragma("clang diagnostic ignored \"-Winitializer-overrides\"") \
+	__VA_ARGS__ \
+	_Pragma("clang diagnostic pop")
+#elif (__GNUC__ == 4 && __GNUC_MINOR__ >= 6) || __GNUC__ > 4
+/* GCC parses the _Pragma operator less elegantly than clang. */
+#define dns_quietinit(...) \
+	({ \
+		_Pragma("GCC diagnostic push") \
+		_Pragma("GCC diagnostic ignored \"-Woverride-init\"") \
+		__VA_ARGS__; \
+		_Pragma("GCC diagnostic pop") \
+	})
+#else
+#define dns_quietinit(...) __VA_ARGS__
+#endif
 
 
 /*
@@ -420,25 +458,8 @@ int dns_rr_cmp(struct dns_rr *, struct dns_packet *, struct dns_rr *, struct dns
 size_t dns_rr_print(void *, size_t, struct dns_rr *, struct dns_packet *, int *);
 
 
-#if defined __clang__
 #define dns_rr_i_new(P, ...) \
-	_Pragma("clang diagnostic push") \
-	_Pragma("clang diagnostic ignored \"-Winitializer-overrides\"") \
-	dns_rr_i_init(&(struct dns_rr_i){ 0, __VA_ARGS__ }, (P)) \
-	_Pragma("clang diagnostic pop")
-#elif (__GNUC__ == 4 && __GNUC_MINOR__ >= 6) || __GNUC__ > 4
-/* GCC parses the _Pragma operator less elegantly than clang. */
-#define dns_rr_i_new(P, ...) \
-	dns_rr_i_init(&({ \
-		_Pragma("GCC diagnostic push") \
-		_Pragma("GCC diagnostic ignored \"-Woverride-init\"") \
-		(struct dns_rr_i){ 0, __VA_ARGS__ }; \
-		_Pragma("GCC diagnostic pop") \
-	}), (P))
-#else
-#define dns_rr_i_new(P, ...) \
-	dns_rr_i_init(&(struct dns_rr_i){ 0, __VA_ARGS__ }, (P))
-#endif
+	dns_rr_i_init(&dns_quietinit((struct dns_rr_i){ 0, __VA_ARGS__ }), (P))
 
 struct dns_rr_i {
 	enum dns_section section;
@@ -901,7 +922,7 @@ void dns_cache_close(struct dns_cache *);
 #define DNS_OPTS_INITIALIZER  { DNS_OPTS_INITIALIZER_ }
 #define DNS_OPTS_INIT(...)    { DNS_OPTS_INITIALIZER_, __VA_ARGS__ }
 
-#define dns_opts(...) (&(struct dns_options)DNS_OPTS_INIT(__VA_ARGS__))
+#define dns_opts(...) (&dns_quietinit((struct dns_options)DNS_OPTS_INIT(__VA_ARGS__)))
 
 struct dns_options {
 	/*
