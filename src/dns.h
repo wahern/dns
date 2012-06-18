@@ -65,8 +65,8 @@
 #define DNS_VENDOR "william@25thandClement.com"
 
 #define DNS_V_REL  0x20120618
-#define DNS_V_ABI  0x20100709
-#define DNS_V_API  0x20100709
+#define DNS_V_ABI  0x20120618
+#define DNS_V_API  0x20120618
 
 
 const char *dns_vendor(void);
@@ -79,17 +79,35 @@ int dns_v_api(void);
 /*
  * E R R O R S
  *
+ * Errors and exceptions are always returned through an int. This should
+ * hopefully make integration easier in the majority of circumstances, and
+ * also cut down on useless compiler warnings.
+ *
+ * System and library errors are returned together. POSIX guarantees that
+ * all system errors are positive integers. Library errors are always
+ * negative integers in the range DNS_EBASE to DNS_ELAST, with the high bits
+ * set to the three magic ASCII characters "dns".
+ *
+ * dns_strerror() returns static English string descriptions of all known
+ * errors, and punts the remainder to strerror(3).
+ *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+#define DNS_EBASE -(('d' << 24) | ('n' << 16) | ('s' << 8) | 64)
+
+#define dns_error_t int /* for documentation only */
+
 enum dns_errno {
-	DNS_ENOBUFS	= -(('d' << 24) | ('n' << 16) | ('s' << 8) | 64),
+	DNS_ENOBUFS = DNS_EBASE,
 	DNS_EILLEGAL,
 	DNS_EORDER,
 	DNS_ESECTION,
 	DNS_EUNKNOWN,
+	DNS_EADDRESS,
+	DNS_ELAST,
 }; /* dns_errno */
 
-const char *dns_strerror(int);
+const char *dns_strerror(dns_error_t);
 
 extern int dns_debug;
 

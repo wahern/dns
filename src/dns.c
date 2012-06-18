@@ -250,6 +250,8 @@ const char *dns_strerror(int error) {
 		return "Invalid section specified";
 	case DNS_EUNKNOWN:
 		return "Unknown DNS error";
+	case DNS_EADDRESS:
+		return "Invalid textual address form";
 	default:
 		return strerror(error);
 	} /* switch() */
@@ -701,6 +703,23 @@ static const char *dns_inet_ntop(int af, const void *src, void *dst, unsigned lo
 #define dns_inet_pton(...)	inet_pton(__VA_ARGS__)
 #define dns_inet_ntop(...)	inet_ntop(__VA_ARGS__)
 #endif
+
+
+static dns_error_t dns_pton(int af, const void *src, void *dst) {
+	switch (dns_inet_pton(af, src, dst)) {
+	case 1:
+		return 0;
+	case -1:
+		return dns_soerr();
+	default:
+		return DNS_EADDRESS;
+	}
+} /* dns_pton() */
+
+
+static dns_error_t dns_ntop(int af, const void *src, void *dst, unsigned long lim) {
+	return (dns_inet_ntop(af, src, dst, lim))? 0 : dns_soerr();
+} /* dns_ntop() */
 
 
 size_t dns_strlcpy(char *dst, const char *src, size_t lim) {
@@ -3701,7 +3720,7 @@ static enum dns_resconf_keyword dns_resconf_keyword(const char *word) {
 static int dns_resconf_pton(struct sockaddr_storage *ss, const char *src) {
 	struct { char buf[128], *p; } addr = { "", addr.buf };
 	unsigned short port = 0;
-	int ch, af = AF_INET;
+	int ch, af = AF_INET, error;
 
 	while ((ch = *src++)) {
 		switch (ch) {
@@ -3733,12 +3752,8 @@ static int dns_resconf_pton(struct sockaddr_storage *ss, const char *src) {
 	} /* while() */
 inet:
 
-	switch (dns_inet_pton(af, addr.buf, dns_sa_addr(af, ss))) {
-	case -1:
-		return errno;
-	case 0:
-		return EINVAL;
-	} /* switch() */
+	if ((error = dns_pton(af, addr.buf, dns_sa_addr(af, ss))))
+		return error;
 
 	port = (!port)? 53 : port;
 	*dns_sa_port(af, ss) = htons(port);
@@ -3941,10 +3956,11 @@ int dns_resconf_loadpath(struct dns_resolv_conf *resconf, const char *path) {
 
 
 int dns_resconf_setiface(struct dns_resolv_conf *resconf, const char *addr, unsigned short port) {
-	int af	= (strchr(addr, ':'))? AF_INET6 : AF_INET;
+	int af = (strchr(addr, ':'))? AF_INET6 : AF_INET;
+	int error;
 
-	if (1 != dns_inet_pton(af, addr, dns_sa_addr(af, &resconf->iface)))
-		return dns_soerr();
+	if ((error = dns_pton(af, addr, dns_sa_addr(af, &resconf->iface))))
+		return error;
 
 	*dns_sa_port(af, &resconf->iface)	= htons(port);
 	resconf->iface.ss_family		= af;
@@ -4228,8 +4244,8 @@ struct dns_hints *dns_hints_root(struct dns_resolv_conf *resconf, int *error_) {
 	for (i = 0; i < lengthof(root_hints); i++) {
 		af	= root_hints[i].af;
 
-		if (1 != dns_inet_pton(af, root_hints[i].addr, dns_sa_addr(af, &ss)))
-			goto soerr;
+		if ((error = dns_pton(af, root_hints[i].addr, dns_sa_addr(af, &ss))))
+			goto error;
 
 		*dns_sa_port(af, &ss)	= htons(53);
 		ss.ss_family		= af;
@@ -4239,10 +4255,6 @@ struct dns_hints *dns_hints_root(struct dns_resolv_conf *resconf, int *error_) {
 	}
 
 	return hints;
-soerr:
-	error	= dns_soerr();
-
-	goto error;
 error:
 	*error_	= error;
 
@@ -4486,15 +4498,16 @@ int dns_hints_dump(struct dns_hints *hints, FILE *fp) {
 	struct dns_hints_soa *soa;
 	char addr[INET6_ADDRSTRLEN];
 	unsigned i;
-	int af;
+	int af, error;
 
 	for (soa = hints->head; soa; soa = soa->next) {
 		fprintf(fp, "ZONE \"%s\"\n", soa->zone);
 
 		for (i = 0; i < soa->count; i++) {
-			af	= soa->addrs[i].ss.ss_family;
-			if (!dns_inet_ntop(af, dns_sa_addr(af, &soa->addrs[i].ss), addr, sizeof addr))
-				return dns_soerr();
+			af = soa->addrs[i].ss.ss_family;
+
+			if ((error = dns_ntop(af, dns_sa_addr(af, &soa->addrs[i].ss), addr, sizeof addr)))
+				return error;
 
 			fprintf(fp, "\t(%d) [%s]:%hu\n", (int)soa->addrs[i].priority, addr, ntohs(*dns_sa_port(af, &soa->addrs[i].ss)));
 		}
@@ -7329,8 +7342,8 @@ static int query_hosts(int argc, char *argv[]) {
 		union { struct in_addr a; struct in6_addr a6; } addr;
 		int af	= (strchr(MAIN.qname, ':'))? AF_INET6 : AF_INET;
 
-		if (1 != dns_inet_pton(af, MAIN.qname, &addr))
-			panic("%s: invalid address", MAIN.qname);
+		if ((error = dns_pton(af, MAIN.qname, &addr)))
+			panic("%s: %s", MAIN.qname, dns_strerror(error));
 
 		qlen	= dns_ptr_qname(qname, sizeof qname, af, &addr);
 	} else
@@ -7439,8 +7452,8 @@ static int send_query(int argc, char *argv[]) {
 	if (argc > 1) {
 		ss.ss_family	= (strchr(argv[1], ':'))? AF_INET6 : AF_INET;
 		
-		if (1 != dns_inet_pton(ss.ss_family, argv[1], dns_sa_addr(ss.ss_family, &ss)))
-			panic("%s: invalid host address", argv[1]);
+		if ((error = dns_pton(ss.ss_family, argv[1], dns_sa_addr(ss.ss_family, &ss))))
+			panic("%s: %s", argv[1], dns_strerror(error));
 
 		*dns_sa_port(ss.ss_family, &ss)	= htons(53);
 	} else
