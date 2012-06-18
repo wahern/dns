@@ -34,7 +34,11 @@
 #define _DARWIN_C_SOURCE
 
 #include <stddef.h>		/* offsetof() */
+#ifdef _WIN32
+#define uint32_t unsigned int
+#else
 #include <stdint.h>		/* uint32_t */
+#endif
 #include <stdlib.h>		/* malloc(3) realloc(3) free(3) rand(3) random(3) arc4random(3) */
 #include <stdio.h>		/* FILE fopen(3) fclose(3) getc(3) rewind(3) */
 
