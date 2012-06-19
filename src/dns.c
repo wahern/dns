@@ -23,6 +23,7 @@
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
  * ==========================================================================
  */
+#ifndef __FreeBSD__
 #ifndef _XOPEN_SOURCE
 #define _XOPEN_SOURCE	600
 #endif
@@ -32,6 +33,10 @@
 
 #undef _DARWIN_C_SOURCE
 #define _DARWIN_C_SOURCE
+
+#undef _NETBSD_SOURCE
+#define _NETBSD_SOURCE
+#endif
 
 #include <stddef.h>		/* offsetof() */
 #ifdef _WIN32
