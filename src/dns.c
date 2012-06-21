@@ -23,7 +23,7 @@
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
  * ==========================================================================
  */
-#ifndef __FreeBSD__
+#if !defined(__FreeBSD__) && !defined(__sun)
 #ifndef _XOPEN_SOURCE
 #define _XOPEN_SOURCE	600
 #endif
@@ -4675,10 +4675,12 @@ soerr:
 	error	= dns_soerr();
 
 	goto error;
-syerr: DNS_NOTUSED
+#if defined(F_SETFD) || defined(O_NONBLOCK)
+syerr:
 	error	= dns_syerr();
 
 	goto error;
+#endif
 error:
 	*error_	= error;
 
@@ -6175,9 +6177,11 @@ error:
 void dns_res_clear(struct dns_resolver *R) {
 	switch (R->stack[R->sp].state) {
 	case DNS_R_CHECK:
-		return R->cache->clear(R->cache);
+		R->cache->clear(R->cache);
+		break;
 	default:
-		return dns_so_clear(&R->so);
+		dns_so_clear(&R->so);
+		break;
 	}
 } /* dns_res_clear() */
 
@@ -6626,7 +6630,7 @@ time_t dns_ai_elapsed(struct dns_addrinfo *ai) {
 
 
 void dns_ai_clear(struct dns_addrinfo *ai) {
-	return dns_res_clear(ai->res);
+	dns_res_clear(ai->res);
 } /* dns_ai_clear() */
 
 
