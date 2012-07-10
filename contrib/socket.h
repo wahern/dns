@@ -60,7 +60,7 @@
 
 #define SOCKET_VENDOR "william@25thandClement.com"
 
-#define SOCKET_V_REL  0x20120413
+#define SOCKET_V_REL  0x20120526
 #define SOCKET_V_ABI  0x20111224
 #define SOCKET_V_API  0x20111224
 

@@ -365,7 +365,7 @@ const char *so_strerror(int error) {
 	} else {
 		int index = error - SO_ERRNO0;
 
-		if (index >= 0 && index < lengthof(errlist) && errlist[index])
+		if (index >= 0 && index < (int)lengthof(errlist) && errlist[index])
 			return errlist[index];
 		else
 			return "Unknown socket error";
@@ -467,7 +467,8 @@ void *sa_pton(void *any, size_t lim, const char *addr) {
 		struct sockaddr_in sin;
 		struct sockaddr_in6 sin6;
 	} saddr[2] = { { { .sa_family = AF_INET } }, { { .sa_family = AF_INET6 } } };
-	int i, ret;
+	unsigned i;
+	int ret;
 
 	memset(any, 0, lim);
 
@@ -728,9 +729,11 @@ enum so_state {
 	SO_S_LISTEN   = 1<<4,
 	SO_S_CONNECT  = 1<<5,
 	SO_S_STARTTLS = 1<<6,
-	SO_S_RSTLOWAT = 1<<7,
-	SO_S_SHUTRD   = 1<<8,
-	SO_S_SHUTWR   = 1<<9,
+	SO_S_SETREAD  = 1<<7,
+	SO_S_SETWRITE = 1<<8,
+	SO_S_RSTLOWAT = 1<<9,
+	SO_S_SHUTRD   = 1<<10,
+	SO_S_SHUTWR   = 1<<11,
 
 	SO_S_END,
 	SO_S_ALL = ((SO_S_END - 1) << 1) - 1
@@ -934,12 +937,14 @@ static int so_starttls_(struct socket *so) {
 		break;
 	} /* switch(so->ssl.state) */
 
+#if SOCKET_DEBUG
 	if (SOCKET_DEBUG) {
 		const SSL_CIPHER *cipher = SSL_get_current_cipher(so->ssl.ctx);
 
 		so_trace(SO_T_STARTTLS, so->fd, so->host, so->ssl.ctx,
 			"%s-%s", SSL_get_version(so->ssl.ctx), SSL_CIPHER_get_name(cipher));
 	}
+#endif
 
 	return 0;
 error:
@@ -1083,6 +1088,16 @@ exec:
 			goto error;
 
 		so->done |= state;
+
+		goto exec;
+	case SO_S_SETREAD:
+		so->events |= POLLIN;
+		so->done   |= state;
+
+		goto exec;
+	case SO_S_SETWRITE:
+		so->events |= POLLOUT;
+		so->done   |= state;
 
 		goto exec;
 	case SO_S_RSTLOWAT:
@@ -1391,6 +1406,8 @@ size_t so_read(struct socket *so, void *dst, size_t lim, int *error_) {
 	long len;
 	int error;
 
+	so->todo |= SO_S_SETREAD;
+
 	if ((error = so_exec(so)))
 		goto error;
 
@@ -1468,6 +1485,8 @@ error:
 size_t so_write(struct socket *so, const void *src, size_t len, int *error_) {
 	long count;
 	int error;
+
+	so->todo |= SO_S_SETWRITE;
 
 	if ((error = so_exec(so)))
 		goto error;
@@ -1562,7 +1581,7 @@ retry:
 	if (count == -1)
 		goto soerr;
 
-	if (count == lim || !(flags & SO_F_PEEKALL))
+	if ((size_t)count == lim || !(flags & SO_F_PEEKALL))
 		return count;
 pollin:
 	if (!(so->todo & SO_S_RSTLOWAT)) {
@@ -1617,6 +1636,7 @@ const struct so_stat *so_stat(struct socket *so) {
 
 
 void so_clear(struct socket *so) {
+	so->todo   &= ~(SO_S_SETREAD|SO_S_SETWRITE);
 	so->events = 0;
 } /* so_clear() */
 
