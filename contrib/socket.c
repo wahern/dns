@@ -31,14 +31,16 @@
 
 #include <errno.h>	/* EINVAL EAGAIN EWOULDBLOCK EINPROGRESS EALREADY ENAMETOOLONG EOPNOTSUPP */
 
+#include <signal.h>	/* SIGPIPE SIG_IGN sigaction(2) sigemptyset(3) */
+
 #include <assert.h>	/* assert(3) */
 
 #include <time.h>	/* time(2) */
 
 #include <sys/types.h>	/* socklen_t mode_t in_port_t */
-#include <sys/stat.h>	/* fchmod(2) */
+#include <sys/stat.h>	/* fchmod(2) fstat(2) */
 #include <sys/select.h>	/* FD_ZERO FD_SET fd_set select(2) */
-#include <sys/socket.h>	/* AF_UNIX AF_INET AF_INET6 struct sockaddr_storage socket(2) connect(2) bind(2) listen(2) accept(2) getsockname(2) getpeername(2) */
+#include <sys/socket.h>	/* AF_UNIX AF_INET AF_INET6 SO_NOSIGPIPE MSG_NOSIGNAL struct sockaddr_storage socket(2) connect(2) bind(2) listen(2) accept(2) getsockname(2) getpeername(2) */
 
 #if defined(AF_UNIX)
 #include <sys/un.h>	/* struct sockaddr_un */
@@ -577,6 +579,13 @@ int so_socket(int domain, int type, const struct so_options *opts, int *_error) 
 			goto error;
 	}
 
+#if defined(SO_NOSIGPIPE)
+	if ((error = so_nosigpipe(fd, opts->fd_nosigpipe))) {
+		if (error != EOPNOTSUPP)
+			goto error;
+	}
+#endif
+
 	return fd;
 syerr:
 	error = so_syerr();
@@ -673,12 +682,24 @@ int so_nopush(int fd, _Bool nopush) {
 #ifdef TCP_NOPUSH
 	if (0 != setsockopt(fd, IPPROTO_TCP, TCP_NOPUSH, &(int){ nopush }, sizeof (int)))
 		return so_syerr();
+
+	return 0;
 #else
 	return EOPNOTSUPP;
 #endif
+} /* so_nopush() */
+
+
+int so_nosigpipe(int fd, _Bool nosigpipe) {
+#ifdef SO_NOSIGPIPE
+	if (0 != setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &(int){ nosigpipe }, sizeof (int)))
+		return so_syerr();
 
 	return 0;
-} /* so_nopush() */
+#else
+	return EOPNOTSUPP;
+#endif
+} /* so_nosigpipe() */
 
 
 static void x509_discard(X509 **cert) {
@@ -746,6 +767,8 @@ struct socket {
 
 	int fd;
 
+	mode_t mode;
+
 	struct so_stat st;
 
 	struct {
@@ -771,11 +794,61 @@ struct socket {
 }; /* struct socket */
 
 
+static void so_ignore(int signo, struct sigaction *oact) {
+	struct sigaction ign;
+
+	ign.sa_handler = SIG_IGN;
+	sigemptyset(&ign.sa_mask);
+	ign.sa_flags = 0;
+
+	sigaction(signo, &ign, oact);
+} /* so_ignore() */
+
+
+static void so_restore(int signo, struct sigaction *oact) {
+	sigaction(signo, oact, NULL);
+} /* so_restore() */
+
+
+static _Bool so_needign(struct socket *so, _Bool rdonly) {
+#if defined(SO_NOSIGPIPE)
+	if (so->opts.fd_nosigpipe && S_ISSOCK(so->mode))
+		return 0;
+#endif
+	if (so->ssl.ctx)
+		return 1;
+	if (rdonly)
+		return 0;
+#if defined(MSG_NOSIGNAL)
+	if (so->opts.fd_nosigpipe && S_ISSOCK(so->mode))
+		return 0;
+#endif
+	return 1;
+} /* so_needign() */
+
+
+static void so_pipeign(struct socket *so, struct sigaction *oact, _Bool rdonly) {
+	struct sigaction ign;
+
+	if (so_needign(so, rdonly))
+		so_ignore(SIGPIPE, oact);
+} /* so_pipeign() */
+
+
+static void so_pipeok(struct socket *so, struct sigaction *oact, _Bool rdonly) {
+	if (so_needign(so, rdonly))
+		so_restore(SIGPIPE, oact);
+} /* so_pipeok() */
+
+
 static int so_getaddr_(struct socket *so) {
+	struct sigaction oact;
 	int error;
 
 	if (!so->res)
 		return EINVAL;
+
+	so_ignore(SIGPIPE, &oact);
 
 	so->events = 0;
 
@@ -784,6 +857,8 @@ static int so_getaddr_(struct socket *so) {
 
 	if ((error = dns_ai_nextent(&so->host, so->res)))
 		goto error;
+
+	so_restore(SIGPIPE, &oact);
 
 	return 0;
 error:
@@ -798,11 +873,14 @@ error:
 		break;
 	} /* switch() */
 
+	so_restore(SIGPIPE, &oact);
+
 	return error;
 } /* so_getaddr_() */
 
 
 static int so_socket_(struct socket *so) {
+	struct stat st;
 	int error;
 
 	if (!so->host)
@@ -812,6 +890,11 @@ static int so_socket_(struct socket *so) {
 
 	if (-1 == (so->fd = so_socket(so->host->ai_family, so->host->ai_socktype, &so->opts, &error)))
 		return error;
+
+	if (0 != fstat(so->fd, &st))
+		return errno;
+
+	so->mode = st.st_mode;
 
 	return 0;
 } /* so_socket_() */
@@ -876,11 +959,14 @@ soerr:
 
 
 static int so_starttls_(struct socket *so) {
+	struct sigaction oact;
 	X509 *peer;
 	int rval, error;
 
 	if (so->ssl.error)
 		return so->ssl.error;
+
+	so_pipeign(so, &oact, 0);
 
 	ERR_clear_error();
 
@@ -946,10 +1032,14 @@ static int so_starttls_(struct socket *so) {
 	}
 #endif
 
+	so_pipeok(so, &oact, 0);
+
 	return 0;
 error:
 	if (error != SO_EAGAIN)
 		so_trace(SO_T_STARTTLS, so->fd, so->host, so->ssl.ctx, "%s", so_strerror(error));
+
+	so_pipeok(so, &oact, 0);
 
 	return error;
 } /* so_starttls_() */
@@ -1190,6 +1280,7 @@ error:
 
 struct socket *so_fdopen(int fd, const struct so_options *opts, int *error_) {
 	struct socket *so;
+	struct stat st;
 	int error;
 
 	if (!(so = so_init(malloc(sizeof *so), opts)))
@@ -1198,6 +1289,16 @@ struct socket *so_fdopen(int fd, const struct so_options *opts, int *error_) {
 	if ((error = so_cloexec(fd, opts->fd_cloexec))
 	||  (error = so_nonblock(fd, opts->fd_nonblock)))
 		goto error;
+
+	if (0 != fstat(fd, &st))
+		goto syerr;
+
+	so->mode = st.st_mode;
+
+	if (S_ISSOCK(so->mode) && (error = so_nosigpipe(fd, opts->fd_nosigpipe))) {
+		if (error != EOPNOTSUPP)
+			goto syerr;
+	}
 
 	so->fd = fd;
 
@@ -1403,8 +1504,11 @@ int so_shutdown(struct socket *so, int how) {
 
 
 size_t so_read(struct socket *so, void *dst, size_t lim, int *error_) {
+	struct sigaction oact;
 	long len;
 	int error;
+
+	so_pipeign(so, &oact, 1);
 
 	so->todo |= SO_S_SETREAD;
 
@@ -1449,6 +1553,8 @@ retry:
 	so_trace(SO_T_READ, so->fd, so->host, dst, (size_t)len, "rcvd %zu bytes", (size_t)len);
 	st_update(&so->st.rcvd, len, &so->opts);
 
+	so_pipeok(so, &oact, 1);
+
 	return len;
 sslerr:
 	error = ssl_error(so->ssl.ctx, (int)len, &so->events);
@@ -1478,13 +1584,18 @@ error:
 	if (error != SO_EAGAIN)
 		so_trace(SO_T_READ, so->fd, so->host, (void *)0, (size_t)0, "%s", so_strerror(error));
 
+	so_pipeok(so, &oact, 1);
+
 	return 0;
 } /* so_read() */
 
 
 size_t so_write(struct socket *so, const void *src, size_t len, int *error_) {
+	struct sigaction oact;
 	long count;
 	int error;
+
+	so_pipeign(so, &oact, 0);
 
 	so->todo |= SO_S_SETWRITE;
 
@@ -1516,14 +1627,24 @@ retry:
 #if _WIN32
 		count = send(so->fd, src, SO_MIN(len, LONG_MAX), 0);
 #else
+#if defined(MSG_NOSIGNAL)
+		if (S_ISSOCK(so->fd))
+			count = send(so->fd, src, SO_MIN(len, LONG_MAX), MSG_NOSIGNAL);
+		else
+			count = write(so->fd, src, SO_MIN(len, LONG_MAX));
+#else
 		count = write(so->fd, src, SO_MIN(len, LONG_MAX));
 #endif
+#endif
+
 		if (count == -1)
 			goto soerr;
 	}
 
 	so_trace(SO_T_WRITE, so->fd, so->host, src, (size_t)count, "sent %zu bytes", (size_t)len);
 	st_update(&so->st.sent, len, &so->opts);
+
+	so_pipeok(so, &oact, 0);
 
 	return count;
 sslerr:
@@ -1553,6 +1674,8 @@ error:
 
 	if (error != SO_EAGAIN)
 		so_trace(SO_T_WRITE, so->fd, so->host, (void *)0, (size_t)0, "%s", so_strerror(error));
+
+	so_pipeok(so, &oact, 0);
 
 	return 0;
 } /* so_write() */
