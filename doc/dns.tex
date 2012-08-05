@@ -21,8 +21,10 @@
 %  \___\___/|_| |_| |_|_| |_| |_|\__,_|_| |_|\__,_|___/
 %                                                      
 \newcommand*{\dnsc}[0]{\texttt{dns.c}\xspace}
-\newcommand*{\file}[1]{\textit{#1}\index{Files!#1}}
+\newcommand*{\file}[1]{\textit{#1}\index{file!#1}}
 \newcommand*{\ic}[1]{\texttt{#1}}
+\newcommand*{\struct}[1]{\ic{struct #1}\index{struct!struct #1}}
+\newcommand*{\fn}[1]{\ic{#1}\index{function!#1}}
 \newcommand*{\gloss}[1]{\gls{#1}\index{#1}}
 \newcommand*{\Gloss}[1]{\Gls{#1}\index{#1}}
 \newcommand*{\Glosspl}[1]{\Glspl{#1}\index{#1}}
@@ -42,6 +44,43 @@
 	\end{tabular}
 	\end{color}
 }
+
+%
+% Members
+%
+\renewcommand{\arraystretch}{1.2}
+
+\newenvironment{members}{
+	\begin{ctabular}{r c p{4in}}
+%	Name & Type & Description \\ \midrule
+}{
+	\end{ctabular}
+}
+
+\newcommand*{\member}[3]{.#1 & {#2} & {#3} \\ }
+
+
+%
+% Signature
+%
+\newenvironment{signature}{
+	\begin{ctabular}{r c c p{4in}}
+}{
+	\end{ctabular}
+}
+
+\renewcommand*{\in}[0]{$\rightarrow$}
+\newcommand*{\out}[0]{$\leftarrow$}
+\newcommand*{\inout}[0]{$\leftrightarrow$}
+
+\newcommand*{\parameter}[4]{
+	#1 & #2 & \ic{#3} & #4 \\
+}
+
+\newcommand*{\return}[2]{
+	& \out & \ic{#1} & #2 \\
+}
+
 
 
 %        _                                
@@ -106,6 +145,7 @@ unspecified presumed to be at \textit{127.0.0.1}. Other protocols such as
 \author{William Ahern}
 \maketitle
 
+\maxtocdepth{subsubsection}
 \tableofcontents
 
 \pagenumbering{roman}
@@ -214,22 +254,109 @@ The source code largely adheres to the ISO \key{C99} standard, with the notable 
 %
 %\subsubsection{\texttt{struct dns\_hints}}
 
-\chapter{Interface}
+\chapter{Interfaces}
 
 \section{Configuration}
 
+\subsection{\struct{dns\_resolv\_conf}}
+
+This object mirrors \file{/etc/resolv.conf}, particularly as defined by \key{OpenBSD}. Once constructed and the members initialized by the application, it should be treated as immutable. It cannot be declared constant, however, when passed as a parameter because the reference count must be incremented.
+
+\subsubsection{Members}
+
+\begin{members}
+\member{nameserver}{struct[]}{\struct{sockaddr\_storage} addresses of local recursive servers.}
+\member{search}{str[]}{Domain suffixes used to create fully qualified domain names from local names.}
+\member{lookup}{str}{Describes the order of searching, and is directly interpreted by the resolver. This does not need to be null terminated and can be set using strncpy and strncat.}
+\member{options.edns0}{bool}{TODO.}
+\member{options.ndots}{int}{FIXME.}
+\member{options.timeout}{int}{FIXME.}
+\member{options.attempts}{int}{FIXME.}
+\member{options.rotate}{bool}{FIXME.}
+\member{options.recurse}{bool}{FIXME.}
+\member{options.smart}{bool}{FIXME.}
+\member{options.tcp}{enum}{FIXME.}
+\member{face}{struct}{\struct{sockaddr\_storage} of the interface to bind for outgoing queries.}
+\end{members}
+
+\subsubsection{Methods}
+
+\paragraph{\fn{dns\_resconf\_open}} Allocate and initialize a new \struct{dns\_resolve\_conf} object. On success a new object is returned with a reference count of one. On failure NULL is returned and the error stored in \ic{error}.
+
+\begin{signature}
+\parameter{error}{\out}{int*}{error value.}
+\return{struct*}{\struct{dns\_resolv\_conf} or NULL.}
+\end{signature}
+
+\paragraph{\fn{dns\_resconf\_close}} Release a \struct{dns\_resolve\_conf} object. The object is freed if the reference count falls to zero.
+
+\begin{signature}
+\parameter{resconf}{\in}{struct*}{\struct{dns\_resolv\_conf}.}
+\end{signature}
+
+\paragraph{\fn{dns\_resconf\_acquire}} Increment the reference count.
+
+\begin{signature}
+\parameter{resconf}{\in}{struct*}{\struct{dns\_resolv\_conf}.}
+\end{signature}
+
+\paragraph{\fn{dns\_resconf\_release}} Decrement the reference count. This routine should not usually be used directly. It's the mirror of \fn{dns\_resconf\_acquire}, but is not particularly useful except internally.
+
+\begin{signature}
+\parameter{resconf}{\in}{struct*}{\struct{dns\_resolv\_conf}.}
+\end{signature}
+
+
+\subsubsection{\file{/etc/resolv.conf}}
+
 Foo
 
-\subsection{\file{/etc/resolv.conf}}
+\subsubsection{\file{/etc/nsswitch.conf}}
 
 Foo
 
-\subsection{\file{/etc/nsswitch.conf}}
+\subsection{\struct{dns\_hosts}}
 
-Foo
+This is an opaque object which mirrors \file{/etc/hosts}. To populate
+you must use an appropriate method.
 
-\subsection{\file{/etc/hosts}}
+\subsubsection{Methods}
 
+\paragraph{\fn{dns\_hosts\_open}} Allocate and initialize a \struct{dns\_hosts}.
+
+\begin{signature}
+\parameter{error}{\out}{int*}{error value.}
+\return{struct*}{\struct{dns\_hosts} or NULL.}
+\end{signature}
+
+\paragraph{\fn{dns\_hosts\_close}} Release a \struct{dns\_hosts} object. The object is freed if the reference count falls to zero.
+
+\begin{signature}
+\parameter{hosts}{\in}{struct*}{\struct{dns\_hosts}.}
+\end{signature}
+
+\paragraph{\fn{dns\_hosts\_acquire}} Increment the reference count.
+
+\begin{signature}
+\parameter{hosts}{\in}{struct*}{\struct{dns\_hosts}.}
+\end{signature}
+
+\paragraph{\fn{dns\_hosts\_release}} Decrement the reference count. This routine should not usually be used directly. It's the mirror of \fn{dns\_hosts\_acquire}, but is not particularly useful except internally.
+
+\paragraph{\fn{dns\_hosts\_loadfile}} Parse the specified FILE object according to the syntax of \file{/etc/hosts}. On success returns 0, otherwise returns an error value.
+
+\begin{signature}
+\parameter{hosts}{\in}{struct*}{\struct{dns\_hosts}.}
+\parameter{file}{\in}{FILE*}{FILE to parse.}
+\return{int}{error value.}
+\end{signature}
+
+
+
+\subsubsection{\file{/etc/hosts}}
+
+
+\subsection{\struct{dns\_hints}}
 
 \appendix
 \printglossaries
