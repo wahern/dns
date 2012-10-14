@@ -880,6 +880,8 @@ struct dns_resolv_conf *dns_resconf_local(int *);
 
 struct dns_resolv_conf *dns_resconf_root(int *);
 
+int dns_resconf_pton(struct sockaddr_storage *, const char *);
+
 int dns_resconf_loadfile(struct dns_resolv_conf *, FILE *);
 
 int dns_resconf_loadpath(struct dns_resolv_conf *, const char *);
