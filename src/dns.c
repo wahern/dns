@@ -6506,6 +6506,8 @@ exec:
 
 		F->state++;
 	case DNS_R_HINTS:
+		free(F->hints);
+
 		if (!(F->hints = dns_hints_query(R->hints, F->query, &error)))
 			goto error;
 
