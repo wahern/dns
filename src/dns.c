@@ -1,7 +1,7 @@
 /* ==========================================================================
  * dns.c - Recursive, Reentrant DNS Resolver.
  * --------------------------------------------------------------------------
- * Copyright (c) 2008, 2009, 2010  William Ahern
+ * Copyright (c) 2008, 2009, 2010, 2012, 2013  William Ahern
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
@@ -1401,16 +1401,15 @@ size_t dns_d_trim(void *dst_, size_t lim, const void *src_, size_t len, int flag
 	while (sp < len && src[sp] == '.')
 		sp++;
 
-	for (lc = 0; sp < len; lc = src[sp]) {
+	for (lc = 0; sp < len; lc = src[sp++]) {
+		/* trim extra dot(s) */
+		if (src[sp] == '.' && lc == '.')
+			continue;
+
 		if (dp < lim)
 			dst[dp] = src[sp];
 
-		sp++;
 		dp++;
-
-		/* trim extra dot(s) */
-		while (sp < len && src[sp] == '.')
-			sp++;
 	}
 
 	if ((flags & DNS_D_ANCHOR) && lc != '.') {
@@ -5395,7 +5394,7 @@ struct dns_socket {
 
 	struct dns_packet *answer;
 	size_t alen, apos;
-}; /* struct dns_socket() */
+}; /* struct dns_socket */
 
 
 /*
@@ -7927,6 +7926,18 @@ static int parse_domain(int argc, char *argv[]) {
 } /* parse_domain() */
 
 
+static int trim_domain(int argc, char *argv[]) {
+	const char *name = (argv[1])? argv[1] : "";
+	char namebuf[DNS_D_MAXNAME + 1];
+
+	dns_d_trim(namebuf, sizeof namebuf, name, strlen(name), DNS_D_ANCHOR);
+
+	puts(namebuf);
+
+	return 0;
+} /* trim_domain() */
+
+
 static int expand_domain(int argc, char *argv[]) {
 	unsigned short rp = 0;
 	unsigned char *src = NULL;
@@ -8503,6 +8514,7 @@ static int sizes(int argc, char *argv[]) {
 static const struct { const char *cmd; int (*run)(); const char *help; } cmds[] = {
 	{ "parse-packet",	&parse_packet,		"parse binary packet from stdin" },
 	{ "parse-domain",	&parse_domain,		"anchor and iteratively cleave domain" },
+	{ "trim-domain",	&trim_domain,		"trim and anchor domain name" },
 	{ "expand-domain",	&expand_domain,		"expand domain at offset NN in packet from stdin" },
 	{ "show-resconf",	&show_resconf,		"show resolv.conf data" },
 	{ "show-hosts",		&show_hosts,		"show hosts data" },
