@@ -5519,7 +5519,7 @@ void dns_so_close(struct dns_socket *so) {
 
 
 void dns_so_reset(struct dns_socket *so) {
-	free(so->answer);
+	free(so->answer); so->answer = NULL;
 
 	memset(&so->state, '\0', sizeof *so - offsetof(struct dns_socket, state));
 } /* dns_so_reset() */
@@ -6101,9 +6101,9 @@ epilog:
 
 
 static void dns_res_reset_frame(struct dns_resolver *R, struct dns_res_frame *frame) {
-	free(frame->query);
-	free(frame->answer);
-	free(frame->hints);
+	free(frame->query); frame->query = NULL;
+	free(frame->answer); frame->answer = NULL;
+	free(frame->hints); frame->hints = NULL;
 
 	memset(frame, '\0', sizeof *frame);
 } /* dns_res_reset_frame() */
