@@ -105,6 +105,9 @@ enum dns_errno {
 	DNS_ESECTION,
 	DNS_EUNKNOWN,
 	DNS_EADDRESS,
+	DNS_ENOQUERY,
+	DNS_ENOANSWER,
+	DNS_EFETCHED,
 	DNS_ELAST,
 }; /* dns_errno */
 
