@@ -1,7 +1,7 @@
 /* ==========================================================================
  * dns.h - Recursive, Reentrant DNS Resolver.
  * --------------------------------------------------------------------------
- * Copyright (c) 2009, 2010, 2012, 2013  William Ahern
+ * Copyright (c) 2009, 2010, 2012, 2013, 2014  William Ahern
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
@@ -65,9 +65,9 @@
 
 #define DNS_VENDOR "william@25thandClement.com"
 
-#define DNS_V_REL  0x20131220
-#define DNS_V_ABI  0x20120806
-#define DNS_V_API  0x20120806
+#define DNS_V_REL  0x20140617
+#define DNS_V_ABI  0x20121013
+#define DNS_V_API  0x20140612
 
 
 const char *dns_vendor(void);
