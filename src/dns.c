@@ -6780,7 +6780,7 @@ exec:
 		if (!(P = dns_res_merge(F->answer, F[1].answer, &error)))
 			goto error;
 
-		dns_p_setptr(&F->answer, NULL);
+		dns_p_setptr(&F->answer, P);
 
 		goto(R->sp, DNS_R_FINISH);
 	case DNS_R_FINISH:
