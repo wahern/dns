@@ -1108,6 +1108,8 @@ struct dns_packet *dns_res_query(struct dns_resolver *, const char *, enum dns_t
 
 const struct dns_stat *dns_res_stat(struct dns_resolver *);
 
+void dns_res_sethints(struct dns_resolver *, struct dns_hints *);
+
 
 /*
  * A D D R I N F O  I N T E R F A C E

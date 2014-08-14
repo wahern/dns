@@ -7096,6 +7096,13 @@ const struct dns_stat *dns_res_stat(struct dns_resolver *res) {
 } /* dns_res_stat() */
 
 
+void dns_res_sethints(struct dns_resolver *res, struct dns_hints *hints) {
+	dns_hints_acquire(hints); /* acquire first in case same hints object */
+	dns_hints_close(res->hints);
+	res->hints = hints;
+} /* dns_res_sethints() */
+
+
 /*
  * A D D R I N F O  R O U T I N E S
  *
