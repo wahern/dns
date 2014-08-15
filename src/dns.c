@@ -5465,7 +5465,7 @@ static int dns_socket(struct sockaddr *local, int type, int *error_) {
 #endif
 
 #if defined(SO_NOSIGPIPE)
-	if (type == SOCK_DGRAM) {
+	if (type != SOCK_DGRAM) {
 		if (0 != setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &(int){ 1 }, sizeof (int)))
 			goto soerr;
 	}
