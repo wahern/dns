@@ -47,7 +47,7 @@
 #include <stdlib.h>		/* malloc(3) realloc(3) free(3) rand(3) random(3) arc4random(3) */
 #include <stdio.h>		/* FILE fopen(3) fclose(3) getc(3) rewind(3) */
 
-#include <string.h>		/* memcpy(3) strlen(3) memmove(3) memchr(3) memcmp(3) strchr(3) strsep(3) strcspn(3) */
+#include <string.h>		/* memcpy(3) strlen(3) memmove(3) memchr(3) memcmp(3) strchr(3) strsep(3) strcspn(3) strcmp(3) */
 #include <strings.h>		/* strcasecmp(3) strncasecmp(3) */
 
 #include <ctype.h>		/* isspace(3) isdigit(3) */
@@ -624,11 +624,36 @@ static time_t dns_elapsed(struct dns_clock *clk) {
 } /* dns_elapsed() */
 
 
+DNS_NOTUSED static size_t dns_strnlen(const char *src, size_t m) {
+	size_t n = 0;
+
+	while (*src++ && n < m)
+		++n;
+
+	return n;
+} /* dns_strnlen() */
+
+
+DNS_NOTUSED static size_t dns_strnlcpy(char *dst, size_t lim, const char *src, size_t max) {
+	size_t len = dns_strnlen(src, max), n;
+
+	if (lim > 0) {
+		n = MIN(lim - 1, len);
+		memcpy(dst, src, n);
+		dst[n] = '\0';
+	}
+
+	return len;
+} /* dns_strnlcpy() */
+
+
+#define DNS_HAVE_SOCKADDR_UN (defined AF_UNIX && !defined _WIN32)
+
 static size_t dns_af_len(int af) {
 	static const size_t table[AF_MAX]	= {
 		[AF_INET6]	= sizeof (struct sockaddr_in6),
 		[AF_INET]	= sizeof (struct sockaddr_in),
-#if defined(AF_UNIX) && !defined(_WIN32)
+#if DNS_HAVE_SOCKADDR_UN
 		[AF_UNIX]	= sizeof (struct sockaddr_un),
 #endif
 	};
@@ -681,6 +706,88 @@ static void *dns_sa_addr(int af, void *sa, socklen_t *size) {
 		return 0;
 	}
 } /* dns_sa_addr() */
+
+
+#if DNS_HAVE_SOCKADDR_UN
+#define DNS_SUNPATHMAX (sizeof ((struct sockaddr_un *)0)->sun_path)
+#endif
+
+DNS_NOTUSED static void *dns_sa_path(void *sa, socklen_t *size) {
+	switch (dns_sa_family(sa)) {
+#if DNS_HAVE_SOCKADDR_UN
+	case AF_UNIX: {
+		char *path = ((struct sockaddr_un *)sa)->sun_path;
+
+		if (size)
+			*size = dns_strnlen(path, DNS_SUNPATHMAX);
+
+		return path;
+	}
+#endif
+	default:
+		if (size)
+			*size = 0;
+
+		return NULL;
+	}
+} /* dns_sa_path() */
+
+
+static int dns_sa_cmp(void *a, void *b) {
+	int cmp, af;
+
+	if ((cmp = dns_sa_family(a) - dns_sa_family(b)))
+		return cmp;
+
+	switch ((af = dns_sa_family(a))) {
+	case AF_INET: {
+		struct in_addr *a4, *b4;
+
+		if ((cmp = htons(*dns_sa_port(af, a)) - htons(*dns_sa_port(af, b))))
+			return cmp;
+
+		a4 = dns_sa_addr(af, a, NULL);
+		b4 = dns_sa_addr(af, b, NULL);
+
+		if (ntohl(a4->s_addr) < ntohl(b4->s_addr))
+			return -1;
+		if (ntohl(a4->s_addr) > ntohl(b4->s_addr))
+			return 1;
+
+		return 0;
+	}
+	case AF_INET6: {
+		struct in6_addr *a6, *b6;
+		size_t i;
+
+		if ((cmp = htons(*dns_sa_port(af, a)) - htons(*dns_sa_port(af, b))))
+			return cmp;
+
+		a6 = dns_sa_addr(af, a, NULL);
+		b6 = dns_sa_addr(af, b, NULL);
+
+		/* XXX: do we need to use in6_clearscope()? */
+		for (i = 0; i < sizeof a6->s6_addr; i++) {
+			if ((cmp = a6->s6_addr[i] - b6->s6_addr[i]))
+				return cmp;
+		}
+
+		return 0;
+	}
+#if DNS_HAVE_SOCKADDR_UN
+	case AF_UNIX: {
+		char a_path[DNS_SUNPATHMAX + 1], b_path[sizeof a_path];
+
+		dns_strnlcpy(a_path, sizeof a_path, dns_sa_path(a, NULL), DNS_SUNPATHMAX);
+		dns_strnlcpy(b_path, sizeof b_path, dns_sa_path(b, NULL), DNS_SUNPATHMAX);
+
+		return strcmp(a_path, b_path);
+	}
+#endif
+	default:
+		return -1;
+	}
+} /* dns_sa_cmp() */
 
 
 #if _WIN32
@@ -5687,6 +5794,19 @@ static int dns_so_verify(struct dns_socket *so, struct dns_packet *P) {
 } /* dns_so_verify() */
 
 
+static _Bool dns_so_tcp_keep(struct dns_socket *so) {
+	struct sockaddr_storage remote;
+
+	if (so->tcp == -1)
+		return 0;
+
+	if (0 != getpeername(so->tcp, (struct sockaddr *)&remote, &(socklen_t){ sizeof remote }))
+		return 0;
+
+	return 0 == dns_sa_cmp(&remote, &so->remote);
+} /* dns_so_tcp_keep() */
+
+
 #if defined __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Warray-bounds"
@@ -5800,6 +5920,12 @@ retry:
 
 		so->state++;
 	case DNS_SO_TCP_INIT:
+		if (dns_so_tcp_keep(so)) {
+			so->state = DNS_SO_TCP_SEND;
+
+			goto retry;
+		}
+
 		if ((error = dns_so_closefd(so, &so->tcp)))
 			goto error;
 
@@ -5825,8 +5951,11 @@ retry:
 
 		so->state++;
 	case DNS_SO_TCP_DONE:
-		if ((error = dns_so_closefd(so, &so->tcp)))
-			goto error;
+		/* close unless DNS_RESCONF_TCP_ONLY (see dns_res_tcp2type) */
+		if (so->type != SOCK_STREAM) {
+			if ((error = dns_so_closefd(so, &so->tcp)))
+				goto error;
+		}
 
 		if (so->answer->end < 12)
 			return DNS_EILLEGAL;
