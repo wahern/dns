@@ -7153,11 +7153,11 @@ int dns_res_poll(struct dns_resolver *R, int timeout) {
 } /* dns_res_poll() */
 
 
-int dns_res_submit(struct dns_resolver *R, const char *qname, enum dns_type qtype, enum dns_class qclass) {
+int dns_res_submit2(struct dns_resolver *R, const char *qname, size_t qlen, enum dns_type qtype, enum dns_class qclass) {
 	dns_res_reset(R);
 
 	/* Don't anchor; that can conflict with searchlist generation. */
-	dns_d_init(R->qname, sizeof R->qname, qname, (R->qlen = strlen(qname)), 0);
+	dns_d_init(R->qname, sizeof R->qname, qname, (R->qlen = qlen), 0);
 
 	R->qtype	= qtype;
 	R->qclass	= qclass;
@@ -7165,6 +7165,11 @@ int dns_res_submit(struct dns_resolver *R, const char *qname, enum dns_type qtyp
 	dns_begin(&R->elapsed);
 
 	return 0;
+} /* dns_res_submit2() */
+
+
+int dns_res_submit(struct dns_resolver *R, const char *qname, enum dns_type qtype, enum dns_class qclass) {
+	return dns_res_submit2(R, qname, strlen(qname), qtype, qclass);
 } /* dns_res_submit() */
 
 

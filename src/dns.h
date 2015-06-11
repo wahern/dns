@@ -65,9 +65,9 @@
 
 #define DNS_VENDOR "william@25thandClement.com"
 
-#define DNS_V_REL  0x20150610
+#define DNS_V_REL  0x20150611
 #define DNS_V_ABI  0x20150610
-#define DNS_V_API  0x20150610
+#define DNS_V_API  0x20150611
 
 
 const char *dns_vendor(void);
@@ -1096,6 +1096,8 @@ unsigned dns_res_release(struct dns_resolver *);
 struct dns_resolver *dns_res_mortal(struct dns_resolver *);
 
 int dns_res_submit(struct dns_resolver *, const char *, enum dns_type, enum dns_class);
+
+int dns_res_submit2(struct dns_resolver *, const char *, size_t, enum dns_type, enum dns_class);
 
 int dns_res_check(struct dns_resolver *);
 
