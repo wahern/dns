@@ -6526,7 +6526,7 @@ static int dns_res_nameserv_cmp(struct dns_rr *a, struct dns_rr *b, struct dns_r
 } /* dns_res_nameserv_cmp() */
 
 
-#define goto(sp, i)	\
+#define dgoto(sp, i)	\
 	do { R->stack[(sp)].state = (i); goto exec; } while (0)
 
 static int dns_res_exec(struct dns_resolver *R) {
@@ -6547,13 +6547,13 @@ exec:
 		F->state++;
 	case DNS_R_GLUE:
 		if (R->sp == 0)
-			goto(R->sp, DNS_R_SWITCH);
+			dgoto(R->sp, DNS_R_SWITCH);
 
 		if (!F->query)
 			goto noquery;
 
 		if (!(F->answer = dns_res_glue(R, F->query)))
-			goto(R->sp, DNS_R_SWITCH);
+			dgoto(R->sp, DNS_R_SWITCH);
 
 		if (!(len = dns_d_expand(host, sizeof host, 12, F->query, &error)))
 			goto error;
@@ -6561,13 +6561,13 @@ exec:
 			goto toolong;
 
 		dns_rr_foreach(&rr, F->answer, .name = host, .type = dns_rr_type(12, F->query), .section = DNS_S_AN) {
-			goto(R->sp, DNS_R_FINISH);
+			dgoto(R->sp, DNS_R_FINISH);
 		}
 
 		dns_rr_foreach(&rr, F->answer, .name = host, .type = DNS_T_CNAME, .section = DNS_S_AN) {
 			F->ans_cname	= rr;
 
-			goto(R->sp, DNS_R_CNAME0_A);
+			dgoto(R->sp, DNS_R_CNAME0_A);
 		}
 
 		F->state++;
@@ -6575,12 +6575,12 @@ exec:
 		while (F->which < (int)sizeof R->resconf->lookup && R->resconf->lookup[F->which]) {
 			switch (R->resconf->lookup[F->which++]) {
 			case 'b': case 'B':
-				goto(R->sp, DNS_R_BIND);
+				dgoto(R->sp, DNS_R_BIND);
 			case 'f': case 'F':
-				goto(R->sp, DNS_R_FILE);
+				dgoto(R->sp, DNS_R_FILE);
 			case 'c': case 'C':
 				if (R->cache)
-					goto(R->sp, DNS_R_CACHE);
+					dgoto(R->sp, DNS_R_CACHE);
 
 				break;
 			default:
@@ -6611,17 +6611,17 @@ exec:
 		 */
 		if (R->sp == 0 && R->nodata) { /* XXX: can we just return nodata regardless? */
 			dns_p_movptr(&F->answer, &R->nodata);
-			goto(R->sp, DNS_R_FINISH);
+			dgoto(R->sp, DNS_R_FINISH);
 		}
 
-		goto(R->sp, DNS_R_SERVFAIL);
+		dgoto(R->sp, DNS_R_SERVFAIL);
 	case DNS_R_FILE:
 		if (R->sp > 0) {
 			if (!dns_p_setptr(&F->answer, dns_hosts_query(R->hosts, F->query, &error)))
 				goto error;
 
 			if (dns_p_count(F->answer, DNS_S_AN) > 0)
-				goto(R->sp, DNS_R_FINISH);
+				dgoto(R->sp, DNS_R_FINISH);
 
 			dns_p_setptr(&F->answer, NULL);
 		} else {
@@ -6653,13 +6653,13 @@ exec:
 					goto error;
 
 				if (dns_p_count(F->answer, DNS_S_AN) > 0)
-					goto(R->sp, DNS_R_FINISH);
+					dgoto(R->sp, DNS_R_FINISH);
 
 				dns_p_setptr(&F->answer, NULL);
 			}
 		}
 
-		goto(R->sp, DNS_R_SWITCH);
+		dgoto(R->sp, DNS_R_SWITCH);
 	case DNS_R_CACHE:
 		error = 0;
 
@@ -6668,11 +6668,11 @@ exec:
 
 		if (dns_p_setptr(&F->answer, R->cache->query(F->query, R->cache, &error))) {
 			if (dns_p_count(F->answer, DNS_S_AN) > 0)
-				goto(R->sp, DNS_R_FINISH);
+				dgoto(R->sp, DNS_R_FINISH);
 
 			dns_p_setptr(&F->answer, NULL);
 
-			goto(R->sp, DNS_R_SWITCH);
+			dgoto(R->sp, DNS_R_SWITCH);
 		} else if (error)
 			goto error;
 
@@ -6692,21 +6692,21 @@ exec:
 
 		if (dns_p_setptr(&F->answer, R->cache->fetch(R->cache, &error))) {
 			if (dns_p_count(F->answer, DNS_S_AN) > 0)
-				goto(R->sp, DNS_R_FINISH);
+				dgoto(R->sp, DNS_R_FINISH);
 
 			dns_p_setptr(&F->answer, NULL);
 
-			goto(R->sp, DNS_R_SWITCH);
+			dgoto(R->sp, DNS_R_SWITCH);
 		} else if (error)
 			goto error;
 
-		goto(R->sp, DNS_R_SWITCH);
+		dgoto(R->sp, DNS_R_SWITCH);
 	case DNS_R_BIND:
 		if (R->sp > 0) {
 			if (!F->query)
 				goto noquery;
 
-			goto(R->sp, DNS_R_HINTS);
+			dgoto(R->sp, DNS_R_HINTS);
 		}
 
 		R->search	= 0;
@@ -6718,7 +6718,7 @@ exec:
 		 * algorithm if R->sp == 0.
 		 */
 		if (!(len = dns_resconf_search(host, sizeof host, R->qname, R->qlen, R->resconf, &R->search)))
-			goto(R->sp, DNS_R_SWITCH);
+			dgoto(R->sp, DNS_R_SWITCH);
 
 		if (!(P = dns_p_make(DNS_P_QBUFSIZ, &error)))
 			goto error;
@@ -6751,19 +6751,19 @@ exec:
 		/* Load our next nameserver host. */
 		if (!dns_rr_grep(&F->hints_ns, 1, &F->hints_i, F->hints, &error)) {
 			if (++F->attempts < R->resconf->options.attempts)
-				goto(R->sp, DNS_R_ITERATE);
+				dgoto(R->sp, DNS_R_ITERATE);
 
-			goto(R->sp, DNS_R_SWITCH);
+			dgoto(R->sp, DNS_R_SWITCH);
 		}
 
 		dns_rr_i_init(&F->hints_j, F->hints);
 
 		/* Assume there are glue records */
-		goto(R->sp, DNS_R_FOREACH_A);
+		dgoto(R->sp, DNS_R_FOREACH_A);
 	case DNS_R_RESOLV0_NS:
 		/* Have we reached our max depth? */
 		if (&F[1] >= endof(R->stack))
-			goto(R->sp, DNS_R_FOREACH_NS);
+			dgoto(R->sp, DNS_R_FOREACH_NS);
 
 		dns_res_reset_frame(R, &F[1]);
 
@@ -6778,7 +6778,7 @@ exec:
 
 		F->state++;
 
-		goto(++R->sp, DNS_R_INIT);
+		dgoto(++R->sp, DNS_R_INIT);
 	case DNS_R_RESOLV1_NS:
 		if (!(len = dns_d_expand(host, sizeof host, 12, F[1].query, &error)))
 			goto error;
@@ -6794,7 +6794,7 @@ exec:
 			dns_rr_i_rewind(&F->hints_i);	/* Now there's glue. */
 		}
 
-		goto(R->sp, DNS_R_FOREACH_NS);
+		dgoto(R->sp, DNS_R_FOREACH_NS);
 	case DNS_R_FOREACH_A:
 		/*
 		 * NOTE: Iterator initialized in DNS_R_FOREACH_NS because
@@ -6810,9 +6810,9 @@ exec:
 
 		if (!dns_rr_grep(&rr, 1, &F->hints_j, F->hints, &error)) {
 			if (!dns_rr_i_count(&F->hints_j))
-				goto(R->sp, DNS_R_RESOLV0_NS);
+				dgoto(R->sp, DNS_R_RESOLV0_NS);
 
-			goto(R->sp, DNS_R_FOREACH_NS);
+			dgoto(R->sp, DNS_R_FOREACH_NS);
 		}
 
 		sin.sin_family	= AF_INET;
@@ -6837,7 +6837,7 @@ exec:
 		F->state++;
 	case DNS_R_QUERY_A:
 		if (dns_so_elapsed(&R->so) >= (time_t)R->resconf->options.timeout)
-			goto(R->sp, DNS_R_FOREACH_A);
+			dgoto(R->sp, DNS_R_FOREACH_A);
 
 		if ((error = dns_so_check(&R->so)))
 			goto error;
@@ -6858,13 +6858,13 @@ exec:
 			goto toolong;
 
 		dns_rr_foreach(&rr, F->answer, .section = DNS_S_AN, .name = host, .type = rr.type) {
-			goto(R->sp, DNS_R_FINISH);	/* Found */
+			dgoto(R->sp, DNS_R_FINISH);	/* Found */
 		}
 
 		dns_rr_foreach(&rr, F->answer, .section = DNS_S_AN, .name = host, .type = DNS_T_CNAME) {
 			F->ans_cname	= rr;
 
-			goto(R->sp, DNS_R_CNAME0_A);
+			dgoto(R->sp, DNS_R_CNAME0_A);
 		}
 
 		/*
@@ -6877,25 +6877,25 @@ exec:
 			if (!R->nodata)
 				dns_p_movptr(&R->nodata, &F->answer);
 
-			goto(R->sp, DNS_R_SEARCH);
+			dgoto(R->sp, DNS_R_SEARCH);
 		}
 
 		dns_rr_foreach(&rr, F->answer, .section = DNS_S_NS, .type = DNS_T_NS) {
 			dns_p_movptr(&F->hints, &F->answer);
 
-			goto(R->sp, DNS_R_ITERATE);
+			dgoto(R->sp, DNS_R_ITERATE);
 		}
 
 		/* XXX: Should this go further up? */
 		if (dns_header(F->answer)->aa)
-			goto(R->sp, DNS_R_FINISH);
+			dgoto(R->sp, DNS_R_FINISH);
 
 		/* XXX: Should we copy F->answer to R->nodata? */
 
-		goto(R->sp, DNS_R_FOREACH_A);
+		dgoto(R->sp, DNS_R_FOREACH_A);
 	case DNS_R_CNAME0_A:
 		if (&F[1] >= endof(R->stack))
-			goto(R->sp, DNS_R_FINISH);
+			dgoto(R->sp, DNS_R_FINISH);
 
 		if ((error = dns_cname_parse((struct dns_cname *)host, &F->ans_cname, F->answer)))
 			goto error;
@@ -6910,20 +6910,20 @@ exec:
 
 		F->state++;
 
-		goto(++R->sp, DNS_R_INIT);
+		dgoto(++R->sp, DNS_R_INIT);
 	case DNS_R_CNAME1_A:
 		if (!(P = dns_res_merge(F->answer, F[1].answer, &error)))
 			goto error;
 
 		dns_p_setptr(&F->answer, P);
 
-		goto(R->sp, DNS_R_FINISH);
+		dgoto(R->sp, DNS_R_FINISH);
 	case DNS_R_FINISH:
 		if (!F->answer)
 			goto noanswer;
 
 		if (!R->resconf->options.smart || R->sp > 0)
-			goto(R->sp, DNS_R_DONE);
+			dgoto(R->sp, DNS_R_DONE);
 
 		R->smart.section	= DNS_S_AN;
 		R->smart.type		= R->qtype;
@@ -6933,7 +6933,7 @@ exec:
 		F->state++;
 	case DNS_R_SMART0_A:
 		if (&F[1] >= endof(R->stack))
-			goto(R->sp, DNS_R_DONE);
+			dgoto(R->sp, DNS_R_DONE);
 
 		while (dns_rr_grep(&rr, 1, &R->smart, F->answer, &error)) {
 			union {
@@ -6984,7 +6984,7 @@ exec:
 
 			F->state++;
 
-			goto(++R->sp, DNS_R_INIT);
+			dgoto(++R->sp, DNS_R_INIT);
 		} /* while() */
 
 		/*
@@ -7001,10 +7001,10 @@ exec:
 			R->smart.state.count++;
 			F->state++;
 
-			goto(++R->sp, DNS_R_INIT);
+			dgoto(++R->sp, DNS_R_INIT);
 		}
 
-		goto(R->sp, DNS_R_DONE);
+		dgoto(R->sp, DNS_R_DONE);
 	case DNS_R_SMART1_A:
 		if (!F[1].answer)
 			goto noanswer;
@@ -7029,13 +7029,13 @@ exec:
 			}
 		}
 
-		goto(R->sp, DNS_R_SMART0_A);
+		dgoto(R->sp, DNS_R_SMART0_A);
 	case DNS_R_DONE:
 		if (!F->answer)
 			goto noanswer;
 
 		if (R->sp > 0)
-			goto(--R->sp, F[-1].state);
+			dgoto(--R->sp, F[-1].state);
 
 		break;
 	case DNS_R_SERVFAIL:
@@ -7048,7 +7048,7 @@ exec:
 		if ((error = dns_p_push(F->answer, DNS_S_QD, R->qname, strlen(R->qname), R->qtype, R->qclass, 0, 0)))
 			goto error;
 
-		goto(R->sp, DNS_R_DONE);
+		dgoto(R->sp, DNS_R_DONE);
 	default:
 		error	= EINVAL;
 
