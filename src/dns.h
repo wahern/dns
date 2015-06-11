@@ -1,7 +1,7 @@
 /* ==========================================================================
  * dns.h - Recursive, Reentrant DNS Resolver.
  * --------------------------------------------------------------------------
- * Copyright (c) 2009, 2010, 2012, 2013, 2014  William Ahern
+ * Copyright (c) 2009, 2010, 2012, 2013, 2014, 2015  William Ahern
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
@@ -65,9 +65,9 @@
 
 #define DNS_VENDOR "william@25thandClement.com"
 
-#define DNS_V_REL  0x20140811
-#define DNS_V_ABI  0x20121013
-#define DNS_V_API  0x20140612
+#define DNS_V_REL  0x20150610
+#define DNS_V_ABI  0x20150610
+#define DNS_V_API  0x20150610
 
 
 const char *dns_vendor(void);
@@ -108,6 +108,9 @@ enum dns_errno {
 	DNS_ENOQUERY,
 	DNS_ENOANSWER,
 	DNS_EFETCHED,
+	DNS_ESERVICE, /* EAI_SERVICE */
+	DNS_ENONAME,  /* EAI_NONAME */
+	DNS_EFAIL,    /* EAI_FAIL */
 	DNS_ELAST,
 }; /* dns_errno */
 
@@ -148,12 +151,18 @@ extern int dns_debug;
 
 /* GCC parses the _Pragma operator less elegantly than clang. */
 #define dns_quietinit(...) \
-	({ DNS_PRAGMA_PUSH DNS_PRAGMA_QUIET __VA_ARGS__; DNS_PRAGMA_POP })
+	__extension__ ({ DNS_PRAGMA_PUSH DNS_PRAGMA_QUIET __VA_ARGS__; DNS_PRAGMA_POP })
 #else
 #define DNS_PRAGMA_PUSH
 #define DNS_PRAGMA_QUIET
 #define DNS_PRAGMA_POP
 #define dns_quietinit(...) __VA_ARGS__
+#endif
+
+#if defined __GNUC__
+#define DNS_PRAGMA_EXTENSION __extension__
+#else
+#define DNS_PRAGMA_EXTENSION
 #endif
 
 
@@ -375,7 +384,7 @@ struct dns_packet {
 
 	int:16; /* tcp padding */
 
-	union {
+	DNS_PRAGMA_EXTENSION union {
 		struct dns_header header;
 		unsigned char data[1];
 	};
@@ -425,7 +434,7 @@ int dns_p_study(struct dns_packet *);
 
 #define DNS_D_ANCHOR	1	/* anchor domain w/ root "." */
 #define DNS_D_CLEAVE	2	/* cleave sub-domain */
-#define DNS_D_TRIM	4	/* remove superfluous dots */ 
+#define DNS_D_TRIM	4	/* remove superfluous dots */
 
 #define dns_d_new3(a, b, f)	dns_d_init(&(char[DNS_D_MAXNAME + 1]){ 0 }, DNS_D_MAXNAME + 1, (a), (b), (f))
 #define dns_d_new2(a, f)	dns_d_new3((a), strlen((a)), (f))
