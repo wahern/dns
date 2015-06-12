@@ -97,6 +97,13 @@
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+#define DNS_GNUC_PREREQ(M, m) \
+	(defined __GNUC__ && ((__GNUC__ > M) || (__GNUC__ == M && __GNUC_MINOR__ >= m)))
+
+#ifndef HAVE_PRAGMA_MESSAGE
+#define HAVE_PRAGMA_MESSAGE (DNS_GNUC_PREREQ(4, 4) || __clang__ || _MSC_VER)
+#endif
+
 #if __GNUC__
 #define DNS_NOTUSED __attribute__((unused))
 #else
@@ -106,7 +113,7 @@
 #if __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-parameter"
-#elif (__GNUC__ == 4 && __GNUC_MINOR__ >= 6) || __GNUC__ > 4
+#elif DNS_GNUC_PREREQ(4, 6)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 #endif
@@ -292,33 +299,40 @@ const char *dns_strerror(int error) {
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-DNS_NOTUSED static void dns_atomic_fence(void) {
-	return;
-} /* dns_atomic_fence() */
+#ifndef HAVE___ATOMIC_FETCH_ADD
+#define HAVE___ATOMIC_FETCH_ADD (defined __ATOMIC_RELAXED)
+#endif
+
+#ifndef HAVE___ATOMIC_FETCH_SUB
+#define HAVE___ATOMIC_FETCH_SUB HAVE___ATOMIC_FETCH_ADD
+#endif
+
+#ifndef DNS_ATOMIC_FETCH_ADD
+#if HAVE___ATOMIC_FETCH_ADD
+#define DNS_ATOMIC_FETCH_ADD(i) __atomic_fetch_add((i), 1, __ATOMIC_RELAXED)
+#else
+#pragma message("no atomic_fetch_add available")
+#define DNS_ATOMIC_FETCH_ADD(i) ((*(i))++)
+#endif
+#endif
+
+#ifndef DNS_ATOMIC_FETCH_SUB
+#if HAVE___ATOMIC_FETCH_SUB
+#define DNS_ATOMIC_FETCH_SUB(i) __atomic_fetch_sub((i), 1, __ATOMIC_RELAXED)
+#else
+#pragma message("no atomic_fetch_sub available")
+#define DNS_ATOMIC_FETCH_SUB(i) ((*(i))--)
+#endif
+#endif
+
+static inline unsigned dns_atomic_fetch_add(dns_atomic_t *i) {
+	return DNS_ATOMIC_FETCH_ADD(i);
+} /* dns_atomic_fetch_add() */
 
 
-static unsigned dns_atomic_inc(dns_atomic_t *i) {
-	return (*i)++;
-} /* dns_atomic_inc() */
-
-
-static unsigned dns_atomic_dec(dns_atomic_t *i) {
-	return (*i)--;
-} /* dns_atomic_dec() */
-
-
-static unsigned dns_atomic_load(dns_atomic_t *i) {
-	return *i;
-} /* dns_atomic_load() */
-
-
-DNS_NOTUSED static unsigned dns_atomic_store(dns_atomic_t *i, unsigned n) {
-	unsigned o;
-
-	o	= dns_atomic_load(i);
-	*i	= n;
-	return o;
-} /* dns_atomic_store() */
+static inline unsigned dns_atomic_fetch_sub(dns_atomic_t *i) {
+	return DNS_ATOMIC_FETCH_SUB(i);
+} /* dns_atomic_fetch_sub() */
 
 
 /*
@@ -3575,12 +3589,12 @@ void dns_hosts_close(struct dns_hosts *hosts) {
 
 
 unsigned dns_hosts_acquire(struct dns_hosts *hosts) {
-	return dns_atomic_inc(&hosts->refcount);
+	return dns_atomic_fetch_add(&hosts->refcount);
 } /* dns_hosts_acquire() */
 
 
 unsigned dns_hosts_release(struct dns_hosts *hosts) {
-	return dns_atomic_dec(&hosts->refcount);
+	return dns_atomic_fetch_sub(&hosts->refcount);
 } /* dns_hosts_release() */
 
 
@@ -3885,12 +3899,12 @@ void dns_resconf_close(struct dns_resolv_conf *resconf) {
 
 
 unsigned dns_resconf_acquire(struct dns_resolv_conf *resconf) {
-	return dns_atomic_inc(&resconf->_.refcount);
+	return dns_atomic_fetch_add(&resconf->_.refcount);
 } /* dns_resconf_acquire() */
 
 
 unsigned dns_resconf_release(struct dns_resolv_conf *resconf) {
-	return dns_atomic_dec(&resconf->_.refcount);
+	return dns_atomic_fetch_sub(&resconf->_.refcount);
 } /* dns_resconf_release() */
 
 
@@ -4978,12 +4992,12 @@ void dns_hints_close(struct dns_hints *H) {
 
 
 unsigned dns_hints_acquire(struct dns_hints *H) {
-	return dns_atomic_inc(&H->refcount);
+	return dns_atomic_fetch_add(&H->refcount);
 } /* dns_hints_acquire() */
 
 
 unsigned dns_hints_release(struct dns_hints *H) {
-	return dns_atomic_dec(&H->refcount);
+	return dns_atomic_fetch_sub(&H->refcount);
 } /* dns_hints_release() */
 
 
@@ -6342,12 +6356,12 @@ void dns_res_close(struct dns_resolver *R) {
 
 
 unsigned dns_res_acquire(struct dns_resolver *R) {
-	return dns_atomic_inc(&R->refcount);
+	return dns_atomic_fetch_add(&R->refcount);
 } /* dns_res_acquire() */
 
 
 unsigned dns_res_release(struct dns_resolver *R) {
-	return dns_atomic_dec(&R->refcount);
+	return dns_atomic_fetch_sub(&R->refcount);
 } /* dns_res_release() */
 
 
@@ -9042,7 +9056,7 @@ int main(int argc, char **argv) {
  */
 #if __clang__
 #pragma clang diagnostic pop
-#elif (__GNUC__ == 4 && __GNUC_MINOR__ >= 6) || __GNUC__ > 4
+#elif DNS_GNUC_PREREQ(4, 6)
 #pragma GCC diagnostic pop
 #endif
 
