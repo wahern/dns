@@ -124,16 +124,6 @@
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-#ifndef MIN
-#define MIN(a, b)	(((a) < (b))? (a) : (b))
-#endif
-
-
-#ifndef MAX
-#define MAX(a, b)	(((a) > (b))? (a) : (b))
-#endif
-
-
 #ifndef lengthof
 #define lengthof(a)	(sizeof (a) / sizeof (a)[0])
 #endif
@@ -646,7 +636,7 @@ static time_t dns_elapsed(struct dns_clock *clk) {
 		return clk->elapsed;
 
 	if (curtime > clk->sample)
-		clk->elapsed += (time_t)MIN(difftime(curtime, clk->sample), DNS_MAXINTERVAL);
+		clk->elapsed += (time_t)DNS_PP_MIN(difftime(curtime, clk->sample), DNS_MAXINTERVAL);
 
 	clk->sample = curtime;
 
@@ -668,7 +658,7 @@ DNS_NOTUSED static size_t dns_strnlcpy(char *dst, size_t lim, const char *src, s
 	size_t len = dns_strnlen(src, max), n;
 
 	if (lim > 0) {
-		n = MIN(lim - 1, len);
+		n = DNS_PP_MIN(lim - 1, len);
 		memcpy(dst, src, n);
 		dst[n] = '\0';
 	}
@@ -1118,7 +1108,7 @@ static unsigned short dns_p_qend(struct dns_packet *P) {
 		qend	+= 4;
 	}
 
-	return MIN(qend, P->end);
+	return DNS_PP_MIN(qend, P->end);
 invalid:
 	return P->end;
 } /* dns_p_qend() */
@@ -1195,7 +1185,7 @@ struct dns_packet *dns_p_copy(struct dns_packet *P, const struct dns_packet *P0)
 	if (!P)
 		return 0;
 
-	P->end	= MIN(P->size, P0->end);
+	P->end	= DNS_PP_MIN(P->size, P0->end);
 
 	memcpy(P->data, P0->data, P->end);
 
@@ -1204,7 +1194,7 @@ struct dns_packet *dns_p_copy(struct dns_packet *P, const struct dns_packet *P0)
 
 
 struct dns_packet *dns_p_merge(struct dns_packet *A, enum dns_section Amask, struct dns_packet *B, enum dns_section Bmask, int *error_) {
-	size_t bufsiz = MIN(65535, ((A)? A->end : 0) + ((B)? B->end : 0));
+	size_t bufsiz = DNS_PP_MIN(65535, ((A)? A->end : 0) + ((B)? B->end : 0));
 	struct dns_packet *M;
 	enum dns_section section;
 	struct dns_rr rr, mr;
@@ -1248,7 +1238,7 @@ error:
 	dns_p_setptr(&M, NULL);
 
 	if (error == DNS_ENOBUFS && bufsiz < 65535) {
-		bufsiz = MIN(65535, bufsiz * 2);
+		bufsiz = DNS_PP_MIN(65535, bufsiz * 2);
 
 		goto merge;
 	}
@@ -1512,9 +1502,9 @@ retry:
 			goto invalid;
 
 		if (lim > 0) {
-			memcpy(dst, &data[src], MIN(lim, len));
+			memcpy(dst, &data[src], DNS_PP_MIN(lim, len));
 
-			dst[MIN(lim - 1, len)]	= '\0';
+			dst[DNS_PP_MIN(lim - 1, len)]	= '\0';
 		}
 
 		*nxt	= src + len;
@@ -1602,7 +1592,7 @@ size_t dns_d_trim(void *dst_, size_t lim, const void *src_, size_t len, int flag
 	}
 
 	if (lim > 0)
-		dst[MIN(dp, lim - 1)] = '\0';
+		dst[DNS_PP_MIN(dp, lim - 1)] = '\0';
 
 	return dp;
 } /* dns_d_trim() */
@@ -1614,10 +1604,10 @@ char *dns_d_init(void *dst, size_t lim, const void *src, size_t len, int flags) 
 	} if (flags & DNS_D_ANCHOR) {
 		dns_d_anchor(dst, lim, src, len);
 	} else {
-		memmove(dst, src, MIN(lim, len));
+		memmove(dst, src, DNS_PP_MIN(lim, len));
 
 		if (lim > 0)
-			((char *)dst)[MIN(len, lim - 1)]	= '\0';
+			((char *)dst)[DNS_PP_MIN(len, lim - 1)]	= '\0';
 	}
 
 	return dst;
@@ -1628,7 +1618,7 @@ size_t dns_d_anchor(void *dst, size_t lim, const void *src, size_t len) {
 	if (len == 0)
 		return 0;
 
-	memmove(dst, src, MIN(lim, len));
+	memmove(dst, src, DNS_PP_MIN(lim, len));
 
 	if (((const char *)src)[len - 1] != '.') {
 		if (len < lim)
@@ -1637,7 +1627,7 @@ size_t dns_d_anchor(void *dst, size_t lim, const void *src, size_t len) {
 	}
 
 	if (lim > 0)
-		((char *)dst)[MIN(lim - 1, len)]	= '\0';
+		((char *)dst)[DNS_PP_MIN(lim - 1, len)]	= '\0';
 
 	return len;
 } /* dns_d_anchor() */
@@ -1659,10 +1649,10 @@ size_t dns_d_cleave(void *dst, size_t lim, const void *src, size_t len) {
 	} else
 		src	= dot;
 
-	memmove(dst, src, MIN(lim, len));
+	memmove(dst, src, DNS_PP_MIN(lim, len));
 
 	if (lim > 0)
-		((char *)dst)[MIN(lim - 1, len)]	= '\0';
+		((char *)dst)[DNS_PP_MIN(lim - 1, len)]	= '\0';
 
 	return len;
 } /* dns_d_cleave() */
@@ -1815,7 +1805,7 @@ size_t dns_d_expand(void *dst, size_t lim, unsigned short src, struct dns_packet
 
 				/* NUL terminate */
 				if (lim > 0)
-					((unsigned char *)dst)[MIN(dstp, lim - 1)]	= '\0';
+					((unsigned char *)dst)[DNS_PP_MIN(dstp, lim - 1)]	= '\0';
 
 /* success ==> */		return dstp;
 			}
@@ -1826,7 +1816,7 @@ size_t dns_d_expand(void *dst, size_t lim, unsigned short src, struct dns_packet
 				goto toolong;
 
 			if (dstp < lim)
-				memcpy(&((unsigned char *)dst)[dstp], &P->data[src], MIN(len, lim - dstp));
+				memcpy(&((unsigned char *)dst)[dstp], &P->data[src], DNS_PP_MIN(len, lim - dstp));
 
 			src	+= len;
 			dstp	+= len;
@@ -1861,14 +1851,14 @@ toolong:
 	*error	= DNS_EILLEGAL;
 
 	if (lim > 0)
-		((unsigned char *)dst)[MIN(dstp, lim - 1)]	= '\0';
+		((unsigned char *)dst)[DNS_PP_MIN(dstp, lim - 1)]	= '\0';
 
 	return 0;
 reserved:
 	*error	= DNS_EILLEGAL;
 
 	if (lim > 0)
-		((unsigned char *)dst)[MIN(dstp, lim - 1)]	= '\0';
+		((unsigned char *)dst)[DNS_PP_MIN(dstp, lim - 1)]	= '\0';
 
 	return 0;
 } /* dns_d_expand() */
@@ -2379,7 +2369,7 @@ static size_t dns__printchar(void *dst, size_t lim, size_t cp, unsigned char ch)
 
 static size_t dns__printstring(void *dst, size_t lim, size_t cp, const void *src, size_t len) {
 	if (cp < lim)
-		memcpy(&((unsigned char *)dst)[cp], src, MIN(len, lim - cp));
+		memcpy(&((unsigned char *)dst)[cp], src, DNS_PP_MIN(len, lim - cp));
 
 	return len;
 } /* dns__printstring() */
@@ -2391,7 +2381,7 @@ static size_t dns__printstring(void *dst, size_t lim, size_t cp, const void *src
 
 static void dns__printnul(void *dst, size_t lim, size_t off) {
 	if (lim > 0)
-		((unsigned char *)dst)[MIN(off, lim - 1)]	= '\0';
+		((unsigned char *)dst)[DNS_PP_MIN(off, lim - 1)]	= '\0';
 } /* dns__printnul() */
 
 
@@ -2402,7 +2392,7 @@ static size_t dns__print10(void *dst, size_t lim, size_t off, unsigned n, unsign
 	unsigned d	= 1000000000;
 	unsigned ch;
 
-	pad	= MAX(1, pad);
+	pad	= DNS_PP_MAX(1, pad);
 
 	while (d) {
 		if ((ch = n / d) || cp > 0) {
@@ -3337,7 +3327,7 @@ int dns_txt_push(struct dns_packet *P, struct dns_txt *txt) {
 	dst.b[dst.p++]	= 0xff & (n >> 0);
 
 	while (src.p < src.end) {
-		n	= MIN(255, src.end - src.p);
+		n	= DNS_PP_MIN(255, src.end - src.p);
 
 		if (dst.p >= dst.end)
 			return DNS_ENOBUFS;
@@ -3641,7 +3631,7 @@ error:
 
 int dns_hosts_loadfile(struct dns_hosts *hosts, FILE *fp) {
 	struct dns_hosts_entry ent;
-	char word[MAX(INET6_ADDRSTRLEN, DNS_D_MAXNAME) + 1];
+	char word[DNS_PP_MAX(INET6_ADDRSTRLEN, DNS_D_MAXNAME) + 1];
 	unsigned wp, wc, skip;
 	int ch, error;
 
@@ -5143,7 +5133,7 @@ int dns_hints_insert(struct dns_hints *H, const char *zone, const struct sockadd
 
 	memcpy(&soa->addrs[i].ss, sa, dns_sa_len(sa));
 
-	soa->addrs[i].priority	= MAX(1, priority);
+	soa->addrs[i].priority	= DNS_PP_MAX(1, priority);
 
 	if (soa->count < lengthof(soa->addrs))
 		soa->count++;
@@ -5618,7 +5608,7 @@ static int dns_so_closefd(struct dns_socket *so, int *fd) {
 	}
 
 	if (!(so->onum < so->olim)) {
-		unsigned olim = MAX(4, so->olim * 2);
+		unsigned olim = DNS_PP_MAX(4, so->olim * 2);
 		void *old;
 
 		if (!(old = realloc(so->old, sizeof so->old[0] * olim)))
@@ -5734,7 +5724,7 @@ unsigned short dns_so_mkqid(struct dns_socket *so) {
 #define DNS_SO_MINBUF	768
 
 static int dns_so_newanswer(struct dns_socket *so, size_t len) {
-	size_t size	= offsetof(struct dns_packet, data) + MAX(len, DNS_SO_MINBUF);
+	size_t size	= offsetof(struct dns_packet, data) + DNS_PP_MAX(len, DNS_SO_MINBUF);
 	void *p;
 
 	if (!(p = realloc(so->answer, size)))
@@ -6415,7 +6405,7 @@ retry:
 					if (error == DNS_ENOBUFS && bufsiz < 65535) {
 						dns_p_setptr(&P[2], NULL);
 
-						bufsiz	= MAX(65535, bufsiz * 2);
+						bufsiz	= DNS_PP_MAX(65535, bufsiz * 2);
 
 						goto retry;
 					}
@@ -7676,7 +7666,7 @@ int dns_ai_poll(struct dns_addrinfo *ai, int timeout) {
 
 
 size_t dns_ai_print(void *dst, size_t lim, struct addrinfo *ent, struct dns_addrinfo *ai) {
-	char addr[MAX(INET_ADDRSTRLEN, INET6_ADDRSTRLEN) + 1];
+	char addr[DNS_PP_MAX(INET_ADDRSTRLEN, INET6_ADDRSTRLEN) + 1];
 	size_t cp	= 0;
 
 	cp	+= dns__printstring(dst, lim, cp, "[ ");
@@ -8870,7 +8860,7 @@ static int sizes(int argc, char *argv[]) {
 	unsigned i, max;
 
 	for (i = 0, max = 0; i < lengthof(type); i++)
-		max = MAX(max, strlen(type[i].name));
+		max = DNS_PP_MAX(max, strlen(type[i].name));
 
 	for (i = 0; i < lengthof(type); i++)
 		printf("%*s : %"PRIuZ"\n", max, type[i].name, type[i].size);

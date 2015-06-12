@@ -1169,6 +1169,7 @@ size_t dns_strlcat(char *, const char *, size_t);
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+#define DNS_PP_MIN(a, b) (((a) < (b))? (a) : (b))
 #define DNS_PP_MAX(a, b) (((a) > (b))? (a) : (b))
 #define DNS_PP_NARG_(a, b, c, d, e, f, g, h, i, j, k, N,...) N
 #define DNS_PP_NARG(...)	DNS_PP_NARG_(__VA_ARGS__, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0)
