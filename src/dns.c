@@ -46,18 +46,12 @@
 #endif
 #include <stdlib.h>		/* malloc(3) realloc(3) free(3) rand(3) random(3) arc4random(3) */
 #include <stdio.h>		/* FILE fopen(3) fclose(3) getc(3) rewind(3) */
-
 #include <string.h>		/* memcpy(3) strlen(3) memmove(3) memchr(3) memcmp(3) strchr(3) strsep(3) strcspn(3) */
 #include <strings.h>		/* strcasecmp(3) strncasecmp(3) */
-
 #include <ctype.h>		/* isspace(3) isdigit(3) */
-
 #include <time.h>		/* time_t time(2) difftime(3) */
-
 #include <signal.h>		/* SIGPIPE sigemptyset(3) sigaddset(3) sigpending(2) sigprocmask(2) pthread_sigmask(3) sigtimedwait(2) */
-
 #include <errno.h>		/* errno EINVAL ENOENT */
-
 #undef NDEBUG
 #include <assert.h>		/* assert(3) */
 
@@ -71,21 +65,14 @@
 #include <sys/types.h>		/* FD_SETSIZE socklen_t */
 #include <sys/select.h>		/* FD_ZERO FD_SET fd_set select(2) */
 #include <sys/socket.h>		/* AF_INET AF_INET6 AF_UNIX struct sockaddr struct sockaddr_in struct sockaddr_in6 socket(2) */
-
 #if defined(AF_UNIX)
 #include <sys/un.h>		/* struct sockaddr_un */
 #endif
-
 #include <fcntl.h>		/* F_SETFD F_GETFL F_SETFL O_NONBLOCK fcntl(2) */
-
 #include <unistd.h>		/* _POSIX_THREADS gethostname(3) close(2) */
-
 #include <poll.h>		/* POLLIN POLLOUT */
-
 #include <netinet/in.h>		/* struct sockaddr_in struct sockaddr_in6 */
-
 #include <arpa/inet.h>		/* inet_pton(3) inet_ntop(3) htons(3) ntohs(3) */
-
 #include <netdb.h>		/* struct addrinfo */
 #endif
 
@@ -2281,12 +2268,17 @@ lower:
 
 
 int dns_rr_i_packet(struct dns_rr *a, struct dns_rr *b, struct dns_rr_i *i, struct dns_packet *P) {
+	(void)i;
+	(void)P;
+
 	return (int)a->dn.p - (int)b->dn.p;
 } /* dns_rr_i_packet() */
 
 
 int dns_rr_i_order(struct dns_rr *a, struct dns_rr *b, struct dns_rr_i *i, struct dns_packet *P) {
 	int cmp;
+
+	(void)i;
 
 	if ((cmp = a->section - b->section))
 		return cmp;
@@ -2301,6 +2293,9 @@ int dns_rr_i_order(struct dns_rr *a, struct dns_rr *b, struct dns_rr_i *i, struc
 int dns_rr_i_shuffle(struct dns_rr *a, struct dns_rr *b, struct dns_rr_i *i, struct dns_packet *P) {
 	int cmp;
 
+	(void)i;
+	(void)P;
+
 	while (!i->state.regs[0])
 		i->state.regs[0]	= dns_random();
 
@@ -2313,6 +2308,8 @@ int dns_rr_i_shuffle(struct dns_rr *a, struct dns_rr *b, struct dns_rr_i *i, str
 
 struct dns_rr_i *dns_rr_i_init(struct dns_rr_i *i, struct dns_packet *P) {
 	static const struct dns_rr_i i_initializer;
+
+	(void)P;
 
 	i->state	= i_initializer.state;
 	i->saved	= i->state;
@@ -3093,6 +3090,9 @@ struct dns_opt *dns_opt_init(struct dns_opt *opt, size_t size) {
 
 
 int dns_opt_parse(struct dns_opt *opt, struct dns_rr *rr, struct dns_packet *P) {
+	(void)rr;
+	(void)P;
+
 	opt->len = 0;
 
 	return 0;
@@ -3100,11 +3100,17 @@ int dns_opt_parse(struct dns_opt *opt, struct dns_rr *rr, struct dns_packet *P) 
 
 
 int dns_opt_push(struct dns_packet *P, struct dns_opt *opt) {
+	(void)P;
+	(void)opt;
+
 	return 0;
 } /* dns_opt_push() */
 
 
 int dns_opt_cmp(const struct dns_opt *a, const struct dns_opt *b) {
+	(void)a;
+	(void)b;
+
 	return 0;
 } /* dns_opt_cmp() */
 
@@ -3350,6 +3356,9 @@ int dns_txt_push(struct dns_packet *P, struct dns_txt *txt) {
 
 
 int dns_txt_cmp(const struct dns_txt *a, const struct dns_txt *b) {
+	(void)a;
+	(void)b;
+
 	return -1;
 } /* dns_txt_cmp() */
 
@@ -4956,6 +4965,8 @@ struct dns_hints *dns_hints_open(struct dns_resolv_conf *resconf, int *error) {
 	static const struct dns_hints H_initializer;
 	struct dns_hints *H;
 
+	(void)resconf;
+
 	if (!(H = malloc(sizeof *H)))
 		goto syerr;
 
@@ -5364,46 +5375,64 @@ int dns_hints_dump(struct dns_hints *hints, FILE *fp) {
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 static dns_refcount_t dns_cache_acquire(struct dns_cache *cache) {
-	return 0;
+	return dns_atomic_fetch_add(&cache->_.refcount);
 } /* dns_cache_acquire() */
 
 
 static dns_refcount_t dns_cache_release(struct dns_cache *cache) {
-	return 0;
+	return dns_atomic_fetch_sub(&cache->_.refcount);
 } /* dns_cache_release() */
 
 
 static struct dns_packet *dns_cache_query(struct dns_packet *query, struct dns_cache *cache, int *error) {
-	return 0;
+	(void)query;
+	(void)cache;
+	(void)error;
+
+	return NULL;
 } /* dns_cache_submit() */
 
 
 static int dns_cache_submit(struct dns_packet *query, struct dns_cache *cache) {
+	(void)query;
+	(void)cache;
+
 	return 0;
 } /* dns_cache_submit() */
 
 
 static int dns_cache_check(struct dns_cache *cache) {
+	(void)cache;
+
 	return 0;
 } /* dns_cache_check() */
 
 
 static struct dns_packet *dns_cache_fetch(struct dns_cache *cache, int *error) {
-	return 0;
+	(void)cache;
+	(void)error;
+
+	return NULL;
 } /* dns_cache_fetch() */
 
 
 static int dns_cache_pollfd(struct dns_cache *cache) {
+	(void)cache;
+
 	return -1;
 } /* dns_cache_pollfd() */
 
 
 static short dns_cache_events(struct dns_cache *cache) {
+	(void)cache;
+
 	return 0;
 } /* dns_cache_events() */
 
 
 static void dns_cache_clear(struct dns_cache *cache) {
+	(void)cache;
+
 	return;
 } /* dns_cache_clear() */
 
@@ -5419,6 +5448,7 @@ struct dns_cache *dns_cache_init(struct dns_cache *cache) {
 		.pollfd  = &dns_cache_pollfd,
 		.events  = &dns_cache_events,
 		.clear   = &dns_cache_clear,
+		._ = { .refcount = 1, },
 	};
 
 	*cache = c_init;
@@ -6316,6 +6346,8 @@ epilog:
 
 
 static void dns_res_reset_frame(struct dns_resolver *R, struct dns_res_frame *frame) {
+	(void)R;
+
 	dns_p_setptr(&frame->query, NULL);
 	dns_p_setptr(&frame->answer, NULL);
 	dns_p_setptr(&frame->hints, NULL);
@@ -8197,7 +8229,7 @@ static void print_packet(struct dns_packet *P, FILE *fp) {
 } /* print_packet() */
 
 
-static int parse_packet(int argc, char *argv[]) {
+static int parse_packet(int argc DNS_NOTUSED, char *argv[] DNS_NOTUSED) {
 	struct dns_packet *P	= dns_p_new(512);
 	struct dns_packet *Q	= dns_p_new(512);
 	enum dns_section section;
@@ -8284,13 +8316,14 @@ static int parse_domain(int argc, char *argv[]) {
 } /* parse_domain() */
 
 
-static int trim_domain(int argc, char *argv[]) {
-	const char *name = (argv[1])? argv[1] : "";
-	char namebuf[DNS_D_MAXNAME + 1];
+static int trim_domain(int argc, char **argv) {
+	for (argc--, argv++; argc > 0; argc--, argv++) {
+		char name[DNS_D_MAXNAME + 1];
 
-	dns_d_trim(namebuf, sizeof namebuf, name, strlen(name), DNS_D_ANCHOR);
+		dns_d_trim(name, sizeof name, *argv, strlen(*argv), DNS_D_ANCHOR);
 
-	puts(namebuf);
+		puts(name);
+	}
 
 	return 0;
 } /* trim_domain() */
@@ -8304,7 +8337,7 @@ static int expand_domain(int argc, char *argv[]) {
 	size_t lim = 0, len;
 	int error;
 
-	if (argv[1])
+	if (argc > 1)
 		rp = atoi(argv[1]);
 
 	len = slurp(&src, 0, stdin, "-");
@@ -8337,7 +8370,7 @@ static int expand_domain(int argc, char *argv[]) {
 } /* expand_domain() */
 
 
-static int show_resconf(int argc, char *argv[]) {
+static int show_resconf(int argc DNS_NOTUSED, char *argv[] DNS_NOTUSED) {
 	unsigned i;
 
 	resconf(); /* load it */
@@ -8358,7 +8391,7 @@ static int show_resconf(int argc, char *argv[]) {
 } /* show_resconf() */
 
 
-static int show_nssconf(int argc, char *argv[]) {
+static int show_nssconf(int argc DNS_NOTUSED, char *argv[] DNS_NOTUSED) {
 	unsigned i;
 
 	resconf();
@@ -8379,7 +8412,7 @@ static int show_nssconf(int argc, char *argv[]) {
 } /* show_nssconf() */
 
 
-static int show_hosts(int argc, char *argv[]) {
+static int show_hosts(int argc DNS_NOTUSED, char *argv[] DNS_NOTUSED) {
 	unsigned i;
 
 	hosts();
@@ -8630,19 +8663,20 @@ static int show_hints(int argc, char *argv[]) {
 } /* show_hints() */
 
 
-static int resolve_query(int argc, char *argv[]) {
-	struct dns_hints *(*hints)()	= (strstr(argv[0], "recurse"))? &dns_hints_root : &dns_hints_local;
+static int resolve_query(int argc DNS_NOTUSED, char *argv[]) {
+	_Bool recurse = !!strstr(argv[0], "recurse");
+	struct dns_hints *(*hints)() = (recurse)? &dns_hints_root : &dns_hints_local;
 	struct dns_resolver *R;
 	struct dns_packet *ans;
 	const struct dns_stat *st;
 	int error;
 
 	if (!MAIN.qname)
-		MAIN.qname	= "www.google.com";
+		MAIN.qname = "www.google.com";
 	if (!MAIN.qtype)
-		MAIN.qtype	= DNS_T_A;
+		MAIN.qtype = DNS_T_A;
 
-	resconf()->options.recurse	= (0 != strstr(argv[0], "recurse"));
+	resconf()->options.recurse = recurse;
 
 	if (!(R = dns_res_open(resconf(), hosts(), dns_hints_mortal(hints(resconf(), &error)), cache(), dns_opts(), &error)))
 		panic("%s: %s", MAIN.qname, dns_strerror(error));
@@ -8677,21 +8711,22 @@ static int resolve_query(int argc, char *argv[]) {
 } /* resolve_query() */
 
 
-static int resolve_addrinfo(int argc, char *argv[]) {
-	struct dns_hints *(*hints)()	= (strstr(argv[0], "recurse"))? &dns_hints_root : &dns_hints_local;
-	struct dns_resolver *res	= 0;
-	struct dns_addrinfo *ai		= 0;
-	struct addrinfo ai_hints	= { .ai_family = PF_UNSPEC, .ai_socktype = SOCK_STREAM, .ai_flags = AI_CANONNAME };
+static int resolve_addrinfo(int argc DNS_NOTUSED, char *argv[]) {
+	_Bool recurse = !!strstr(argv[0], "recurse");
+	struct dns_hints *(*hints)() = (recurse)? &dns_hints_root : &dns_hints_local;
+	struct dns_resolver *res = NULL;
+	struct dns_addrinfo *ai = NULL;
+	struct addrinfo ai_hints = { .ai_family = PF_UNSPEC, .ai_socktype = SOCK_STREAM, .ai_flags = AI_CANONNAME };
 	struct addrinfo *ent;
 	char pretty[512];
 	int error;
 
 	if (!MAIN.qname)
-		MAIN.qname	= "www.google.com";
+		MAIN.qname = "www.google.com";
 	if (!MAIN.qtype)
-		MAIN.qtype	= DNS_T_A;
+		MAIN.qtype = DNS_T_A;
 
-	resconf()->options.recurse	= (0 != strstr(argv[0], "recurse"));
+	resconf()->options.recurse = recurse;
 
 	if (!(res = dns_res_open(resconf(), hosts(), dns_hints_mortal(hints(resconf(), &error)), cache(), dns_opts(), &error)))
 		panic("%s: %s", MAIN.qname, dns_strerror(error));
@@ -8730,7 +8765,7 @@ static int resolve_addrinfo(int argc, char *argv[]) {
 } /* resolve_addrinfo() */
 
 
-static int echo_port(int argc, char *argv[]) {
+static int echo_port(int argc DNS_NOTUSED, char *argv[] DNS_NOTUSED) {
 	union {
 		struct sockaddr sa;
 		struct sockaddr_in sin;
@@ -8761,7 +8796,6 @@ static int echo_port(int argc, char *argv[]) {
 
 		count = recvfrom(fd, (char *)pkt->data, pkt->size, rflags, (struct sockaddr *)&ss, &slen);
 
-
 		if (!count || count < 0)
 			panic("recvfrom: %s", strerror(errno));
 
@@ -8777,7 +8811,7 @@ static int echo_port(int argc, char *argv[]) {
 
 
 static int isection(int argc, char *argv[]) {
-	const char *name = (argv[1])? argv[1] : "";
+	const char *name = (argc > 1)? argv[1] : "";
 	int type;
 
 	type = dns_isection(name);
@@ -8790,7 +8824,7 @@ static int isection(int argc, char *argv[]) {
 
 
 static int iclass(int argc, char *argv[]) {
-	const char *name = (argv[1])? argv[1] : "";
+	const char *name = (argc > 1)? argv[1] : "";
 	int type;
 
 	type = dns_iclass(name);
@@ -8803,7 +8837,7 @@ static int iclass(int argc, char *argv[]) {
 
 
 static int itype(int argc, char *argv[]) {
-	const char *name = (argv[1])? argv[1] : "";
+	const char *name = (argc > 1)? argv[1] : "";
 	int type;
 
 	type = dns_itype(name);
@@ -8816,7 +8850,7 @@ static int itype(int argc, char *argv[]) {
 
 
 static int iopcode(int argc, char *argv[]) {
-	const char *name = (argv[1])? argv[1] : "";
+	const char *name = (argc > 1)? argv[1] : "";
 	int type;
 
 	type = dns_iopcode(name);
@@ -8829,7 +8863,7 @@ static int iopcode(int argc, char *argv[]) {
 
 
 static int ircode(int argc, char *argv[]) {
-	const char *name = (argv[1])? argv[1] : "";
+	const char *name = (argc > 1)? argv[1] : "";
 	int type;
 
 	type = dns_ircode(name);
@@ -8847,7 +8881,7 @@ static int ircode(int argc, char *argv[]) {
 #define SIZE4(x, ...) SIZE1(x), SIZE3(__VA_ARGS__)
 #define SIZE(...) DNS_PP_CALL(DNS_PP_XPASTE(SIZE, DNS_PP_NARG(__VA_ARGS__)), __VA_ARGS__)
 
-static int sizes(int argc, char *argv[]) {
+static int sizes(int argc DNS_NOTUSED, char *argv[] DNS_NOTUSED) {
 	static const struct { const char *name; size_t size; } type[] = {
 		SIZE(struct dns_header, struct dns_packet, struct dns_rr, struct dns_rr_i),
 		SIZE(struct dns_a, struct dns_aaaa, struct dns_mx, struct dns_ns),

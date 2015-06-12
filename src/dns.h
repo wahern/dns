@@ -965,8 +965,8 @@ unsigned dns_hints_grep(struct sockaddr **, socklen_t *, unsigned, struct dns_hi
 struct dns_cache {
 	void *state;
 
-	dns_atomic_t (*acquire)(struct dns_cache *);
-	dns_atomic_t (*release)(struct dns_cache *);
+	dns_refcount_t (*acquire)(struct dns_cache *);
+	dns_refcount_t (*release)(struct dns_cache *);
 
 	struct dns_packet *(*query)(struct dns_packet *, struct dns_cache *, int *);
 
@@ -982,6 +982,10 @@ struct dns_cache {
 		long i;
 		void *p;
 	} arg[3];
+
+	struct { /* PRIVATE */
+		dns_atomic_t refcount;
+	} _;
 }; /* struct dns_cache */
 
 
