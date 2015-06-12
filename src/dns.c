@@ -38,6 +38,7 @@
 #define _NETBSD_SOURCE
 #endif
 
+#include <limits.h>		/* INT_MAX */
 #include <stddef.h>		/* offsetof() */
 #ifdef _WIN32
 #define uint32_t unsigned int
@@ -3960,6 +3961,11 @@ struct dns_resolv_conf *dns_resconf_root(int *error) {
 } /* dns_resconf_root() */
 
 
+static time_t dns_resconf_timeout(const struct dns_resolv_conf *resconf) {
+	return (time_t)DNS_PP_MIN(INT_MAX, resconf->options.timeout);
+} /* dns_resconf_timeout() */
+
+
 enum dns_resconf_keyword {
 	DNS_RESCONF_NAMESERVER,
 	DNS_RESCONF_DOMAIN,
@@ -6882,7 +6888,7 @@ exec:
 
 		F->state++;
 	case DNS_R_QUERY_A:
-		if (dns_so_elapsed(&R->so) >= (time_t)R->resconf->options.timeout)
+		if (dns_so_elapsed(&R->so) >= dns_resconf_timeout(R->resconf))
 			dgoto(R->sp, DNS_R_FOREACH_A);
 
 		if ((error = dns_so_check(&R->so)))
@@ -7172,7 +7178,7 @@ time_t dns_res_timeout(struct dns_resolver *R) {
 	case DNS_R_QUERY_A:
 		elapsed = dns_so_elapsed(&R->so);
 
-		if (elapsed <= R->resconf->options.timeout)
+		if (elapsed <= dns_resconf_timeout(R->resconf))
 			return R->resconf->options.timeout - elapsed;
 
 		break;
