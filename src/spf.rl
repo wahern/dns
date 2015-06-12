@@ -4275,7 +4275,9 @@ static struct dns_resolver *mkres(void) {
 	if (MAIN.res)
 		return MAIN.res;
 
-	assert(MAIN.res = dns_res_open(mkresconf(), dns_hosts_mortal(dns_hosts_local(&error)), dns_hints_mortal(dns_hints_local(mkresconf(), &error)), mkcache(), dns_opts(), &error));
+	MAIN.res = dns_res_open(mkresconf(), dns_hosts_mortal(dns_hosts_local(&error)), dns_hints_mortal(dns_hints_local(mkresconf(), &error)), mkcache(), dns_opts(), &error);
+
+	assert(MAIN.res);
 
 	return MAIN.res;
 } /* mkres() */
