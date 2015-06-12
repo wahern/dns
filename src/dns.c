@@ -4580,7 +4580,7 @@ int dns_nssconf_loadfile(struct dns_resolv_conf *resconf, FILE *fp) {
 				dns_anyconf_skip("] \t", fp);
 			}
 
-			if (endof(lookup) - lp < cf.count + 1) /* +1 for '\0' */
+			if ((size_t)(endof(lookup) - lp) < cf.count + 1) /* +1 for '\0' */
 				goto nextsrc;
 
 			source = dns_nssconf_keyword(cf.token[0]);
