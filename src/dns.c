@@ -297,6 +297,16 @@ const char *dns_strerror(int error) {
 /*
  * A T O M I C  R O U T I N E S
  *
+ * Use GCC's __atomic built-ins if possible. Unlike the __sync built-ins, we
+ * can use the preprocessor to detect API and, more importantly, ISA
+ * support. We want to avoid linking headaches where the API depends on an
+ * external library if the ISA (e.g. i386) doesn't support lockless
+ * operation.
+ *
+ * TODO: Support C11's atomic API. Although that may require some finesse
+ * with how we define some public types, such as dns_atomic_t and struct
+ * dns_resolv_conf.
+ *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 #ifndef HAVE___ATOMIC_FETCH_ADD
@@ -308,7 +318,7 @@ const char *dns_strerror(int error) {
 #endif
 
 #ifndef DNS_ATOMIC_FETCH_ADD
-#if HAVE___ATOMIC_FETCH_ADD
+#if HAVE___ATOMIC_FETCH_ADD && __GCC_ATOMIC_LONG_LOCK_FREE == 2
 #define DNS_ATOMIC_FETCH_ADD(i) __atomic_fetch_add((i), 1, __ATOMIC_RELAXED)
 #else
 #pragma message("no atomic_fetch_add available")
@@ -317,7 +327,7 @@ const char *dns_strerror(int error) {
 #endif
 
 #ifndef DNS_ATOMIC_FETCH_SUB
-#if HAVE___ATOMIC_FETCH_SUB
+#if HAVE___ATOMIC_FETCH_SUB && __GCC_ATOMIC_LONG_LOCK_FREE == 2
 #define DNS_ATOMIC_FETCH_SUB(i) __atomic_fetch_sub((i), 1, __ATOMIC_RELAXED)
 #else
 #pragma message("no atomic_fetch_sub available")
@@ -3588,12 +3598,12 @@ void dns_hosts_close(struct dns_hosts *hosts) {
 } /* dns_hosts_close() */
 
 
-unsigned dns_hosts_acquire(struct dns_hosts *hosts) {
+dns_refcount_t dns_hosts_acquire(struct dns_hosts *hosts) {
 	return dns_atomic_fetch_add(&hosts->refcount);
 } /* dns_hosts_acquire() */
 
 
-unsigned dns_hosts_release(struct dns_hosts *hosts) {
+dns_refcount_t dns_hosts_release(struct dns_hosts *hosts) {
 	return dns_atomic_fetch_sub(&hosts->refcount);
 } /* dns_hosts_release() */
 
@@ -3898,12 +3908,12 @@ void dns_resconf_close(struct dns_resolv_conf *resconf) {
 } /* dns_resconf_close() */
 
 
-unsigned dns_resconf_acquire(struct dns_resolv_conf *resconf) {
+dns_refcount_t dns_resconf_acquire(struct dns_resolv_conf *resconf) {
 	return dns_atomic_fetch_add(&resconf->_.refcount);
 } /* dns_resconf_acquire() */
 
 
-unsigned dns_resconf_release(struct dns_resolv_conf *resconf) {
+dns_refcount_t dns_resconf_release(struct dns_resolv_conf *resconf) {
 	return dns_atomic_fetch_sub(&resconf->_.refcount);
 } /* dns_resconf_release() */
 
@@ -4991,12 +5001,12 @@ void dns_hints_close(struct dns_hints *H) {
 } /* dns_hints_close() */
 
 
-unsigned dns_hints_acquire(struct dns_hints *H) {
+dns_refcount_t dns_hints_acquire(struct dns_hints *H) {
 	return dns_atomic_fetch_add(&H->refcount);
 } /* dns_hints_acquire() */
 
 
-unsigned dns_hints_release(struct dns_hints *H) {
+dns_refcount_t dns_hints_release(struct dns_hints *H) {
 	return dns_atomic_fetch_sub(&H->refcount);
 } /* dns_hints_release() */
 
@@ -5363,12 +5373,12 @@ int dns_hints_dump(struct dns_hints *hints, FILE *fp) {
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-static dns_atomic_t dns_cache_acquire(struct dns_cache *cache) {
+static dns_refcount_t dns_cache_acquire(struct dns_cache *cache) {
 	return 0;
 } /* dns_cache_acquire() */
 
 
-static dns_atomic_t dns_cache_release(struct dns_cache *cache) {
+static dns_refcount_t dns_cache_release(struct dns_cache *cache) {
 	return 0;
 } /* dns_cache_release() */
 
@@ -6355,12 +6365,12 @@ void dns_res_close(struct dns_resolver *R) {
 } /* dns_res_close() */
 
 
-unsigned dns_res_acquire(struct dns_resolver *R) {
+dns_refcount_t dns_res_acquire(struct dns_resolver *R) {
 	return dns_atomic_fetch_add(&R->refcount);
 } /* dns_res_acquire() */
 
 
-unsigned dns_res_release(struct dns_resolver *R) {
+dns_refcount_t dns_res_release(struct dns_resolver *R) {
 	return dns_atomic_fetch_sub(&R->refcount);
 } /* dns_res_release() */
 

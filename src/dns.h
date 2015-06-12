@@ -65,9 +65,9 @@
 
 #define DNS_VENDOR "william@25thandClement.com"
 
-#define DNS_V_REL  0x20150611
-#define DNS_V_ABI  0x20150610
-#define DNS_V_API  0x20150611
+#define DNS_V_REL  0x20150612
+#define DNS_V_ABI  0x20150612
+#define DNS_V_API  0x20150612
 
 
 const char *dns_vendor(void);
@@ -314,6 +314,8 @@ enum dns_rcode dns_ircode(const char *);
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 typedef unsigned long dns_atomic_t;
+
+typedef unsigned long dns_refcount_t; /* must be same value type as dns_atomic_t */
 
 
 /*
@@ -817,9 +819,9 @@ struct dns_hosts *dns_hosts_open(int *);
 
 void dns_hosts_close(struct dns_hosts *);
 
-unsigned dns_hosts_acquire(struct dns_hosts *);
+dns_refcount_t dns_hosts_acquire(struct dns_hosts *);
 
-unsigned dns_hosts_release(struct dns_hosts *);
+dns_refcount_t dns_hosts_release(struct dns_hosts *);
 
 struct dns_hosts *dns_hosts_mortal(struct dns_hosts *);
 
@@ -882,9 +884,9 @@ struct dns_resolv_conf *dns_resconf_open(int *);
 
 void dns_resconf_close(struct dns_resolv_conf *);
 
-unsigned dns_resconf_acquire(struct dns_resolv_conf *);
+dns_refcount_t dns_resconf_acquire(struct dns_resolv_conf *);
 
-unsigned dns_resconf_release(struct dns_resolv_conf *);
+dns_refcount_t dns_resconf_release(struct dns_resolv_conf *);
 
 struct dns_resolv_conf *dns_resconf_mortal(struct dns_resolv_conf *);
 
@@ -924,9 +926,9 @@ struct dns_hints *dns_hints_open(struct dns_resolv_conf *, int *);
 
 void dns_hints_close(struct dns_hints *);
 
-unsigned dns_hints_acquire(struct dns_hints *);
+dns_refcount_t dns_hints_acquire(struct dns_hints *);
 
-unsigned dns_hints_release(struct dns_hints *);
+dns_refcount_t dns_hints_release(struct dns_hints *);
 
 struct dns_hints *dns_hints_mortal(struct dns_hints *);
 
@@ -1089,9 +1091,9 @@ void dns_res_reset(struct dns_resolver *);
 
 void dns_res_close(struct dns_resolver *);
 
-unsigned dns_res_acquire(struct dns_resolver *);
+dns_refcount_t dns_res_acquire(struct dns_resolver *);
 
-unsigned dns_res_release(struct dns_resolver *);
+dns_refcount_t dns_res_release(struct dns_resolver *);
 
 struct dns_resolver *dns_res_mortal(struct dns_resolver *);
 
