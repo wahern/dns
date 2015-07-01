@@ -587,9 +587,8 @@ struct in6_addr *spf_pto6(struct in6_addr *ip, const char *src) {
 						spf_pto4(&ip4, part[k]);
 
 						group[j] = 0xffff & ntohl(ip4.s_addr);
-
-						if (--j >= 0)
-							group[j] = 0xffff & (ntohl(ip4.s_addr) >> 16);
+						assert(j > 0);
+						group[--j] = 0xffff & (ntohl(ip4.s_addr) >> 16);
 					} else {
 						group[j] = spf_xtoi(part[k]);
 					}
