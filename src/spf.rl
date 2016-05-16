@@ -4053,7 +4053,7 @@ const struct spf_limits spf_safelimits = SPF_SAFELIMITS;
 
 const struct spf_options spf_defaults = {
 	.limit  = SPF_SAFELIMITS,
-	.lookup = { SPF_RR_SPF, SPF_RR_TXT },
+	.lookup = { SPF_RR_TXT, SPF_RR_SPF },
 }; /* spf_defaults */
 
 struct spf_resolver *spf_open(const struct spf_env *env, struct dns_resolver *res, const struct spf_options *opts, int *error_) {
