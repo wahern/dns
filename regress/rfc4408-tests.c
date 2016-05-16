@@ -49,7 +49,9 @@
 
 #define lengthof(a) (sizeof (a) / sizeof (a)[0])
 
+#ifndef MIN
 #define MIN(a, b) (((a) < (b))? (a) : (b))
+#endif
 
 #define STRINGIFY_(s) #s
 #define STRINGIFY(s) STRINGIFY_(s)
@@ -130,14 +132,18 @@ static struct dns_resolver *mkres(struct cache *zonedata) {
 	struct dns_resolver *res;
 	int error;
 
-	assert(resconf = dns_resconf_open(&error));
+	resconf = dns_resconf_open(&error);
+	assert(resconf);
 	memset(resconf->lookup, 0, sizeof resconf->lookup);
 	resconf->lookup[0] = 'c';
 
-	assert(hosts = dns_hosts_open(&error));
-	assert(hints = dns_hints_open(resconf, &error));
+	hosts = dns_hosts_open(&error);
+	assert(hosts);
+	hints = dns_hints_open(resconf, &error);
+	assert(hints);
 
-	assert(res = dns_res_open(dns_resconf_mortal(resconf), dns_hosts_mortal(hosts), dns_hints_mortal(hints), cache_resi(zonedata), dns_opts(), &error));
+	res = dns_res_open(dns_resconf_mortal(resconf), dns_hosts_mortal(hosts), dns_hints_mortal(hints), cache_resi(zonedata), dns_opts(), &error);
+	assert(res);
 
 	return res;
 } /* mkres() */
@@ -214,7 +220,8 @@ static void test_run(struct test *test, struct dns_resolver *res, struct cache *
 	const char *exp;
 
 	spf_env_init(&env, test->host.type, &test->host.ip, test->helo, test->mailfrom);
-	assert(spf = spf_open(&env, res, &spf_defaults, &error));
+	spf = spf_open(&env, res, &spf_defaults, &error);
+	assert(spf);
 
 	while ((error = spf_check(spf))) {
 		SAY("spf_check: %s", spf_strerror(error));
@@ -234,8 +241,10 @@ static void test_run(struct test *test, struct dns_resolver *res, struct cache *
 
 	test->actual.result = result;
 
-	if (exp)
-		assert(test->actual.exp = strdup(exp));
+	if (exp) {
+		test->actual.exp = strdup(exp);
+		assert(test->actual.exp);
+	}
 done:
 	if (passed) {
 		MAIN.tests.passed++;
@@ -311,7 +320,10 @@ static void section_free(struct section *section) {
 
 
 static int expect(yaml_parser_t *parser, yaml_event_t *event, int set) {
-	assert(yaml_parser_parse(parser, event));
+	int ok;
+
+	ok = yaml_parser_parse(parser, event);
+	assert(ok);
 
 	if (!INSET(set, event->type))
 		panic("got %s, expected %s", yaml_strevent(event->type), yaml_strevents(set));
@@ -341,13 +353,15 @@ static char *nextscalar(char **dst, yaml_parser_t *parser) {
 	yaml_event_t event;
 
 	if (YAML_SCALAR_EVENT == expect(parser, &event, SET(YAML_SCALAR_EVENT, YAML_SEQUENCE_START_EVENT))) {
-		assert(*dst = strdup((char *)event.data.scalar.value));
+		*dst = strdup((char *)event.data.scalar.value);
+		assert(*dst);
 	} else {
 		size_t size = 0;
 		*dst = 0;
 
 		while (YAML_SCALAR_EVENT == expect(parser, delete(&event), SET(YAML_SCALAR_EVENT, YAML_SEQUENCE_END_EVENT))) {
-			assert(*dst = realloc(*dst, size + SCALAR_LEN(&event) + 1));
+			*dst = realloc(*dst, size + SCALAR_LEN(&event) + 1);
+			assert(*dst);
 			memcpy(&(*dst)[size], SCALAR_STR(&event), SCALAR_LEN(&event));
 			size += SCALAR_LEN(&event);
 			(*dst)[size] = '\0';
@@ -370,10 +384,12 @@ static struct test *nexttest(yaml_parser_t *parser) {
 	if (type == YAML_MAPPING_END_EVENT)
 		{ delete(&event); return NULL; }
 
-	assert(test = malloc(sizeof *test));
+	test = malloc(sizeof *test);
+	assert(test);
 	memset(test, 0, sizeof *test);
 
-	assert(test->name = strdup((char *)event.data.scalar.value));
+	test->name = strdup((char *)event.data.scalar.value);
+	assert(test->name);
 	delete(&event);
 
 	discard(parser, SET(YAML_MAPPING_START_EVENT));
@@ -391,6 +407,7 @@ static struct test *nexttest(yaml_parser_t *parser) {
 			nextscalar(&test->helo, parser);
 		}  else if (streq(txt, "host")) {
 			char *host;
+			int rv;
 
 			nextscalar(&host, parser);
 
@@ -400,19 +417,23 @@ static struct test *nexttest(yaml_parser_t *parser) {
 				test->host.type = AF_INET;
 			}
 
-			assert(1 == inet_pton(test->host.type, host, &test->host.ip));
+			rv = inet_pton(test->host.type, host, &test->host.ip);
+			assert(rv == 1);
 
 			free(host);
 		}  else if (streq(txt, "mailfrom")) {
 			nextscalar(&test->mailfrom, parser);
 		}  else if (streq(txt, "result")) {
 			if (YAML_SCALAR_EVENT == expect(parser, delete(&event), SET(YAML_SCALAR_EVENT, YAML_SEQUENCE_START_EVENT))) {
-				assert(test->result[0] = strdup((char *)event.data.scalar.value));
+				test->result[0] = strdup((char *)event.data.scalar.value);
+				assert(test->result[0]);
 				test->rcount = 1;
 			} else {
 				while (YAML_SCALAR_EVENT == expect(parser, delete(&event), SET(YAML_SCALAR_EVENT, YAML_SEQUENCE_END_EVENT))) {
 					assert(test->rcount < lengthof(test->result));
-					assert(test->result[test->rcount++] = strdup((char *)event.data.scalar.value));
+					test->result[test->rcount] = strdup((char *)event.data.scalar.value);
+					assert(test->result[test->rcount]);
+					test->rcount++;
 				}
 			}
 		}  else if (streq(txt, "explanation")) {
@@ -467,9 +488,10 @@ static struct cache *nextzonedata(yaml_parser_t *parser, _Bool insert) {
 	yaml_event_t event;
 	char rrname[256];
 	union dns_any anyrr;
-	int error, rrtype;
+	int rv, error, rrtype;
 
-	assert(zonedata = cache_open(&error));
+	zonedata = cache_open(&error);
+	assert(zonedata);
 
 	discard(parser, SET(YAML_MAPPING_START_EVENT));
 
@@ -494,12 +516,14 @@ static struct cache *nextzonedata(yaml_parser_t *parser, _Bool insert) {
 			switch (rrtype) {
 			case DNS_T_A:
 				expect(parser, delete(&event), SET(YAML_SCALAR_EVENT));
-				assert(1 == inet_pton(AF_INET, SCALAR_STR(&event), &anyrr.a));
+				rv = inet_pton(AF_INET, SCALAR_STR(&event), &anyrr.a);
+				assert(rv == 1);
 
 				break;
 			case DNS_T_AAAA:
 				expect(parser, delete(&event), SET(YAML_SCALAR_EVENT));
-				assert(1 == inet_pton(AF_INET6, SCALAR_STR(&event), &anyrr.aaaa));
+				rv = inet_pton(AF_INET6, SCALAR_STR(&event), &anyrr.aaaa);
+				assert(rv == 1);
 
 				break;
 			case DNS_T_PTR:
@@ -537,8 +561,10 @@ static struct cache *nextzonedata(yaml_parser_t *parser, _Bool insert) {
 				goto next;
 			} /* switch() */
 
-			if (insert)
-				assert(!(error = cache_insert(zonedata, rrname, rrtype, 3600, &anyrr)));
+			if (insert) {
+				error = cache_insert(zonedata, rrname, rrtype, 3600, &anyrr);
+				assert(!error);
+			}
 next:
 			discard(parser, SET(YAML_MAPPING_END_EVENT));
 		} /* while() */
@@ -566,7 +592,8 @@ static struct section *nextsection(yaml_parser_t *parser, const char *testname) 
 
 	discard(parser, SET(YAML_MAPPING_START_EVENT));
 
-	assert(section = malloc(sizeof *section));
+	section = malloc(sizeof *section);
+	assert(section);
 	memset(section, 0, sizeof *section);
 	CIRCLEQ_INIT(&section->tests);
 
@@ -610,10 +637,11 @@ static struct section *nextsection(yaml_parser_t *parser, const char *testname) 
 
 static void trace(yaml_parser_t *parser) {
 	yaml_event_t event;
-	int done = 0;
+	int ok, done = 0;
 
 	while (!done) {
-		assert(yaml_parser_parse(parser, &event));
+		ok = yaml_parser_parse(parser, &event);
+		assert(ok);
 
 		puts(yaml_strevent(event.type));
 
