@@ -1,7 +1,7 @@
 /* ==========================================================================
  * dns.c - Recursive, Reentrant DNS Resolver.
  * --------------------------------------------------------------------------
- * Copyright (c) 2008, 2009, 2010, 2012, 2013, 2014, 2015  William Ahern
+ * Copyright (c) 2008, 2009, 2010, 2012-2016  William Ahern
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
@@ -1034,6 +1034,69 @@ error:
 	return send(fd, src, lim, flags);
 #endif
 } /* dns_send() */
+
+
+#define DNS_FOPEN_STDFLAGS "rwabt+"
+
+static dns_error_t dns_fopen_addflag(char *dst, const char *src, size_t lim, int fc) {
+	char *p = dst, *pe = dst + lim;
+
+	/* copy standard flags */
+	while (*src && strchr(DNS_FOPEN_STDFLAGS, *src)) {
+		if (!(p < pe))
+			return ENOMEM;
+		*p++ = *src++;
+	}
+
+	/* append flag to standard flags */
+	if (!(p < pe))
+		return ENOMEM;
+	*p++ = fc;
+
+	/* copy remaining mode string, including '\0' */
+	do {
+		if (!(p < pe))
+			return ENOMEM;
+	} while ((*p++ = *src++));
+
+	return 0;
+} /* dns_fopen_addflag() */
+
+static FILE *dns_fopen(const char *path, const char *mode, dns_error_t *_error) {
+	FILE *fp;
+	char mode_cloexec[32];
+	int error;
+
+	assert(path && mode && *mode);
+	if (!*path) {
+		error = EINVAL;
+		goto error;
+	}
+
+#if _WIN32 || _WIN64
+	if ((error = dns_fopen_addflag(mode_cloexec, mode, sizeof mode_cloexec, 'N')))
+		goto error;
+	if (!(fp = fopen(path, mode_cloexec)))
+		goto syerr;
+#else
+	if ((error = dns_fopen_addflag(mode_cloexec, mode, sizeof mode_cloexec, 'e')))
+		goto error;
+	if (!(fp = fopen(path, mode_cloexec))) {
+		if (errno != EINVAL)
+			goto syerr;
+		if (!(fp = fopen(path, mode)))
+			goto syerr;
+	}
+#endif
+
+	return fp;
+syerr:
+	error = dns_syerr();
+error:
+	*_error = error;
+
+	return NULL;
+} /* dns_fopen() */
 
 
 /*
@@ -3709,10 +3772,10 @@ int dns_hosts_loadpath(struct dns_hosts *hosts, const char *path) {
 	FILE *fp;
 	int error;
 
-	if (!(fp = fopen(path, "r")))
-		return dns_syerr();
+	if (!(fp = dns_fopen(path, "rt", &error)))
+		return error;
 
-	error	= dns_hosts_loadfile(hosts, fp);
+	error = dns_hosts_loadfile(hosts, fp);
 
 	fclose(fp);
 
@@ -4278,10 +4341,10 @@ int dns_resconf_loadpath(struct dns_resolv_conf *resconf, const char *path) {
 	FILE *fp;
 	int error;
 
-	if (!(fp = fopen(path, "r")))
-		return dns_syerr();
+	if (!(fp = dns_fopen(path, "rt", &error)))
+		return error;
 
-	error	= dns_resconf_loadfile(resconf, fp);
+	error = dns_resconf_loadfile(resconf, fp);
 
 	fclose(fp);
 
@@ -4661,8 +4724,8 @@ int dns_nssconf_loadpath(struct dns_resolv_conf *resconf, const char *path) {
 	FILE *fp;
 	int error;
 
-	if (!(fp = fopen(path, "r")))
-		return dns_syerr();
+	if (!(fp = dns_fopen(path, "rt", &error)))
+		return error;
 
 	error = dns_nssconf_loadfile(resconf, fp);
 
