@@ -5662,6 +5662,14 @@ static int dns_socket(struct sockaddr *local, int type, int *error_) {
 	if (type != SOCK_DGRAM)
 		return fd;
 
+	/*
+	 * FreeBSD, Linux, OpenBSD, OS X, and Solaris use random ports by
+	 * default. Though the ephemeral range is quite small on OS X
+	 * (49152-65535 on 10.10) and Linux (32768-60999 on 4.4.0, Ubuntu
+	 * Xenial). See also RFC 6056.
+	 *
+	 * TODO: Optionally rely on the kernel to select a random port.
+	 */
 	if (*dns_sa_port(local->sa_family, local) == 0) {
 		struct sockaddr_storage tmp;
 		unsigned i, port;
@@ -5676,6 +5684,8 @@ static int dns_socket(struct sockaddr *local, int type, int *error_) {
 			if (0 == bind(fd, (struct sockaddr *)&tmp, dns_sa_len(&tmp)))
 				return fd;
 		}
+
+		/* NB: continue to next bind statement */
 	}
 
 	if (0 == bind(fd, local, dns_sa_len(local)))
