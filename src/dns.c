@@ -5684,7 +5684,7 @@ soerr:
 	error = dns_soerr();
 
 	goto error;
-#if defined F_SETFD || defined O_NONBLOCK
+#if (defined F_SETFD && !HAVE_SOCK_CLOEXEC) || (defined O_NONBLOCK && !HAVE_SOCK_NONBLOCK)
 syerr:
 	error = dns_syerr();
 
