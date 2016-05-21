@@ -693,7 +693,7 @@ static unsigned short *dns_sa_port(int af, void *sa) {
 } /* dns_sa_port() */
 
 
-static void *dns_sa_addr(int af, void *sa, socklen_t *size) {
+static void *dns_sa_addr(int af, const void *sa, socklen_t *size) {
 	switch (af) {
 	case AF_INET6: {
 		struct in6_addr *in6 = &((struct sockaddr_in6 *)sa)->sin6_addr;
@@ -3937,8 +3937,17 @@ struct dns_resolv_conf *dns_resconf_local(int *error_) {
 	if (!(resconf = dns_resconf_open(&error)))
 		goto error;
 
-	if ((error = dns_resconf_loadpath(resconf, "/etc/resolv.conf")))
-		goto error;
+	if ((error = dns_resconf_loadpath(resconf, "/etc/resolv.conf"))) {
+		/*
+		 * NOTE: Both the glibc and BIND9 resolvers ignore a missing
+		 * /etc/resolv.conf, defaulting to a nameserver of
+		 * 127.0.0.1. See also dns_hints_insert_resconf, and the
+		 * default initialization of nameserver[0] in
+		 * dns_resconf_open.
+		 */
+		if (error != ENOENT)
+			goto error;
+	}
 
 	if ((error = dns_nssconf_loadpath(resconf, "/etc/nsswitch.conf"))) {
 		if (error != ENOENT)
@@ -5163,20 +5172,56 @@ int dns_hints_insert(struct dns_hints *H, const char *zone, const struct sockadd
 } /* dns_hints_insert() */
 
 
+static _Bool dns_hints_isinaddr_any(const void *sa) {
+	struct in_addr *addr;
+
+	if (dns_sa_family(sa) != AF_INET)
+		return 0;
+
+	addr = dns_sa_addr(AF_INET, sa, NULL);
+	return addr->s_addr == htonl(INADDR_ANY);
+}
+
 unsigned dns_hints_insert_resconf(struct dns_hints *H, const char *zone, const struct dns_resolv_conf *resconf, int *error_) {
 	unsigned i, n, p;
 	int error;
 
 	for (i = 0, n = 0, p = 1; i < lengthof(resconf->nameserver) && resconf->nameserver[i].ss_family != AF_UNSPEC; i++, n++) {
-		if ((error = dns_hints_insert(H, zone, (struct sockaddr *)&resconf->nameserver[i], p)))
+		union { struct sockaddr_in sin; } tmp;
+		struct sockaddr *ns;
+
+		/*
+		 * dns_resconf_open initializes nameserver[0] to INADDR_ANY.
+		 *
+		 * Traditionally the semantics of 0.0.0.0 meant the default
+		 * interface, which evolved to mean the loopback interface.
+		 * See comment block preceding resolv/res_init.c:res_init in
+		 * glibc 2.23. As of 2.23, glibc no longer translates
+		 * 0.0.0.0 despite the code comment, but it does default to
+		 * 127.0.0.1 when no nameservers are present.
+		 *
+		 * BIND9 as of 9.10.3 still translates 0.0.0.0 to 127.0.0.1.
+		 * See lib/lwres/lwconfig.c:lwres_create_addr and the
+		 * convert_zero flag. 127.0.0.1 is also the default when no
+		 * nameservers are present.
+		 */
+		if (dns_hints_isinaddr_any(&resconf->nameserver[i])) {
+			memcpy(&tmp.sin, &resconf->nameserver[i], sizeof tmp.sin);
+			tmp.sin.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+			ns = (struct sockaddr *)&tmp.sin;
+		} else {
+			ns = (struct sockaddr *)&resconf->nameserver[i];
+		}
+
+		if ((error = dns_hints_insert(H, zone, ns, p)))
 			goto error;
 
-		p	+= !resconf->options.rotate;
+		p += !resconf->options.rotate;
 	}
 
 	return n;
 error:
-	*error_	= error;
+	*error_ = error;
 
 	return n;
 } /* dns_hints_insert_resconf() */
