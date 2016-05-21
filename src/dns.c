@@ -364,8 +364,10 @@ static inline unsigned dns_atomic_fetch_sub(dns_atomic_t *i) {
 static unsigned dns_random_(void) {
 #if DNS_RANDOM_OPENSSL
 	unsigned r;
+	_Bool ok;
 
-	assert(1 == RAND_bytes((unsigned char *)&r, sizeof r));
+	ok = (1 == RAND_bytes((unsigned char *)&r, sizeof r));
+	assert(ok && "1 == RAND_bytes()");
 
 	return r;
 #else

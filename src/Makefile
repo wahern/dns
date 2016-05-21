@@ -14,24 +14,28 @@
 # dns.c API require these newer features, so MSVC support would always play
 # second fiddle.
 #
-CPPFLAGS	+= -DDNS_DEBUG -DDNS_MAIN
-CFLAGS		+= -std=gnu99 -Wall -Wextra -O2 -g -fstack-protector
+ALL_CPPFLAGS = -DDNS_DEBUG -DDNS_MAIN $(CPPFLAGS)
+ALL_CFLAGS   = -std=gnu99 -Wall -Wextra -O2 -g -fstack-protector $(CFLAGS)
+ALL_LIBS     = $(LIBS)
 
-EXE_CC		= $(shell find $$(echo $${PATH} | tr ':' ' ') -maxdepth 1 -name \*mingw32-gcc -o -name gcc-\* | while read GCC; do echo $$($$GCC -v 2>&1 | tail -n1 | cut -d' ' -f3) $$GCC; done | sort -nr | head -n1 | cut -d' ' -f2)
-EXE_CPPFLAGS	+= $(CPPFLAGS)
-EXE_CFLAGS	+= -std=gnu99 -Wall -O2 -g
-EXE_LIBS	+= -lws2_32 -lgdi32
+EXE_CC           = $(shell find $$(echo $${PATH} | tr ':' ' ') -maxdepth 1 -name \*mingw32-gcc -o -name gcc-\* | while read GCC; do echo $$($$GCC -v 2>&1 | tail -n1 | cut -d' ' -f3) $$GCC; done | sort -nr | head -n1 | cut -d' ' -f2)
+EXE_CPPFLAGS     = $(ALL_CPPFLAGS)
+EXE_CFLAGS       =
+EXE_LIBS         =
+ALL_EXE_CPPFLAGS = $(EXE_CPPFLAGS)
+ALL_EXE_CFLAGS   = -std=gnu99 -Wall -O2 -g $(EXE_CFLAGS)
+ALL_EXE_LIBS     = -lws2_32 -lgdi32 $(EXE_LIBS)
 
 all: dns
 
 dns: dns.c
-	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^
+	$(CC) $(ALL_CFLAGS) $(ALL_CPPFLAGS) -o $@ $^ $(ALL_LIBS)
 
 dns.exe: dns.c
-	$(EXE_CC) $(EXE_CFLAGS) $(EXE_CPPFLAGS) -o $@ $^ $(EXE_LIBS)
+	$(EXE_CC) $(ALL_EXE_CFLAGS) $(ALL_EXE_CPPFLAGS) -o $@ $^ $(ALL_EXE_LIBS)
 
 dns.S: dns.c
-	$(CC) $(CFLAGS) -S $(CPPFLAGS) -o $@ $^
+	$(CC) $(ALL_CFLAGS) -S $(ALL_CPPFLAGS) -o $@ $^
 
 
 SPF_CPPFLAGS += 
