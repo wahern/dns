@@ -5601,38 +5601,53 @@ static void dns_socketclose(int *fd, const struct dns_options *opts) {
 } /* dns_socketclose() */
 
 
+#ifndef HAVE_IOCTLSOCKET
+#define HAVE_IOCTLSOCKET (_WIN32 || _WIN64)
+#endif
+
+#ifndef HAVE_SOCK_CLOEXEC
+#define HAVE_SOCK_CLOEXEC (defined SOCK_CLOEXEC)
+#endif
+
+#ifndef HAVE_SOCK_NONBLOCK
+#define HAVE_SOCK_NONBLOCK (defined SOCK_NONBLOCK)
+#endif
+
 #define DNS_SO_MAXTRY	7
 
 static int dns_socket(struct sockaddr *local, int type, int *error_) {
-	int error, fd	= -1;
-#if defined(O_NONBLOCK)
-	int flags;
-#elif defined(FIONBIO)
+	int fd = -1, flags, error;
+#if defined FIONBIO
 	unsigned long opt;
 #endif
 
-	if (-1 == (fd = socket(local->sa_family, type, 0)))
+	flags = 0;
+#if HAVE_SOCK_CLOEXEC
+	flags |= SOCK_CLOEXEC;
+#endif
+#if HAVE_SOCK_NONBLOCK
+	flags |= SOCK_NONBLOCK;
+#endif
+	if (-1 == (fd = socket(local->sa_family, type|flags, 0)))
 		goto soerr;
 
-#if defined(F_SETFD)
+#if defined F_SETFD && !HAVE_SOCK_CLOEXEC
 	if (-1 == fcntl(fd, F_SETFD, 1))
 		goto syerr;
 #endif
 
-#if defined(O_NONBLOCK)
+#if defined O_NONBLOCK && !HAVE_SOCK_NONBLOCK
 	if (-1 == (flags = fcntl(fd, F_GETFL)))
 		goto syerr;
-
 	if (-1 == fcntl(fd, F_SETFL, flags | O_NONBLOCK))
 		goto syerr;
-#elif defined(FIONBIO)
-	opt	= 1;
-
+#elif defined FIONBIO && HAVE_IOCTLSOCKET
+	opt = 1;
 	if (0 != ioctlsocket(fd, FIONBIO, &opt))
 		goto soerr;
 #endif
 
-#if defined(SO_NOSIGPIPE)
+#if defined SO_NOSIGPIPE
 	if (type != SOCK_DGRAM) {
 		if (0 != setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &(int){ 1 }, sizeof (int)))
 			goto soerr;
@@ -5652,9 +5667,9 @@ static int dns_socket(struct sockaddr *local, int type, int *error_) {
 		memcpy(&tmp, local, dns_sa_len(local));
 
 		for (i = 0; i < DNS_SO_MAXTRY; i++) {
-			port	= 1025 + (dns_random() % 64510);
+			port = 1025 + (dns_random() % 64510);
 
-			*dns_sa_port(tmp.ss_family, &tmp)	= htons(port);
+			*dns_sa_port(tmp.ss_family, &tmp) = htons(port);
 
 			if (0 == bind(fd, (struct sockaddr *)&tmp, dns_sa_len(&tmp)))
 				return fd;
@@ -5666,17 +5681,17 @@ static int dns_socket(struct sockaddr *local, int type, int *error_) {
 
 	/* FALL THROUGH */
 soerr:
-	error	= dns_soerr();
+	error = dns_soerr();
 
 	goto error;
-#if defined(F_SETFD) || defined(O_NONBLOCK)
+#if defined F_SETFD || defined O_NONBLOCK
 syerr:
-	error	= dns_syerr();
+	error = dns_syerr();
 
 	goto error;
 #endif
 error:
-	*error_	= error;
+	*error_ = error;
 
 	dns_socketclose(&fd, NULL);
 
