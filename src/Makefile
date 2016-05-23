@@ -7,12 +7,11 @@
 # to quiet warnings where refactoring would discard perfectly clear,
 # concise, and correct code.
 #
-# RE VISUAL STUDIO: dns.c will not compile with Visual Studio. Microsoft has
-# frozen C support at C95, whereas dns.c uses some newer C99 and C11
-# constructs not available in C95 or as MSVC extensions. dns.c could be made
-# to compile with MSVC with moderate effort, however, some aspects of the
-# dns.c API require these newer features, so MSVC support would always play
-# second fiddle.
+# RE VISUAL STUDIO: dns.c does not currently compile with Visual Studio.
+# Until circa 2014 Microsoft had frozen C support at C95, whereas dns.c uses
+# some newer C99 and C11 constructs not available in C95 or as MSVC
+# extensions. Now that MSV supports dns.c could be made to compile with MSVC
+# with moderate effort. Patches welcome.
 #
 ALL_CPPFLAGS = -DDNS_DEBUG -DDNS_MAIN $(CPPFLAGS)
 ALL_CFLAGS   = -std=gnu99 -Wall -Wextra -O2 -g -fstack-protector $(CFLAGS)
@@ -28,14 +27,14 @@ ALL_EXE_LIBS     = -lws2_32 -lgdi32 $(EXE_LIBS)
 
 all: dns
 
-dns: dns.c
-	$(CC) $(ALL_CFLAGS) $(ALL_CPPFLAGS) -o $@ $^ $(ALL_LIBS)
+dns: dns.c dns.h
+	$(CC) $(ALL_CFLAGS) $(ALL_CPPFLAGS) -o $@ dns.c $(ALL_LIBS)
 
-dns.exe: dns.c
-	$(EXE_CC) $(ALL_EXE_CFLAGS) $(ALL_EXE_CPPFLAGS) -o $@ $^ $(ALL_EXE_LIBS)
+dns.exe: dns.c dns.h
+	$(EXE_CC) $(ALL_EXE_CFLAGS) $(ALL_EXE_CPPFLAGS) -o $@ dns.c $(ALL_EXE_LIBS)
 
-dns.S: dns.c
-	$(CC) $(ALL_CFLAGS) -S $(ALL_CPPFLAGS) -o $@ $^
+dns.S: dns.c dns.h
+	$(CC) $(ALL_CFLAGS) -S $(ALL_CPPFLAGS) -o $@ dns.c
 
 
 SPF_CPPFLAGS += 
