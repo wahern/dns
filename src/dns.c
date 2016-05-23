@@ -1620,7 +1620,7 @@ invalid:
 } /* dns_l_skip() */
 
 
-size_t dns_d_trim(void *dst_, size_t lim, const void *src_, size_t len, int flags) {
+static size_t dns_d_trim(void *dst_, size_t lim, const void *src_, size_t len, int flags) {
 	unsigned char *dst = dst_;
 	const unsigned char *src = src_;
 	size_t dp = 0, sp = 0;
@@ -5341,7 +5341,7 @@ cont:
 } /* dns_hints_i_skip() */
 
 
-struct dns_hints_i *dns_hints_i_init(struct dns_hints_i *i, struct dns_hints *hints) {
+static struct dns_hints_i *dns_hints_i_init(struct dns_hints_i *i, struct dns_hints *hints) {
 	static const struct dns_hints_i i_initializer;
 	struct dns_hints_soa *soa;
 
@@ -8142,7 +8142,7 @@ struct {
 };
 
 
-void hexdump(const unsigned char *src, size_t len, FILE *fp) {
+static void hexdump(const unsigned char *src, size_t len, FILE *fp) {
 	static const unsigned char hex[]	= "0123456789abcdef";
 	static const unsigned char tmpl[]	= "                                                    |                |\n";
 	unsigned char ln[sizeof tmpl];
@@ -8334,7 +8334,7 @@ static struct dns_hosts *hosts(void) {
 #if DNS_CACHE
 #include "cache.h"
 
-struct dns_cache *cache(void) {
+static struct dns_cache *cache(void) {
 	static struct cache *cache;
 	const char *path;
 	unsigned i;
@@ -8361,7 +8361,7 @@ struct dns_cache *cache(void) {
 	return cache_resi(cache);
 } /* cache() */
 #else
-struct dns_cache *cache(void) { return NULL; }
+static struct dns_cache *cache(void) { return NULL; }
 #endif
 
 
@@ -8627,7 +8627,7 @@ static int search_list(int argc, char *argv[]) {
 } /* search_list() */
 
 
-int permute_set(int argc, char *argv[]) {
+static int permute_set(int argc, char *argv[]) {
 	unsigned lo, hi, i;
 	struct dns_k_permutor p;
 
@@ -8646,7 +8646,7 @@ int permute_set(int argc, char *argv[]) {
 } /* permute_set() */
 
 
-int shuffle_16(int argc, char *argv[]) {
+static int shuffle_16(int argc, char *argv[]) {
 	unsigned n, r;
 
 	if (--argc > 0) {
@@ -8665,7 +8665,7 @@ int shuffle_16(int argc, char *argv[]) {
 } /* shuffle_16() */
 
 
-int dump_random(int argc, char *argv[]) {
+static int dump_random(int argc, char *argv[]) {
 	unsigned char b[32];
 	unsigned i, j, n, r;
 

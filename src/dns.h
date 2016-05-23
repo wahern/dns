@@ -50,6 +50,16 @@
 
 
 /*
+ * V I S I B I L I T Y
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+#ifndef DNS_PUBLIC
+#define DNS_PUBLIC
+#endif
+
+
+/*
  * V E R S I O N
  *
  * Vendor: Entity for which versions numbers are relevant. (If forking
@@ -70,11 +80,11 @@
 #define DNS_V_API  0x20150612
 
 
-const char *dns_vendor(void);
+DNS_PUBLIC const char *dns_vendor(void);
 
-int dns_v_rel(void);
-int dns_v_abi(void);
-int dns_v_api(void);
+DNS_PUBLIC int dns_v_rel(void);
+DNS_PUBLIC int dns_v_abi(void);
+DNS_PUBLIC int dns_v_api(void);
 
 
 /*
@@ -114,7 +124,7 @@ enum dns_errno {
 	DNS_ELAST,
 }; /* dns_errno */
 
-const char *dns_strerror(dns_error_t);
+DNS_PUBLIC const char *dns_strerror(dns_error_t);
 
 extern int dns_debug;
 
@@ -277,35 +287,35 @@ enum dns_rcode {
  */
 #define DNS_STRMAXLEN 47 /* "QUESTION|ANSWER|AUTHORITY|ADDITIONAL" */
 
-const char *dns_strsection(enum dns_section, void *, size_t);
+DNS_PUBLIC const char *dns_strsection(enum dns_section, void *, size_t);
 #define dns_strsection3(a, b, c) \
 				dns_strsection((a), (b), (c))
 #define dns_strsection1(a)	dns_strsection((a), (char [DNS_STRMAXLEN + 1]){ 0 }, DNS_STRMAXLEN + 1)
 #define dns_strsection(...)	DNS_PP_CALL(DNS_PP_XPASTE(dns_strsection, DNS_PP_NARG(__VA_ARGS__)), __VA_ARGS__)
 
-enum dns_section dns_isection(const char *);
+DNS_PUBLIC enum dns_section dns_isection(const char *);
 
-const char *dns_strclass(enum dns_class, void *, size_t);
+DNS_PUBLIC const char *dns_strclass(enum dns_class, void *, size_t);
 #define dns_strclass3(a, b, c)	dns_strclass((a), (b), (c))
 #define dns_strclass1(a)	dns_strclass((a), (char [DNS_STRMAXLEN + 1]){ 0 }, DNS_STRMAXLEN + 1)
 #define dns_strclass(...)	DNS_PP_CALL(DNS_PP_XPASTE(dns_strclass, DNS_PP_NARG(__VA_ARGS__)), __VA_ARGS__)
 
-enum dns_class dns_iclass(const char *);
+DNS_PUBLIC enum dns_class dns_iclass(const char *);
 
-const char *dns_strtype(enum dns_type, void *, size_t);
+DNS_PUBLIC const char *dns_strtype(enum dns_type, void *, size_t);
 #define dns_strtype3(a, b, c)	dns_strtype((a), (b), (c))
 #define dns_strtype1(a)		dns_strtype((a), (char [DNS_STRMAXLEN + 1]){ 0 }, DNS_STRMAXLEN + 1)
 #define dns_strtype(...)	DNS_PP_CALL(DNS_PP_XPASTE(dns_strtype, DNS_PP_NARG(__VA_ARGS__)), __VA_ARGS__)
 
-enum dns_type dns_itype(const char *);
+DNS_PUBLIC enum dns_type dns_itype(const char *);
 
-const char *dns_stropcode(enum dns_opcode);
+DNS_PUBLIC const char *dns_stropcode(enum dns_opcode);
 
-enum dns_opcode dns_iopcode(const char *);
+DNS_PUBLIC enum dns_opcode dns_iopcode(const char *);
 
-const char *dns_strrcode(enum dns_rcode);
+DNS_PUBLIC const char *dns_strrcode(enum dns_rcode);
 
-enum dns_rcode dns_ircode(const char *);
+DNS_PUBLIC enum dns_rcode dns_ircode(const char *);
 
 
 /*
@@ -400,30 +410,30 @@ struct dns_packet {
 #define dns_p_new(n)		(dns_p_init((struct dns_packet *)&(union { unsigned char b[dns_p_calcsize((n))]; struct dns_packet p; }){ { 0 } }, dns_p_calcsize((n))))
 
 /** takes size of entire packet structure as allocated */
-struct dns_packet *dns_p_init(struct dns_packet *, size_t);
+DNS_PUBLIC struct dns_packet *dns_p_init(struct dns_packet *, size_t);
 
 /** takes size of maximum desired payload */
-struct dns_packet *dns_p_make(size_t, int *);
+DNS_PUBLIC struct dns_packet *dns_p_make(size_t, int *);
 
-int dns_p_grow(struct dns_packet **);
+DNS_PUBLIC int dns_p_grow(struct dns_packet **);
 
-struct dns_packet *dns_p_copy(struct dns_packet *, const struct dns_packet *);
+DNS_PUBLIC struct dns_packet *dns_p_copy(struct dns_packet *, const struct dns_packet *);
 
 #define dns_p_opcode(P)		(dns_header(P)->opcode)
 
 #define dns_p_rcode(P)		(dns_header(P)->rcode)
 
-unsigned dns_p_count(struct dns_packet *, enum dns_section);
+DNS_PUBLIC unsigned dns_p_count(struct dns_packet *, enum dns_section);
 
-int dns_p_push(struct dns_packet *, enum dns_section, const void *, size_t, enum dns_type, enum dns_class, unsigned, const void *);
+DNS_PUBLIC int dns_p_push(struct dns_packet *, enum dns_section, const void *, size_t, enum dns_type, enum dns_class, unsigned, const void *);
 
-void dns_p_dictadd(struct dns_packet *, unsigned short);
+DNS_PUBLIC void dns_p_dictadd(struct dns_packet *, unsigned short);
 
-struct dns_packet *dns_p_merge(struct dns_packet *, enum dns_section, struct dns_packet *, enum dns_section, int *);
+DNS_PUBLIC struct dns_packet *dns_p_merge(struct dns_packet *, enum dns_section, struct dns_packet *, enum dns_section, int *);
 
-void dns_p_dump(struct dns_packet *, FILE *);
+DNS_PUBLIC void dns_p_dump(struct dns_packet *, FILE *);
 
-int dns_p_study(struct dns_packet *);
+DNS_PUBLIC int dns_p_study(struct dns_packet *);
 
 
 /*
@@ -443,21 +453,21 @@ int dns_p_study(struct dns_packet *);
 #define dns_d_new1(a)		dns_d_new3((a), strlen((a)), DNS_D_ANCHOR)
 #define dns_d_new(...)		DNS_PP_CALL(DNS_PP_XPASTE(dns_d_new, DNS_PP_NARG(__VA_ARGS__)), __VA_ARGS__)
 
-char *dns_d_init(void *, size_t, const void *, size_t, int);
+DNS_PUBLIC char *dns_d_init(void *, size_t, const void *, size_t, int);
 
-size_t dns_d_anchor(void *, size_t, const void *, size_t);
+DNS_PUBLIC size_t dns_d_anchor(void *, size_t, const void *, size_t);
 
-size_t dns_d_cleave(void *, size_t, const void *, size_t);
+DNS_PUBLIC size_t dns_d_cleave(void *, size_t, const void *, size_t);
 
-size_t dns_d_comp(void *, size_t, const void *, size_t, struct dns_packet *, int *);
+DNS_PUBLIC size_t dns_d_comp(void *, size_t, const void *, size_t, struct dns_packet *, int *);
 
-size_t dns_d_expand(void *, size_t, unsigned short, struct dns_packet *, int *);
+DNS_PUBLIC size_t dns_d_expand(void *, size_t, unsigned short, struct dns_packet *, int *);
 
-unsigned short dns_d_skip(unsigned short, struct dns_packet *);
+DNS_PUBLIC unsigned short dns_d_skip(unsigned short, struct dns_packet *);
 
-int dns_d_push(struct dns_packet *, const void *, size_t);
+DNS_PUBLIC int dns_d_push(struct dns_packet *, const void *, size_t);
 
-size_t dns_d_cname(void *, size_t, const void *, size_t, struct dns_packet *, int *error);
+DNS_PUBLIC size_t dns_d_cname(void *, size_t, const void *, size_t, struct dns_packet *, int *error);
 
 
 /*
@@ -484,15 +494,15 @@ struct dns_rr {
 }; /* struct dns_rr */
 
 
-int dns_rr_copy(struct dns_packet *, struct dns_rr *, struct dns_packet *);
+DNS_PUBLIC int dns_rr_copy(struct dns_packet *, struct dns_rr *, struct dns_packet *);
 
-int dns_rr_parse(struct dns_rr *, unsigned short, struct dns_packet *);
+DNS_PUBLIC int dns_rr_parse(struct dns_rr *, unsigned short, struct dns_packet *);
 
-unsigned short dns_rr_skip(unsigned short, struct dns_packet *);
+DNS_PUBLIC unsigned short dns_rr_skip(unsigned short, struct dns_packet *);
 
-int dns_rr_cmp(struct dns_rr *, struct dns_packet *, struct dns_rr *, struct dns_packet *);
+DNS_PUBLIC int dns_rr_cmp(struct dns_rr *, struct dns_packet *, struct dns_rr *, struct dns_packet *);
 
-size_t dns_rr_print(void *, size_t, struct dns_rr *, struct dns_packet *, int *);
+DNS_PUBLIC size_t dns_rr_print(void *, size_t, struct dns_rr *, struct dns_packet *, int *);
 
 
 #define dns_rr_i_new(P, ...) \
@@ -519,19 +529,19 @@ struct dns_rr_i {
 	} state, saved;
 }; /* struct dns_rr_i */
 
-int dns_rr_i_packet(struct dns_rr *, struct dns_rr *, struct dns_rr_i *, struct dns_packet *);
+DNS_PUBLIC int dns_rr_i_packet(struct dns_rr *, struct dns_rr *, struct dns_rr_i *, struct dns_packet *);
 
-int dns_rr_i_order(struct dns_rr *, struct dns_rr *, struct dns_rr_i *, struct dns_packet *);
+DNS_PUBLIC int dns_rr_i_order(struct dns_rr *, struct dns_rr *, struct dns_rr_i *, struct dns_packet *);
 
-int dns_rr_i_shuffle(struct dns_rr *, struct dns_rr *, struct dns_rr_i *, struct dns_packet *);
+DNS_PUBLIC int dns_rr_i_shuffle(struct dns_rr *, struct dns_rr *, struct dns_rr_i *, struct dns_packet *);
 
-struct dns_rr_i *dns_rr_i_init(struct dns_rr_i *, struct dns_packet *);
+DNS_PUBLIC struct dns_rr_i *dns_rr_i_init(struct dns_rr_i *, struct dns_packet *);
 
 #define dns_rr_i_save(i)	((i)->saved = (i)->state)
 #define dns_rr_i_rewind(i)	((i)->state = (i)->saved)
 #define dns_rr_i_count(i)	((i)->state.count)
 
-unsigned dns_rr_grep(struct dns_rr *, unsigned, struct dns_rr_i *, struct dns_packet *, int *);
+DNS_PUBLIC unsigned dns_rr_grep(struct dns_rr *, unsigned, struct dns_rr_i *, struct dns_packet *, int *);
 
 #define dns_rr_foreach_(rr, P, ...)	\
 	for (struct dns_rr_i DNS_PP_XPASTE(i, __LINE__) = *dns_rr_i_new((P), __VA_ARGS__); dns_rr_grep((rr), 1, &DNS_PP_XPASTE(i, __LINE__), (P), &(int){ 0 }); )
@@ -547,13 +557,15 @@ struct dns_a {
 	struct in_addr addr;
 }; /* struct dns_a */
 
-int dns_a_parse(struct dns_a *, struct dns_rr *, struct dns_packet *);
+DNS_PUBLIC int dns_a_parse(struct dns_a *, struct dns_rr *, struct dns_packet *);
 
-int dns_a_push(struct dns_packet *, struct dns_a *);
+DNS_PUBLIC int dns_a_push(struct dns_packet *, struct dns_a *);
 
-int dns_a_cmp(const struct dns_a *, const struct dns_a *);
+DNS_PUBLIC int dns_a_cmp(const struct dns_a *, const struct dns_a *);
 
-size_t dns_a_print(void *, size_t, struct dns_a *);
+DNS_PUBLIC size_t dns_a_print(void *, size_t, struct dns_a *);
+
+DNS_PUBLIC size_t dns_a_arpa(void *, size_t, const struct dns_a *);
 
 
 /*
@@ -564,13 +576,15 @@ struct dns_aaaa {
 	struct in6_addr addr;
 }; /* struct dns_aaaa */
 
-int dns_aaaa_parse(struct dns_aaaa *, struct dns_rr *, struct dns_packet *);
+DNS_PUBLIC int dns_aaaa_parse(struct dns_aaaa *, struct dns_rr *, struct dns_packet *);
 
-int dns_aaaa_push(struct dns_packet *, struct dns_aaaa *);
+DNS_PUBLIC int dns_aaaa_push(struct dns_packet *, struct dns_aaaa *);
 
-int dns_aaaa_cmp(const struct dns_aaaa *, const struct dns_aaaa *);
+DNS_PUBLIC int dns_aaaa_cmp(const struct dns_aaaa *, const struct dns_aaaa *);
 
-size_t dns_aaaa_print(void *, size_t, struct dns_aaaa *);
+DNS_PUBLIC size_t dns_aaaa_print(void *, size_t, struct dns_aaaa *);
+
+DNS_PUBLIC size_t dns_aaaa_arpa(void *, size_t, const struct dns_aaaa *);
 
 
 /*
@@ -582,15 +596,15 @@ struct dns_mx {
 	char host[DNS_D_MAXNAME + 1];
 }; /* struct dns_mx */
 
-int dns_mx_parse(struct dns_mx *, struct dns_rr *, struct dns_packet *);
+DNS_PUBLIC int dns_mx_parse(struct dns_mx *, struct dns_rr *, struct dns_packet *);
 
-int dns_mx_push(struct dns_packet *, struct dns_mx *);
+DNS_PUBLIC int dns_mx_push(struct dns_packet *, struct dns_mx *);
 
-int dns_mx_cmp(const struct dns_mx *, const struct dns_mx *);
+DNS_PUBLIC int dns_mx_cmp(const struct dns_mx *, const struct dns_mx *);
 
-size_t dns_mx_print(void *, size_t, struct dns_mx *);
+DNS_PUBLIC size_t dns_mx_print(void *, size_t, struct dns_mx *);
 
-size_t dns_mx_cname(void *, size_t, struct dns_mx *);
+DNS_PUBLIC size_t dns_mx_cname(void *, size_t, struct dns_mx *);
 
 
 /*
@@ -601,15 +615,15 @@ struct dns_ns {
 	char host[DNS_D_MAXNAME + 1];
 }; /* struct dns_ns */
 
-int dns_ns_parse(struct dns_ns *, struct dns_rr *, struct dns_packet *);
+DNS_PUBLIC int dns_ns_parse(struct dns_ns *, struct dns_rr *, struct dns_packet *);
 
-int dns_ns_push(struct dns_packet *, struct dns_ns *);
+DNS_PUBLIC int dns_ns_push(struct dns_packet *, struct dns_ns *);
 
-int dns_ns_cmp(const struct dns_ns *, const struct dns_ns *);
+DNS_PUBLIC int dns_ns_cmp(const struct dns_ns *, const struct dns_ns *);
 
-size_t dns_ns_print(void *, size_t, struct dns_ns *);
+DNS_PUBLIC size_t dns_ns_print(void *, size_t, struct dns_ns *);
 
-size_t dns_ns_cname(void *, size_t, struct dns_ns *);
+DNS_PUBLIC size_t dns_ns_cname(void *, size_t, struct dns_ns *);
 
 
 /*
@@ -620,15 +634,15 @@ struct dns_cname {
 	char host[DNS_D_MAXNAME + 1];
 }; /* struct dns_cname */
 
-int dns_cname_parse(struct dns_cname *, struct dns_rr *, struct dns_packet *);
+DNS_PUBLIC int dns_cname_parse(struct dns_cname *, struct dns_rr *, struct dns_packet *);
 
-int dns_cname_push(struct dns_packet *, struct dns_cname *);
+DNS_PUBLIC int dns_cname_push(struct dns_packet *, struct dns_cname *);
 
-int dns_cname_cmp(const struct dns_cname *, const struct dns_cname *);
+DNS_PUBLIC int dns_cname_cmp(const struct dns_cname *, const struct dns_cname *);
 
-size_t dns_cname_print(void *, size_t, struct dns_cname *);
+DNS_PUBLIC size_t dns_cname_print(void *, size_t, struct dns_cname *);
 
-size_t dns_cname_cname(void *, size_t, struct dns_cname *);
+DNS_PUBLIC size_t dns_cname_cname(void *, size_t, struct dns_cname *);
 
 
 /*
@@ -641,13 +655,13 @@ struct dns_soa {
 	unsigned serial, refresh, retry, expire, minimum;
 }; /* struct dns_soa */
 
-int dns_soa_parse(struct dns_soa *, struct dns_rr *, struct dns_packet *);
+DNS_PUBLIC int dns_soa_parse(struct dns_soa *, struct dns_rr *, struct dns_packet *);
 
-int dns_soa_push(struct dns_packet *, struct dns_soa *);
+DNS_PUBLIC int dns_soa_push(struct dns_packet *, struct dns_soa *);
 
-int dns_soa_cmp(const struct dns_soa *, const struct dns_soa *);
+DNS_PUBLIC int dns_soa_cmp(const struct dns_soa *, const struct dns_soa *);
 
-size_t dns_soa_print(void *, size_t, struct dns_soa *);
+DNS_PUBLIC size_t dns_soa_print(void *, size_t, struct dns_soa *);
 
 
 /*
@@ -658,15 +672,17 @@ struct dns_ptr {
 	char host[DNS_D_MAXNAME + 1];
 }; /* struct dns_ptr */
 
-int dns_ptr_parse(struct dns_ptr *, struct dns_rr *, struct dns_packet *);
+DNS_PUBLIC int dns_ptr_parse(struct dns_ptr *, struct dns_rr *, struct dns_packet *);
 
-int dns_ptr_push(struct dns_packet *, struct dns_ptr *);
+DNS_PUBLIC int dns_ptr_push(struct dns_packet *, struct dns_ptr *);
 
-int dns_ptr_cmp(const struct dns_ptr *, const struct dns_ptr *);
+DNS_PUBLIC int dns_ptr_cmp(const struct dns_ptr *, const struct dns_ptr *);
 
-size_t dns_ptr_print(void *, size_t, struct dns_ptr *);
+DNS_PUBLIC size_t dns_ptr_print(void *, size_t, struct dns_ptr *);
 
-size_t dns_ptr_cname(void *, size_t, struct dns_ptr *);
+DNS_PUBLIC size_t dns_ptr_cname(void *, size_t, struct dns_ptr *);
+
+DNS_PUBLIC size_t dns_ptr_qname(void *, size_t, int, void *);
 
 
 /*
@@ -680,15 +696,15 @@ struct dns_srv {
 	char target[DNS_D_MAXNAME + 1];
 }; /* struct dns_srv */
 
-int dns_srv_parse(struct dns_srv *, struct dns_rr *, struct dns_packet *);
+DNS_PUBLIC int dns_srv_parse(struct dns_srv *, struct dns_rr *, struct dns_packet *);
 
-int dns_srv_push(struct dns_packet *, struct dns_srv *);
+DNS_PUBLIC int dns_srv_push(struct dns_packet *, struct dns_srv *);
 
-int dns_srv_cmp(const struct dns_srv *, const struct dns_srv *);
+DNS_PUBLIC int dns_srv_cmp(const struct dns_srv *, const struct dns_srv *);
 
-size_t dns_srv_print(void *, size_t, struct dns_srv *);
+DNS_PUBLIC size_t dns_srv_print(void *, size_t, struct dns_srv *);
 
-size_t dns_srv_cname(void *, size_t, struct dns_srv *);
+DNS_PUBLIC size_t dns_srv_cname(void *, size_t, struct dns_srv *);
 
 
 /*
@@ -708,19 +724,19 @@ struct dns_opt {
 	unsigned char data[DNS_OPT_MINDATA];
 }; /* struct dns_opt */
 
-unsigned int dns_opt_ttl(const struct dns_opt *);
+DNS_PUBLIC unsigned int dns_opt_ttl(const struct dns_opt *);
 
-unsigned short dns_opt_class(const struct dns_opt *);
+DNS_PUBLIC unsigned short dns_opt_class(const struct dns_opt *);
 
-struct dns_opt *dns_opt_init(struct dns_opt *, size_t);
+DNS_PUBLIC struct dns_opt *dns_opt_init(struct dns_opt *, size_t);
 
-int dns_opt_parse(struct dns_opt *, struct dns_rr *, struct dns_packet *);
+DNS_PUBLIC int dns_opt_parse(struct dns_opt *, struct dns_rr *, struct dns_packet *);
 
-int dns_opt_push(struct dns_packet *, struct dns_opt *);
+DNS_PUBLIC int dns_opt_push(struct dns_packet *, struct dns_opt *);
 
-int dns_opt_cmp(const struct dns_opt *, const struct dns_opt *);
+DNS_PUBLIC int dns_opt_cmp(const struct dns_opt *, const struct dns_opt *);
 
-size_t dns_opt_print(void *, size_t, struct dns_opt *);
+DNS_PUBLIC size_t dns_opt_print(void *, size_t, struct dns_opt *);
 
 
 /*
@@ -742,13 +758,13 @@ struct dns_sshfp {
 	} digest;
 }; /* struct dns_sshfp */
 
-int dns_sshfp_parse(struct dns_sshfp *, struct dns_rr *, struct dns_packet *);
+DNS_PUBLIC int dns_sshfp_parse(struct dns_sshfp *, struct dns_rr *, struct dns_packet *);
 
-int dns_sshfp_push(struct dns_packet *, struct dns_sshfp *);
+DNS_PUBLIC int dns_sshfp_push(struct dns_packet *, struct dns_sshfp *);
 
-int dns_sshfp_cmp(const struct dns_sshfp *, const struct dns_sshfp *);
+DNS_PUBLIC int dns_sshfp_cmp(const struct dns_sshfp *, const struct dns_sshfp *);
 
-size_t dns_sshfp_print(void *, size_t, struct dns_sshfp *);
+DNS_PUBLIC size_t dns_sshfp_print(void *, size_t, struct dns_sshfp *);
 
 
 /*
@@ -764,15 +780,15 @@ struct dns_txt {
 	unsigned char data[DNS_TXT_MINDATA];
 }; /* struct dns_txt */
 
-struct dns_txt *dns_txt_init(struct dns_txt *, size_t);
+DNS_PUBLIC struct dns_txt *dns_txt_init(struct dns_txt *, size_t);
 
-int dns_txt_parse(struct dns_txt *, struct dns_rr *, struct dns_packet *);
+DNS_PUBLIC int dns_txt_parse(struct dns_txt *, struct dns_rr *, struct dns_packet *);
 
-int dns_txt_push(struct dns_packet *, struct dns_txt *);
+DNS_PUBLIC int dns_txt_push(struct dns_packet *, struct dns_txt *);
 
-int dns_txt_cmp(const struct dns_txt *, const struct dns_txt *);
+DNS_PUBLIC int dns_txt_cmp(const struct dns_txt *, const struct dns_txt *);
 
-size_t dns_txt_print(void *, size_t, struct dns_txt *);
+DNS_PUBLIC size_t dns_txt_print(void *, size_t, struct dns_txt *);
 
 
 /*
@@ -795,17 +811,17 @@ union dns_any {
 
 #define DNS_ANY_INIT(any) { .rdata = { .size = sizeof *(any) } }
 
-union dns_any *dns_any_init(union dns_any *, size_t);
+DNS_PUBLIC union dns_any *dns_any_init(union dns_any *, size_t);
 
-int dns_any_parse(union dns_any *, struct dns_rr *, struct dns_packet *);
+DNS_PUBLIC int dns_any_parse(union dns_any *, struct dns_rr *, struct dns_packet *);
 
-int dns_any_push(struct dns_packet *, union dns_any *, enum dns_type);
+DNS_PUBLIC int dns_any_push(struct dns_packet *, union dns_any *, enum dns_type);
 
-int dns_any_cmp(const union dns_any *, enum dns_type, const union dns_any *, enum dns_type);
+DNS_PUBLIC int dns_any_cmp(const union dns_any *, enum dns_type, const union dns_any *, enum dns_type);
 
-size_t dns_any_print(void *, size_t, union dns_any *, enum dns_type);
+DNS_PUBLIC size_t dns_any_print(void *, size_t, union dns_any *, enum dns_type);
 
-size_t dns_any_cname(void *, size_t, union dns_any *, enum dns_type);
+DNS_PUBLIC size_t dns_any_cname(void *, size_t, union dns_any *, enum dns_type);
 
 
 /*
@@ -815,27 +831,27 @@ size_t dns_any_cname(void *, size_t, union dns_any *, enum dns_type);
 
 struct dns_hosts;
 
-struct dns_hosts *dns_hosts_open(int *);
+DNS_PUBLIC struct dns_hosts *dns_hosts_open(int *);
 
-void dns_hosts_close(struct dns_hosts *);
+DNS_PUBLIC void dns_hosts_close(struct dns_hosts *);
 
-dns_refcount_t dns_hosts_acquire(struct dns_hosts *);
+DNS_PUBLIC dns_refcount_t dns_hosts_acquire(struct dns_hosts *);
 
-dns_refcount_t dns_hosts_release(struct dns_hosts *);
+DNS_PUBLIC dns_refcount_t dns_hosts_release(struct dns_hosts *);
 
-struct dns_hosts *dns_hosts_mortal(struct dns_hosts *);
+DNS_PUBLIC struct dns_hosts *dns_hosts_mortal(struct dns_hosts *);
 
-struct dns_hosts *dns_hosts_local(int *);
+DNS_PUBLIC struct dns_hosts *dns_hosts_local(int *);
 
-int dns_hosts_loadfile(struct dns_hosts *, FILE *);
+DNS_PUBLIC int dns_hosts_loadfile(struct dns_hosts *, FILE *);
 
-int dns_hosts_loadpath(struct dns_hosts *, const char *);
+DNS_PUBLIC int dns_hosts_loadpath(struct dns_hosts *, const char *);
 
-int dns_hosts_dump(struct dns_hosts *, FILE *);
+DNS_PUBLIC int dns_hosts_dump(struct dns_hosts *, FILE *);
 
-int dns_hosts_insert(struct dns_hosts *, int, const void *, const void *, _Bool);
+DNS_PUBLIC int dns_hosts_insert(struct dns_hosts *, int, const void *, const void *, _Bool);
 
-struct dns_packet *dns_hosts_query(struct dns_hosts *, struct dns_packet *, int *);
+DNS_PUBLIC struct dns_packet *dns_hosts_query(struct dns_hosts *, struct dns_packet *, int *);
 
 
 /*
@@ -880,39 +896,39 @@ struct dns_resolv_conf {
 	} _;
 }; /* struct dns_resolv_conf */
 
-struct dns_resolv_conf *dns_resconf_open(int *);
+DNS_PUBLIC struct dns_resolv_conf *dns_resconf_open(int *);
 
-void dns_resconf_close(struct dns_resolv_conf *);
+DNS_PUBLIC void dns_resconf_close(struct dns_resolv_conf *);
 
-dns_refcount_t dns_resconf_acquire(struct dns_resolv_conf *);
+DNS_PUBLIC dns_refcount_t dns_resconf_acquire(struct dns_resolv_conf *);
 
-dns_refcount_t dns_resconf_release(struct dns_resolv_conf *);
+DNS_PUBLIC dns_refcount_t dns_resconf_release(struct dns_resolv_conf *);
 
-struct dns_resolv_conf *dns_resconf_mortal(struct dns_resolv_conf *);
+DNS_PUBLIC struct dns_resolv_conf *dns_resconf_mortal(struct dns_resolv_conf *);
 
-struct dns_resolv_conf *dns_resconf_local(int *);
+DNS_PUBLIC struct dns_resolv_conf *dns_resconf_local(int *);
 
-struct dns_resolv_conf *dns_resconf_root(int *);
+DNS_PUBLIC struct dns_resolv_conf *dns_resconf_root(int *);
 
-int dns_resconf_pton(struct sockaddr_storage *, const char *);
+DNS_PUBLIC int dns_resconf_pton(struct sockaddr_storage *, const char *);
 
-int dns_resconf_loadfile(struct dns_resolv_conf *, FILE *);
+DNS_PUBLIC int dns_resconf_loadfile(struct dns_resolv_conf *, FILE *);
 
-int dns_resconf_loadpath(struct dns_resolv_conf *, const char *);
+DNS_PUBLIC int dns_resconf_loadpath(struct dns_resolv_conf *, const char *);
 
-int dns_nssconf_loadfile(struct dns_resolv_conf *, FILE *);
+DNS_PUBLIC int dns_nssconf_loadfile(struct dns_resolv_conf *, FILE *);
 
-int dns_nssconf_loadpath(struct dns_resolv_conf *, const char *);
+DNS_PUBLIC int dns_nssconf_loadpath(struct dns_resolv_conf *, const char *);
 
-int dns_resconf_dump(struct dns_resolv_conf *, FILE *);
+DNS_PUBLIC int dns_resconf_dump(struct dns_resolv_conf *, FILE *);
 
-int dns_nssconf_dump(struct dns_resolv_conf *, FILE *);
+DNS_PUBLIC int dns_nssconf_dump(struct dns_resolv_conf *, FILE *);
 
-int dns_resconf_setiface(struct dns_resolv_conf *, const char *, unsigned short);
+DNS_PUBLIC int dns_resconf_setiface(struct dns_resolv_conf *, const char *, unsigned short);
 
 typedef unsigned long dns_resconf_i_t;
 
-size_t dns_resconf_search(void *, size_t, const void *, size_t, struct dns_resolv_conf *, dns_resconf_i_t *);
+DNS_PUBLIC size_t dns_resconf_search(void *, size_t, const void *, size_t, struct dns_resolv_conf *, dns_resconf_i_t *);
 
 
 /*
@@ -922,25 +938,27 @@ size_t dns_resconf_search(void *, size_t, const void *, size_t, struct dns_resol
 
 struct dns_hints;
 
-struct dns_hints *dns_hints_open(struct dns_resolv_conf *, int *);
+DNS_PUBLIC struct dns_hints *dns_hints_open(struct dns_resolv_conf *, int *);
 
-void dns_hints_close(struct dns_hints *);
+DNS_PUBLIC void dns_hints_close(struct dns_hints *);
 
-dns_refcount_t dns_hints_acquire(struct dns_hints *);
+DNS_PUBLIC dns_refcount_t dns_hints_acquire(struct dns_hints *);
 
-dns_refcount_t dns_hints_release(struct dns_hints *);
+DNS_PUBLIC dns_refcount_t dns_hints_release(struct dns_hints *);
 
-struct dns_hints *dns_hints_mortal(struct dns_hints *);
+DNS_PUBLIC struct dns_hints *dns_hints_mortal(struct dns_hints *);
 
-int dns_hints_insert(struct dns_hints *, const char *, const struct sockaddr *, unsigned);
+DNS_PUBLIC int dns_hints_insert(struct dns_hints *, const char *, const struct sockaddr *, unsigned);
 
-unsigned dns_hints_insert_resconf(struct dns_hints *, const char *, const struct dns_resolv_conf *, int *);
+DNS_PUBLIC unsigned dns_hints_insert_resconf(struct dns_hints *, const char *, const struct dns_resolv_conf *, int *);
 
-struct dns_hints *dns_hints_local(struct dns_resolv_conf *, int *);
+DNS_PUBLIC struct dns_hints *dns_hints_local(struct dns_resolv_conf *, int *);
 
-struct dns_hints *dns_hints_root(struct dns_resolv_conf *, int *);
+DNS_PUBLIC struct dns_hints *dns_hints_root(struct dns_resolv_conf *, int *);
 
-int dns_hints_dump(struct dns_hints *, FILE *);
+DNS_PUBLIC struct dns_packet *dns_hints_query(struct dns_hints *, struct dns_packet *, int *);
+
+DNS_PUBLIC int dns_hints_dump(struct dns_hints *, FILE *);
 
 
 struct dns_hints_i {
@@ -954,7 +972,7 @@ struct dns_hints_i {
 
 #define dns_hints_i_new(...)	(&(struct dns_hints_i){ __VA_ARGS__ })
 
-unsigned dns_hints_grep(struct sockaddr **, socklen_t *, unsigned, struct dns_hints_i *, struct dns_hints *);
+DNS_PUBLIC unsigned dns_hints_grep(struct sockaddr **, socklen_t *, unsigned, struct dns_hints_i *, struct dns_hints *);
 
 
 /*
@@ -989,9 +1007,9 @@ struct dns_cache {
 }; /* struct dns_cache */
 
 
-struct dns_cache *dns_cache_init(struct dns_cache *);
+DNS_PUBLIC struct dns_cache *dns_cache_init(struct dns_cache *);
 
-void dns_cache_close(struct dns_cache *);
+DNS_PUBLIC void dns_cache_close(struct dns_cache *);
 
 
 /*
@@ -1051,33 +1069,33 @@ struct dns_stat {
 
 struct dns_socket;
 
-struct dns_socket *dns_so_open(const struct sockaddr *, int, const struct dns_options *, int *error);
+DNS_PUBLIC struct dns_socket *dns_so_open(const struct sockaddr *, int, const struct dns_options *, int *error);
 
-void dns_so_close(struct dns_socket *);
+DNS_PUBLIC void dns_so_close(struct dns_socket *);
 
-void dns_so_reset(struct dns_socket *);
+DNS_PUBLIC void dns_so_reset(struct dns_socket *);
 
-unsigned short dns_so_mkqid(struct dns_socket *so);
+DNS_PUBLIC unsigned short dns_so_mkqid(struct dns_socket *so);
 
-struct dns_packet *dns_so_query(struct dns_socket *, struct dns_packet *, struct sockaddr *, int *);
+DNS_PUBLIC struct dns_packet *dns_so_query(struct dns_socket *, struct dns_packet *, struct sockaddr *, int *);
 
-int dns_so_submit(struct dns_socket *, struct dns_packet *, struct sockaddr *);
+DNS_PUBLIC int dns_so_submit(struct dns_socket *, struct dns_packet *, struct sockaddr *);
 
-int dns_so_check(struct dns_socket *);
+DNS_PUBLIC int dns_so_check(struct dns_socket *);
 
-struct dns_packet *dns_so_fetch(struct dns_socket *, int *);
+DNS_PUBLIC struct dns_packet *dns_so_fetch(struct dns_socket *, int *);
 
-time_t dns_so_elapsed(struct dns_socket *);
+DNS_PUBLIC time_t dns_so_elapsed(struct dns_socket *);
 
-void dns_so_clear(struct dns_socket *);
+DNS_PUBLIC void dns_so_clear(struct dns_socket *);
 
-int dns_so_events(struct dns_socket *);
+DNS_PUBLIC int dns_so_events(struct dns_socket *);
 
-int dns_so_pollfd(struct dns_socket *);
+DNS_PUBLIC int dns_so_pollfd(struct dns_socket *);
 
-int dns_so_poll(struct dns_socket *, int);
+DNS_PUBLIC int dns_so_poll(struct dns_socket *, int);
 
-const struct dns_stat *dns_so_stat(struct dns_socket *);
+DNS_PUBLIC const struct dns_stat *dns_so_stat(struct dns_socket *);
 
 
 /*
@@ -1087,45 +1105,45 @@ const struct dns_stat *dns_so_stat(struct dns_socket *);
 
 struct dns_resolver;
 
-struct dns_resolver *dns_res_open(struct dns_resolv_conf *, struct dns_hosts *hosts, struct dns_hints *, struct dns_cache *, const struct dns_options *, int *);
+DNS_PUBLIC struct dns_resolver *dns_res_open(struct dns_resolv_conf *, struct dns_hosts *hosts, struct dns_hints *, struct dns_cache *, const struct dns_options *, int *);
 
-struct dns_resolver *dns_res_stub(const struct dns_options *, int *);
+DNS_PUBLIC struct dns_resolver *dns_res_stub(const struct dns_options *, int *);
 
-void dns_res_reset(struct dns_resolver *);
+DNS_PUBLIC void dns_res_reset(struct dns_resolver *);
 
-void dns_res_close(struct dns_resolver *);
+DNS_PUBLIC void dns_res_close(struct dns_resolver *);
 
-dns_refcount_t dns_res_acquire(struct dns_resolver *);
+DNS_PUBLIC dns_refcount_t dns_res_acquire(struct dns_resolver *);
 
-dns_refcount_t dns_res_release(struct dns_resolver *);
+DNS_PUBLIC dns_refcount_t dns_res_release(struct dns_resolver *);
 
-struct dns_resolver *dns_res_mortal(struct dns_resolver *);
+DNS_PUBLIC struct dns_resolver *dns_res_mortal(struct dns_resolver *);
 
-int dns_res_submit(struct dns_resolver *, const char *, enum dns_type, enum dns_class);
+DNS_PUBLIC int dns_res_submit(struct dns_resolver *, const char *, enum dns_type, enum dns_class);
 
-int dns_res_submit2(struct dns_resolver *, const char *, size_t, enum dns_type, enum dns_class);
+DNS_PUBLIC int dns_res_submit2(struct dns_resolver *, const char *, size_t, enum dns_type, enum dns_class);
 
-int dns_res_check(struct dns_resolver *);
+DNS_PUBLIC int dns_res_check(struct dns_resolver *);
 
-struct dns_packet *dns_res_fetch(struct dns_resolver *, int *);
+DNS_PUBLIC struct dns_packet *dns_res_fetch(struct dns_resolver *, int *);
 
-time_t dns_res_elapsed(struct dns_resolver *);
+DNS_PUBLIC time_t dns_res_elapsed(struct dns_resolver *);
 
-void dns_res_clear(struct dns_resolver *);
+DNS_PUBLIC void dns_res_clear(struct dns_resolver *);
 
-int dns_res_events(struct dns_resolver *);
+DNS_PUBLIC int dns_res_events(struct dns_resolver *);
 
-int dns_res_pollfd(struct dns_resolver *);
+DNS_PUBLIC int dns_res_pollfd(struct dns_resolver *);
 
-time_t dns_res_timeout(struct dns_resolver *);
+DNS_PUBLIC time_t dns_res_timeout(struct dns_resolver *);
 
-int dns_res_poll(struct dns_resolver *, int);
+DNS_PUBLIC int dns_res_poll(struct dns_resolver *, int);
 
-struct dns_packet *dns_res_query(struct dns_resolver *, const char *, enum dns_type, enum dns_class, int, int *);
+DNS_PUBLIC struct dns_packet *dns_res_query(struct dns_resolver *, const char *, enum dns_type, enum dns_class, int, int *);
 
-const struct dns_stat *dns_res_stat(struct dns_resolver *);
+DNS_PUBLIC const struct dns_stat *dns_res_stat(struct dns_resolver *);
 
-void dns_res_sethints(struct dns_resolver *, struct dns_hints *);
+DNS_PUBLIC void dns_res_sethints(struct dns_resolver *, struct dns_hints *);
 
 
 /*
@@ -1135,27 +1153,27 @@ void dns_res_sethints(struct dns_resolver *, struct dns_hints *);
 
 struct dns_addrinfo;
 
-struct dns_addrinfo *dns_ai_open(const char *, const char *, enum dns_type, const struct addrinfo *, struct dns_resolver *, int *);
+DNS_PUBLIC struct dns_addrinfo *dns_ai_open(const char *, const char *, enum dns_type, const struct addrinfo *, struct dns_resolver *, int *);
 
-void dns_ai_close(struct dns_addrinfo *);
+DNS_PUBLIC void dns_ai_close(struct dns_addrinfo *);
 
-int dns_ai_nextent(struct addrinfo **, struct dns_addrinfo *);
+DNS_PUBLIC int dns_ai_nextent(struct addrinfo **, struct dns_addrinfo *);
 
-size_t dns_ai_print(void *, size_t, struct addrinfo *, struct dns_addrinfo *);
+DNS_PUBLIC size_t dns_ai_print(void *, size_t, struct addrinfo *, struct dns_addrinfo *);
 
-time_t dns_ai_elapsed(struct dns_addrinfo *);
+DNS_PUBLIC time_t dns_ai_elapsed(struct dns_addrinfo *);
 
-void dns_ai_clear(struct dns_addrinfo *);
+DNS_PUBLIC void dns_ai_clear(struct dns_addrinfo *);
 
-int dns_ai_events(struct dns_addrinfo *);
+DNS_PUBLIC int dns_ai_events(struct dns_addrinfo *);
 
-int dns_ai_pollfd(struct dns_addrinfo *);
+DNS_PUBLIC int dns_ai_pollfd(struct dns_addrinfo *);
 
-time_t dns_ai_timeout(struct dns_addrinfo *);
+DNS_PUBLIC time_t dns_ai_timeout(struct dns_addrinfo *);
 
-int dns_ai_poll(struct dns_addrinfo *, int);
+DNS_PUBLIC int dns_ai_poll(struct dns_addrinfo *, int);
 
-const struct dns_stat *dns_ai_stat(struct dns_addrinfo *);
+DNS_PUBLIC const struct dns_stat *dns_ai_stat(struct dns_addrinfo *);
 
 
 /*
@@ -1163,9 +1181,9 @@ const struct dns_stat *dns_ai_stat(struct dns_addrinfo *);
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-size_t dns_strlcpy(char *, const char *, size_t);
+DNS_PUBLIC size_t dns_strlcpy(char *, const char *, size_t);
 
-size_t dns_strlcat(char *, const char *, size_t);
+DNS_PUBLIC size_t dns_strlcat(char *, const char *, size_t);
 
 
 /*
