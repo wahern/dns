@@ -75,9 +75,9 @@
 
 #define DNS_VENDOR "william@25thandClement.com"
 
-#define DNS_V_REL  0x20160521
-#define DNS_V_ABI  0x20150612
-#define DNS_V_API  0x20150612
+#define DNS_V_REL  0x20160523
+#define DNS_V_ABI  0x20160523
+#define DNS_V_API  0x20160523
 
 
 DNS_PUBLIC const char *dns_vendor(void);
@@ -126,7 +126,9 @@ enum dns_errno {
 
 DNS_PUBLIC const char *dns_strerror(dns_error_t);
 
-extern int dns_debug;
+DNS_PUBLIC int *dns_debug_p(void);
+
+#define dns_debug (*dns_debug_p()) /* was extern int dns_debug before 20160523 API */
 
 
 /*
@@ -333,7 +335,11 @@ typedef unsigned long dns_refcount_t; /* must be same value type as dns_atomic_t
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-extern unsigned (*dns_random)(void);
+typedef unsigned dns_random_f(void);
+
+DNS_PUBLIC dns_random_f **dns_random_p(void);
+
+#define dns_random (*dns_random_p()) /* was extern unsigned (*dns_random)(void) before 20160523 API */
 
 
 /*

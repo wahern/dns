@@ -150,7 +150,11 @@
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-int dns_debug = 0;
+int *dns_debug_p(void) {
+	static int debug;
+
+	return &debug;
+} /* dns_debug_p() */
 
 #if DNS_DEBUG
 
@@ -375,7 +379,11 @@ static unsigned dns_random_(void) {
 #endif
 } /* dns_random_() */
 
-unsigned (*dns_random)(void) __attribute__((weak))	= &dns_random_;
+dns_random_f **dns_random_p(void) {
+	static dns_random_f *random_f = &dns_random_;
+
+	return &random_f;
+} /* dns_random_p() */
 
 
 /*
