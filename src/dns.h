@@ -75,9 +75,9 @@
 
 #define DNS_VENDOR "william@25thandClement.com"
 
-#define DNS_V_REL  0x20160523
-#define DNS_V_ABI  0x20160523
-#define DNS_V_API  0x20160523
+#define DNS_V_REL  0x20160528
+#define DNS_V_ABI  0x20160528
+#define DNS_V_API  0x20160528
 
 
 DNS_PUBLIC const char *dns_vendor(void);
@@ -279,6 +279,9 @@ enum dns_rcode {
 	DNS_RC_NXRRSET	= 8,
 	DNS_RC_NOTAUTH	= 9,
 	DNS_RC_NOTZONE	= 10,
+
+	/* EDNS(0) extended RCODEs */
+	DNS_RC_BADVERS = 16,
 }; /* dns_rcode */
 
 
@@ -392,9 +395,16 @@ struct dns_header {
 struct dns_packet {
 	unsigned short dict[DNS_P_DICTSIZE];
 
-	struct dns_s_memo {
-		unsigned short base, end;
-	} qd, an, ns, ar;
+	struct dns_p_memo {
+		struct dns_s_memo {
+			unsigned short base, end;
+		} qd, an, ns, ar;
+
+		struct {
+			unsigned short p;
+			unsigned ttl;
+		} opt;
+	} memo;
 
 	struct { struct dns_packet *cqe_next, *cqe_prev; } cqe;
 
@@ -427,7 +437,7 @@ DNS_PUBLIC struct dns_packet *dns_p_copy(struct dns_packet *, const struct dns_p
 
 #define dns_p_opcode(P)		(dns_header(P)->opcode)
 
-#define dns_p_rcode(P)		(dns_header(P)->rcode)
+DNS_PUBLIC enum dns_rcode dns_p_rcode(struct dns_packet *);
 
 DNS_PUBLIC unsigned dns_p_count(struct dns_packet *, enum dns_section);
 
@@ -717,22 +727,27 @@ DNS_PUBLIC size_t dns_srv_cname(void *, size_t, struct dns_srv *);
  * OPT  R E S O U R C E  R E C O R D
  */
 
-#define DNS_OPT_MINDATA 512
+#ifndef DNS_OPT_MINDATA
+#define DNS_OPT_MINDATA 256
+#endif
 
-#define DNS_OPT_BADVERS 16
+#define DNS_OPT_DNSSEC  0x8000
 
 struct dns_opt {
+	enum dns_rcode rcode;
+	unsigned char version;
+	unsigned short flags;
+
+	union {
+		unsigned short maxsize; /* deprecated as confusing */
+		unsigned short maxudp; /* maximum UDP payload size */
+	};
+
 	size_t size, len;
-
-	unsigned char rcode, version;
-	unsigned short maxsize;
-
 	unsigned char data[DNS_OPT_MINDATA];
 }; /* struct dns_opt */
 
-DNS_PUBLIC unsigned int dns_opt_ttl(const struct dns_opt *);
-
-DNS_PUBLIC unsigned short dns_opt_class(const struct dns_opt *);
+#define DNS_OPT_INIT(opt) { .size = sizeof (*opt) - offsetof(struct dns_opt, data) }
 
 DNS_PUBLIC struct dns_opt *dns_opt_init(struct dns_opt *, size_t);
 
@@ -743,6 +758,12 @@ DNS_PUBLIC int dns_opt_push(struct dns_packet *, struct dns_opt *);
 DNS_PUBLIC int dns_opt_cmp(const struct dns_opt *, const struct dns_opt *);
 
 DNS_PUBLIC size_t dns_opt_print(void *, size_t, struct dns_opt *);
+
+DNS_PUBLIC unsigned int dns_opt_ttl(const struct dns_opt *);
+
+DNS_PUBLIC unsigned short dns_opt_class(const struct dns_opt *);
+
+DNS_PUBLIC dns_error_t dns_opt_data_push(struct dns_opt *, unsigned char, unsigned short, const void *);
 
 
 /*
@@ -815,7 +836,7 @@ union dns_any {
 	struct dns_txt txt, spf, rdata;
 }; /* union dns_any */
 
-#define DNS_ANY_INIT(any) { .rdata = { .size = sizeof *(any) } }
+#define DNS_ANY_INIT(any) { .rdata = { .size = sizeof *(any) - offsetof(struct dns_txt, data) } }
 
 DNS_PUBLIC union dns_any *dns_any_init(union dns_any *, size_t);
 
