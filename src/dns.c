@@ -3808,13 +3808,14 @@ static const struct dns_rrtype {
 	{ DNS_T_TXT,    "TXT",    &dns_txt_initany,  &dns_txt_parse,    &dns_txt_push,    &dns_txt_cmp,    &dns_txt_print,    0,                },
 	{ DNS_T_SPF,    "SPF",    &dns_txt_initany,  &dns_txt_parse,    &dns_txt_push,    &dns_txt_cmp,    &dns_txt_print,    0,                },
 	{ DNS_T_SSHFP,  "SSHFP",  0,                 &dns_sshfp_parse,  &dns_sshfp_push,  &dns_sshfp_cmp,  &dns_sshfp_print,  0,                },
+	{ DNS_T_AXFR,   "AXFR",   0,                 0,                 0,                0,               0,                 0,                },
 }; /* dns_rrtypes[] */
 
 static const struct dns_rrtype *dns_rrtype(enum dns_type type) {
 	const struct dns_rrtype *t;
 
 	for (t = dns_rrtypes; t < endof(dns_rrtypes); t++) {
-		if (t->type == type) {
+		if (t->type == type && t->parse) {
 			return t;
 		}
 	}

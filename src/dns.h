@@ -253,6 +253,7 @@ enum dns_type {
 	DNS_T_OPT	= 41,
 	DNS_T_SSHFP	= 44,
 	DNS_T_SPF	= 99,
+	DNS_T_AXFR      = 252,
 
 	DNS_T_ALL	= 255
 }; /* enum dns_type */
