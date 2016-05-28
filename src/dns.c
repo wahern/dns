@@ -1335,10 +1335,11 @@ dns_b_popc(struct dns_buf *b)
 }
 
 static inline const char *
-dns_b_tostring(struct dns_buf *b)
+dns_b_tolstring(struct dns_buf *b, size_t *n)
 {
 	if (b->p < b->pe) {
 		*b->p = '\0';
+		*n = b->p - b->base;
 
 		return (const char *)b->base;
 	}
@@ -1347,19 +1348,29 @@ dns_b_tostring(struct dns_buf *b)
 
 	if (b->base < b->p) {
 		b->p[-1] = '\0';
+		*n = &b->p[-1] - b->base;
 
 		return (const char *)b->base;
 	} else {
+		*n = 0;
+
 		return "";
 	}
+}
+
+static inline const char *
+dns_b_tostring(struct dns_buf *b)
+{
+	size_t n;
+	return dns_b_tolstring(b, &n);
 }
 
 static inline size_t
 dns_b_strlen(struct dns_buf *b)
 {
-	dns_b_tostring(b);
-
-	return (b->p - b->base) + b->overflow;
+	size_t n;
+	dns_b_tolstring(b, &n);
+	return n;
 }
 
 DNS_NOTUSED static const struct dns_buf *
@@ -2810,7 +2821,7 @@ size_t dns_rr_print(void *_dst, size_t lim, struct dns_rr *rr, struct dns_packet
 	n = dns_any_print(dst.p, dst.pe - dst.p, &any, rr->type);
 	dst.p += DNS_PP_MIN(n, (size_t)(dst.pe - dst.p));
 epilog:
-	return dns_b_strlen(&dst);
+	return dns_b_strlen(&dst) + dst.overflow;
 error:
 	*_error = error;
 
@@ -2868,7 +2879,7 @@ size_t dns_a_arpa(void *_dst, size_t lim, const struct dns_a *a) {
 
 	dns_b_puts(&dst, "in-addr.arpa.");
 
-	return dns_b_strlen(&dst);
+	return dns_b_strlen(&dst) + dst.overflow;
 } /* dns_a_arpa() */
 
 
@@ -2947,7 +2958,7 @@ size_t dns_aaaa_arpa(void *_dst, size_t lim, const struct dns_aaaa *aaaa) {
 
 	dns_b_puts(&dst, "ip6.arpa.");
 
-	return dns_b_strlen(&dst);
+	return dns_b_strlen(&dst) + dst.overflow;
 } /* dns_aaaa_arpa() */
 
 
@@ -3025,7 +3036,7 @@ size_t dns_mx_print(void *_dst, size_t lim, struct dns_mx *mx) {
 	dns_b_putc(&dst, ' ');
 	dns_b_puts(&dst, mx->host);
 
-	return dns_b_strlen(&dst);
+	return dns_b_strlen(&dst) + dst.overflow;
 } /* dns_mx_print() */
 
 
@@ -3256,7 +3267,7 @@ size_t dns_soa_print(void *_dst, size_t lim, struct dns_soa *soa) {
 	dns_b_putc(&dst, ' ');
 	dns_b_fmtju(&dst, soa->minimum, 0);
 
-	return dns_b_strlen(&dst);
+	return dns_b_strlen(&dst) + dst.overflow;
 } /* dns_soa_print() */
 
 
@@ -3378,7 +3389,7 @@ size_t dns_srv_print(void *_dst, size_t lim, struct dns_srv *srv) {
 	dns_b_putc(&dst, ' ');
 	dns_b_puts(&dst, srv->target);
 
-	return dns_b_strlen(&dst);
+	return dns_b_strlen(&dst) + dst.overflow;
 } /* dns_srv_print() */
 
 
@@ -3502,7 +3513,7 @@ size_t dns_opt_print(void *_dst, size_t lim, struct dns_opt *opt) {
 
 	dns_b_putc(&dst, '"');
 
-	return dns_b_strlen(&dst);
+	return dns_b_strlen(&dst) + dst.overflow;
 } /* dns_opt_print() */
 
 
@@ -3641,7 +3652,7 @@ size_t dns_sshfp_print(void *_dst, size_t lim, struct dns_sshfp *fp) {
 		break;
 	} /* switch() */
 
-	return dns_b_strlen(&dst);
+	return dns_b_strlen(&dst) + dst.overflow;
 } /* dns_sshfp_print() */
 
 
@@ -3771,7 +3782,7 @@ size_t dns_txt_print(void *_dst, size_t lim, struct dns_txt *txt) {
 		dns_b_putc(&dst, '"');
 	}
 
-	return dns_b_strlen(&dst);
+	return dns_b_strlen(&dst) + dst.overflow;
 } /* dns_txt_print() */
 
 
@@ -3895,7 +3906,7 @@ size_t dns_any_print(void *_dst, size_t lim, union dns_any *any, enum dns_type t
 
 	dns_b_putc(&dst, '"');
 
-	return dns_b_strlen(&dst);
+	return dns_b_strlen(&dst) + dst.overflow;
 } /* dns_any_print() */
 
 
@@ -8191,7 +8202,7 @@ size_t dns_ai_print(void *_dst, size_t lim, struct addrinfo *ent, struct dns_add
 	dns_b_puts(&dst, (ent->ai_canonname)? ent->ai_canonname : "[NULL]");
 	dns_b_putc(&dst, '\n');
 
-	return dns_b_strlen(&dst);
+	return dns_b_strlen(&dst) + dst.overflow;
 } /* dns_ai_print() */
 
 
