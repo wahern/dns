@@ -1342,12 +1342,11 @@ dns_b_tolstring(struct dns_buf *b, size_t *n)
 		*n = b->p - b->base;
 
 		return (const char *)b->base;
-	}
-
-	dns_b_setoverflow(b, 1, DNS_ENOBUFS);
-
-	if (b->base < b->p) {
-		b->p[-1] = '\0';
+	} else if (b->p > b->base) {
+		if (b->p[-1] != '\0') {
+			dns_b_setoverflow(b, 1, DNS_ENOBUFS);
+			b->p[-1] = '\0';
+		}
 		*n = &b->p[-1] - b->base;
 
 		return (const char *)b->base;
