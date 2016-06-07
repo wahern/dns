@@ -1893,6 +1893,74 @@ enum dns_rcode dns_p_rcode(struct dns_packet *P) {
 
 
 /*
+ * Q U E R Y  P A C K E T  R O U T I N E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+#define DNS_Q_RD    0x1 /* recursion desired */
+#define DNS_Q_EDNS0 0x2 /* include OPT RR */
+
+static dns_error_t
+dns_q_make2(struct dns_packet **_Q, const char *qname, size_t qlen, enum dns_type qtype, enum dns_class qclass, int qflags)
+{
+	struct dns_packet *Q = NULL;
+	int error;
+
+	if (dns_p_movptr(&Q, _Q)) {
+		dns_p_reset(Q);
+	} else if (!(Q = dns_p_make(DNS_P_QBUFSIZ, &error))) {
+		goto error;
+	}
+
+	if ((error = dns_p_push(Q, DNS_S_QD, qname, qlen, qtype, qclass, 0, 0)))
+		goto error;
+
+	dns_header(Q)->rd = !!(qflags & DNS_Q_RD);
+
+	if (qflags & DNS_Q_EDNS0) {
+		struct dns_opt opt = DNS_OPT_INIT(&opt);
+
+		opt.version = 0; /* RFC 6891 version */
+		opt.maxudp = 4096;
+
+		if ((error = dns_p_push(Q, DNS_S_AR, ".", 1, DNS_T_OPT, dns_opt_class(&opt), dns_opt_ttl(&opt), &opt)))
+			goto error;
+	}
+
+	*_Q = Q;
+
+	return 0;
+error:
+	dns_p_free(Q);
+
+	return error;
+}
+
+static dns_error_t
+dns_q_make(struct dns_packet **Q, const char *qname, enum dns_type qtype, enum dns_class qclass, int qflags)
+{
+	return dns_q_make2(Q, qname, strlen(qname), qtype, qclass, qflags);
+}
+
+static dns_error_t
+dns_q_remake(struct dns_packet **Q, int qflags)
+{
+	char qname[DNS_D_MAXNAME + 1];
+	size_t qlen;
+	struct dns_rr rr;
+	int error;
+
+	assert(Q && *Q);
+	if ((error = dns_rr_parse(&rr, 12, *Q)))
+		return error;
+	if (!(qlen = dns_d_expand(qname, sizeof qname, rr.dn.p, *Q, &error)))
+		return error;
+	if (qlen >= sizeof qname)
+		return DNS_EILLEGAL;
+	return dns_q_make2(Q, qname, qlen, rr.type, rr.class, qflags);
+}
+
+/*
  * D O M A I N  N A M E  R O U T I N E S
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -3483,7 +3551,9 @@ int dns_opt_push(struct dns_packet *P, struct dns_opt *opt) {
 	if ((error = dns_b_pput16(&dst, dns_b_tell(&dst) - 2, 0)))
 		goto error;
 
+#if !DNS_DEBUG_OPT_FORMERR
 	P->end += dns_b_tell(&dst);
+#endif
 
 	return 0;
 error:
@@ -6698,6 +6768,7 @@ struct dns_resolver {
 
 		int error;
 		int which;	/* (B)IND, (F)ILE; index into resconf->lookup */
+		int qflags;
 
 		unsigned attempts;
 
@@ -6806,28 +6877,58 @@ epilog:
 } /* dns_res_stub() */
 
 
-static void dns_res_reset_frame(struct dns_resolver *R, struct dns_res_frame *frame) {
+static void dns_res_frame_destroy(struct dns_resolver *R, struct dns_res_frame *frame) {
 	(void)R;
 
 	dns_p_setptr(&frame->query, NULL);
 	dns_p_setptr(&frame->answer, NULL);
 	dns_p_setptr(&frame->hints, NULL);
+} /* dns_res_frame_destroy() */
 
+
+static void dns_res_frame_init(struct dns_resolver *R, struct dns_res_frame *frame) {
 	memset(frame, '\0', sizeof *frame);
-} /* dns_res_reset_frame() */
+
+	if (!R->resconf->options.recurse)
+		frame->qflags |= DNS_Q_RD;
+	if (R->resconf->options.edns0)
+		frame->qflags |= DNS_Q_EDNS0;
+} /* dns_res_frame_init() */
+
+
+static void dns_res_frame_reset(struct dns_resolver *R, struct dns_res_frame *frame) {
+	dns_res_frame_destroy(R, frame);
+	dns_res_frame_init(R, frame);
+} /* dns_res_frame_reset() */
+
+
+static dns_error_t dns_res_frame_prepare(struct dns_resolver *R, struct dns_res_frame *F, const char *qname, enum dns_type qtype, enum dns_class qclass) {
+	struct dns_packet *P = NULL;
+
+	if (!(F < endof(R->stack)))
+		return DNS_EUNKNOWN;
+
+	dns_p_movptr(&P, &F->query);
+	dns_res_frame_reset(R, F);
+	dns_p_movptr(&F->query, &P);
+
+	return dns_q_make(&F->query, qname, qtype, qclass, F->qflags);
+} /* dns_res_frame_prepare() */
 
 
 void dns_res_reset(struct dns_resolver *R) {
 	unsigned i;
 
 	dns_so_reset(&R->so);
-
 	dns_p_setptr(&R->nodata, NULL);
 
 	for (i = 0; i < lengthof(R->stack); i++)
-		dns_res_reset_frame(R, &R->stack[i]);
+		dns_res_frame_destroy(R, &R->stack[i]);
 
 	memset(&R->qname, '\0', sizeof *R - offsetof(struct dns_resolver, qname));
+
+	for (i = 0; i < lengthof(R->stack); i++)
+		dns_res_frame_init(R, &R->stack[i]);
 } /* dns_res_reset() */
 
 
@@ -6974,51 +7075,6 @@ copy:
 } /* dns_res_glue() */
 
 
-static int dns_res_setqry(struct dns_resolver *R, struct dns_packet **_Q, const char *qname, size_t qlen, enum dns_type qtype, enum dns_class qclass, int flags) {
-	struct dns_packet *Q = NULL;
-	int error;
-
-	if (dns_p_movptr(&Q, _Q)) {
-		dns_p_reset(Q);
-	} else if (!(Q = dns_p_make(DNS_P_QBUFSIZ, &error))) {
-		goto error;
-	}
-
-	if ((error = dns_p_push(Q, DNS_S_QD, qname, qlen, qtype, qclass, 0, 0)))
-		goto error;
-
-	dns_header(Q)->rd = !R->resconf->options.recurse;
-
-	if (R->resconf->options.edns0) {
-		struct dns_opt opt = DNS_OPT_INIT(&opt);
-
-		opt.version = 0; /* RFC 6891 version */
-		opt.maxudp = 4096;
-
-		if ((error = dns_p_push(Q, DNS_S_AR, ".", 1, DNS_T_OPT, dns_opt_class(&opt), dns_opt_ttl(&opt), &opt)))
-			goto error;
-	}
-
-	*_Q = Q;
-
-	return 0;
-error:
-	dns_p_free(Q);
-
-	return error;
-} /* dns_res_setqry() */
-
-static struct dns_packet *dns_res_mkquery(struct dns_resolver *R, const char *qname, enum dns_type qtype, enum dns_class qclass, int *_error) {
-	struct dns_packet *Q = NULL;
-	int error;
-
-	if ((error = dns_res_setqry(R, &Q, qname, strlen(qname), qtype, qclass, 0)))
-		*_error = error;
-
-	return Q;
-} /* dns_res_mkquery() */
-
-
 /*
  * Sort NS records by three criteria:
  *
@@ -7155,7 +7211,7 @@ exec:
 			R->search = 0;
 
 			while ((len = dns_resconf_search(host, sizeof host, R->qname, R->qlen, R->resconf, &R->search))) {
-				if ((error = dns_res_setqry(R, &F->query, host, len, R->qtype, R->qclass, 0)))
+				if ((error = dns_q_make2(&F->query, host, len, R->qtype, R->qclass, F->qflags)))
 					goto error;
 
 				if (!dns_p_setptr(&F->answer, dns_hosts_query(R->hosts, F->query, &error)))
@@ -7172,7 +7228,7 @@ exec:
 	case DNS_R_CACHE:
 		error = 0;
 
-		if (!F->query && !(F->query = dns_res_mkquery(R, R->qname, R->qtype, R->qclass, &error)))
+		if (!F->query && (error = dns_q_make(&F->query, R->qname, R->qtype, R->qclass, F->qflags)))
 			goto error;
 
 		if (dns_p_setptr(&F->answer, R->cache->query(F->query, R->cache, &error))) {
@@ -7229,7 +7285,7 @@ exec:
 		if (!(len = dns_resconf_search(host, sizeof host, R->qname, R->qlen, R->resconf, &R->search)))
 			dgoto(R->sp, DNS_R_SWITCH);
 
-		if ((error = dns_res_setqry(R, &F->query, host, len, R->qtype, R->qclass, 0)))
+		if ((error = dns_q_make2(&F->query, host, len, R->qtype, R->qclass, F->qflags)))
 			goto error;
 
 		F->state++;
@@ -7267,15 +7323,9 @@ exec:
 		if (&F[1] >= endof(R->stack))
 			dgoto(R->sp, DNS_R_FOREACH_NS);
 
-		dns_res_reset_frame(R, &F[1]);
-
-		if (!(F[1].query = dns_p_make(DNS_P_QBUFSIZ, &error)))
-			goto error;
-
 		if ((error = dns_ns_parse((struct dns_ns *)host, &F->hints_ns, F->hints)))
 			goto error;
-
-		if ((error = dns_p_push(F[1].query, DNS_S_QD, host, strlen(host), DNS_T_A, DNS_C_IN, 0, 0)))
+		if ((error = dns_res_frame_prepare(R, &F[1], host, DNS_T_A, DNS_C_IN)))
 			goto error;
 
 		F->state++;
@@ -7351,6 +7401,16 @@ exec:
 			DNS_SHOW(F->answer, "ANSWER @ DEPTH: %u)", R->sp);
 		}
 
+		/* Temporarily disable EDNS0 and try again on FORMERR. */
+		if (dns_p_rcode(F->answer) == DNS_RC_FORMERR && (F->qflags & DNS_Q_EDNS0)) {
+			F->qflags &= ~DNS_Q_EDNS0;
+
+			if ((error = dns_q_remake(&F->query, F->qflags)))
+				goto error;
+
+			dgoto(R->sp, DNS_R_FOREACH_A);
+		}
+
 		if ((error = dns_rr_parse(&rr, 12, F->query)))
 			goto error;
 
@@ -7401,13 +7461,7 @@ exec:
 
 		if ((error = dns_cname_parse((struct dns_cname *)host, &F->ans_cname, F->answer)))
 			goto error;
-
-		dns_res_reset_frame(R, &F[1]);
-
-		if (!(F[1].query = dns_p_make(DNS_P_QBUFSIZ, &error)))
-			goto error;
-
-		if ((error = dns_p_push(F[1].query, DNS_S_QD, host, strlen(host), dns_rr_type(12, F->query), DNS_C_IN, 0, 0)))
+		if ((error = dns_res_frame_prepare(R, &F[1], host, dns_rr_type(12, F->query), DNS_C_IN)))
 			goto error;
 
 		F->state++;
@@ -7479,9 +7533,7 @@ exec:
 				continue;
 			} /* switch() */
 
-			dns_res_reset_frame(R, &F[1]);
-
-			if (!(F[1].query = dns_res_mkquery(R, qname, qtype, qclass, &error)))
+			if ((error = dns_res_frame_prepare(R, &F[1], qname, qtype, qclass)))
 				goto error;
 
 			F->state++;
@@ -7495,9 +7547,7 @@ exec:
 		 * XXX: Should we add a mock MX answer?
 		 */
 		if (R->qtype == DNS_T_MX && R->smart.state.count == 0) {
-			dns_res_reset_frame(R, &F[1]);
-
-			if (!(F[1].query = dns_res_mkquery(R, R->qname, DNS_T_A, DNS_C_IN, &error)))
+			if ((error = dns_res_frame_prepare(R, &F[1], R->qname, DNS_T_A, DNS_C_IN)))
 				goto error;
 
 			R->smart.state.count++;
