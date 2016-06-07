@@ -1768,6 +1768,7 @@ update:
 
 		if (type == DNS_T_OPT && !P->memo.opt.p) {
 			P->memo.opt.p = end;
+			P->memo.opt.maxudp = class;
 			P->memo.opt.ttl = ttl;
 		}
 
@@ -1803,6 +1804,7 @@ static void dns_p_dump3(struct dns_packet *P, struct dns_rr_i *I, FILE *fp) {
 	size_t len;
 
 	fputs(";; [HEADER]\n", fp);
+	fprintf(fp, ";;    qid : %d\n", ntohs(dns_header(P)->qid));
 	fprintf(fp, ";;     qr : %s(%d)\n", (dns_header(P)->qr)? "RESPONSE" : "QUERY", dns_header(P)->qr);
 	fprintf(fp, ";; opcode : %s(%d)\n", dns_stropcode(dns_header(P)->opcode), dns_header(P)->opcode);
 	fprintf(fp, ";;     aa : %s(%d)\n", (dns_header(P)->aa)? "AUTHORITATIVE" : "NON-AUTHORITATIVE", dns_header(P)->aa);
@@ -1839,6 +1841,7 @@ static void dns_m_unstudy(struct dns_p_memo *m) {
 	dns_s_unstudy(&m->ns);
 	dns_s_unstudy(&m->ar);
 	m->opt.p = 0;
+	m->opt.maxudp = 0;
 	m->opt.ttl = 0;
 } /* dns_m_unstudy() */
 
@@ -1870,9 +1873,11 @@ static int dns_m_study(struct dns_p_memo *m, struct dns_packet *P) {
 		goto error;
 
 	m->opt.p = 0;
+	m->opt.maxudp = 0;
 	m->opt.ttl = 0;
 	dns_rr_foreach(&rr, P, .type = DNS_T_OPT, .section = DNS_S_AR) {
 		m->opt.p = rr.dn.p;
+		m->opt.maxudp = rr.class;
 		m->opt.ttl = rr.ttl;
 		break;
 	}
@@ -6301,7 +6306,7 @@ static int dns_so_newanswer(struct dns_socket *so, size_t len) {
 
 int dns_so_submit(struct dns_socket *so, struct dns_packet *Q, struct sockaddr *host) {
 	struct dns_rr rr;
-	int error	= -1;
+	int error = DNS_EUNKNOWN;
 
 	dns_so_reset(so);
 
@@ -6311,7 +6316,7 @@ int dns_so_submit(struct dns_socket *so, struct dns_packet *Q, struct sockaddr *
 	if (!(so->qlen = dns_d_expand(so->qname, sizeof so->qname, rr.dn.p, Q, &error)))
 		goto error;
 	/*
-	 * NOTE: don't bail if expansion is too long; caller may be
+	 * NOTE: Don't bail if expansion is too long; caller may be
 	 * intentionally sending long names. However, we won't be able to
 	 * verify it on return.
 	 */
@@ -6319,7 +6324,7 @@ int dns_so_submit(struct dns_socket *so, struct dns_packet *Q, struct sockaddr *
 	so->qtype	= rr.type;
 	so->qclass	= rr.class;
 
-	if ((error = dns_so_newanswer(so, DNS_SO_MINBUF)))
+	if ((error = dns_so_newanswer(so, (Q->memo.opt.maxudp)? Q->memo.opt.maxudp : DNS_SO_MINBUF)))
 		goto syerr;
 
 	memcpy(&so->remote, host, dns_sa_len(host));
@@ -7396,6 +7401,7 @@ exec:
 		if (DNS_DEBUG) {
 			char addr[INET_ADDRSTRLEN + 1];
 			dns_a_print(addr, sizeof addr, &a);
+			dns_header(F->query)->qid = dns_so_mkqid(&R->so);
 			DNS_SHOW(F->query, "ASKING: %s/%s @ DEPTH: %u)", u.ns.host, addr, R->sp);
 		}
 
