@@ -7402,7 +7402,8 @@ exec:
 		}
 
 		if (dns_p_rcode(F->answer) == DNS_RC_FORMERR ||
-		    dns_p_rcode(F->answer) == DNS_RC_NOTIMP) {
+		    dns_p_rcode(F->answer) == DNS_RC_NOTIMP ||
+		    dns_p_rcode(F->answer) == DNS_RC_BADVERS)) {
 			/* Temporarily disable EDNS0 and try again. */
 			if (F->qflags & DNS_Q_EDNS0) {
 				F->qflags &= ~DNS_Q_EDNS0;
