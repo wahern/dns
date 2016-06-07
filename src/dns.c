@@ -7115,10 +7115,14 @@ static int dns_res_nameserv_cmp(struct dns_rr *a, struct dns_rr *b, struct dns_r
 static int dns_res_exec(struct dns_resolver *R) {
 	struct dns_res_frame *F;
 	struct dns_packet *P;
-	char host[DNS_D_MAXNAME + 1];
+	union {
+		char host[DNS_D_MAXNAME + 1];
+		char name[DNS_D_MAXNAME + 1];
+		struct dns_ns ns;
+		struct dns_cname cname;
+	} u;
 	size_t len;
 	struct dns_rr rr;
-	struct sockaddr_in sin;
 	int error;
 
 exec:
@@ -7138,16 +7142,16 @@ exec:
 		if (!(F->answer = dns_res_glue(R, F->query)))
 			dgoto(R->sp, DNS_R_SWITCH);
 
-		if (!(len = dns_d_expand(host, sizeof host, 12, F->query, &error)))
+		if (!(len = dns_d_expand(u.name, sizeof u.name, 12, F->query, &error)))
 			goto error;
-		else if (len >= sizeof host)
+		else if (len >= sizeof u.name)
 			goto toolong;
 
-		dns_rr_foreach(&rr, F->answer, .name = host, .type = dns_rr_type(12, F->query), .section = DNS_S_AN) {
+		dns_rr_foreach(&rr, F->answer, .name = u.name, .type = dns_rr_type(12, F->query), .section = DNS_S_AN) {
 			dgoto(R->sp, DNS_R_FINISH);
 		}
 
-		dns_rr_foreach(&rr, F->answer, .name = host, .type = DNS_T_CNAME, .section = DNS_S_AN) {
+		dns_rr_foreach(&rr, F->answer, .name = u.name, .type = DNS_T_CNAME, .section = DNS_S_AN) {
 			F->ans_cname	= rr;
 
 			dgoto(R->sp, DNS_R_CNAME0_A);
@@ -7210,8 +7214,8 @@ exec:
 		} else {
 			R->search = 0;
 
-			while ((len = dns_resconf_search(host, sizeof host, R->qname, R->qlen, R->resconf, &R->search))) {
-				if ((error = dns_q_make2(&F->query, host, len, R->qtype, R->qclass, F->qflags)))
+			while ((len = dns_resconf_search(u.name, sizeof u.name, R->qname, R->qlen, R->resconf, &R->search))) {
+				if ((error = dns_q_make2(&F->query, u.name, len, R->qtype, R->qclass, F->qflags)))
 					goto error;
 
 				if (!dns_p_setptr(&F->answer, dns_hosts_query(R->hosts, F->query, &error)))
@@ -7282,10 +7286,10 @@ exec:
 		 * XXX: We probably should only apply the domain search
 		 * algorithm if R->sp == 0.
 		 */
-		if (!(len = dns_resconf_search(host, sizeof host, R->qname, R->qlen, R->resconf, &R->search)))
+		if (!(len = dns_resconf_search(u.name, sizeof u.name, R->qname, R->qlen, R->resconf, &R->search)))
 			dgoto(R->sp, DNS_R_SWITCH);
 
-		if ((error = dns_q_make2(&F->query, host, len, R->qtype, R->qclass, F->qflags)))
+		if ((error = dns_q_make2(&F->query, u.name, len, R->qtype, R->qclass, F->qflags)))
 			goto error;
 
 		F->state++;
@@ -7323,21 +7327,21 @@ exec:
 		if (&F[1] >= endof(R->stack))
 			dgoto(R->sp, DNS_R_FOREACH_NS);
 
-		if ((error = dns_ns_parse((struct dns_ns *)host, &F->hints_ns, F->hints)))
+		if ((error = dns_ns_parse(&u.ns, &F->hints_ns, F->hints)))
 			goto error;
-		if ((error = dns_res_frame_prepare(R, &F[1], host, DNS_T_A, DNS_C_IN)))
+		if ((error = dns_res_frame_prepare(R, &F[1], u.ns.host, DNS_T_A, DNS_C_IN)))
 			goto error;
 
 		F->state++;
 
 		dgoto(++R->sp, DNS_R_INIT);
 	case DNS_R_RESOLV1_NS:
-		if (!(len = dns_d_expand(host, sizeof host, 12, F[1].query, &error)))
+		if (!(len = dns_d_expand(u.host, sizeof u.host, 12, F[1].query, &error)))
 			goto error;
-		else if (len >= sizeof host)
+		else if (len >= sizeof u.host)
 			goto toolong;
 
-		dns_rr_foreach(&rr, F[1].answer, .name = host, .type = DNS_T_A, .section = (DNS_S_ALL & ~DNS_S_QD)) {
+		dns_rr_foreach(&rr, F[1].answer, .name = u.host, .type = DNS_T_A, .section = (DNS_S_ALL & ~DNS_S_QD)) {
 			rr.section	= DNS_S_AR;
 
 			if ((error = dns_rr_copy(F->hints, &rr, F[1].answer)))
@@ -7347,16 +7351,19 @@ exec:
 		}
 
 		dgoto(R->sp, DNS_R_FOREACH_NS);
-	case DNS_R_FOREACH_A:
+	case DNS_R_FOREACH_A: {
+		struct dns_a a;
+		struct sockaddr_in sin;
+
 		/*
 		 * NOTE: Iterator initialized in DNS_R_FOREACH_NS because
 		 * this state is re-entrant, but we need to reset
 		 * .name to a valid pointer each time.
 		 */
-		if ((error = dns_ns_parse((struct dns_ns *)host, &F->hints_ns, F->hints)))
+		if ((error = dns_ns_parse(&u.ns, &F->hints_ns, F->hints)))
 			goto error;
 
-		F->hints_j.name		= host;
+		F->hints_j.name		= u.ns.host;
 		F->hints_j.type		= DNS_T_A;
 		F->hints_j.section	= DNS_S_ALL & ~DNS_S_QD;
 
@@ -7367,26 +7374,27 @@ exec:
 			dgoto(R->sp, DNS_R_FOREACH_NS);
 		}
 
-		sin.sin_family	= AF_INET;
-
-		if ((error = dns_a_parse((struct dns_a *)&sin.sin_addr, &rr, F->hints)))
+		if ((error = dns_a_parse(&a, &rr, F->hints)))
 			goto error;
 
+		sin.sin_family	= AF_INET;
+		sin.sin_addr	= a.addr;
 		if (R->sp == 0)
-			sin.sin_port = dns_hints_port(R->hints, AF_INET, (struct sockaddr *)&sin.sin_addr);
+			sin.sin_port = dns_hints_port(R->hints, AF_INET, &sin.sin_addr);
 		else
 			sin.sin_port = htons(53);
 
 		if (DNS_DEBUG) {
 			char addr[INET_ADDRSTRLEN + 1];
-			dns_a_print(addr, sizeof addr, (struct dns_a *)&sin.sin_addr);
-			DNS_SHOW(F->query, "ASKING: %s/%s @ DEPTH: %u)", host, addr, R->sp);
+			dns_a_print(addr, sizeof addr, &a);
+			DNS_SHOW(F->query, "ASKING: %s/%s @ DEPTH: %u)", u.ns.host, addr, R->sp);
 		}
 
 		if ((error = dns_so_submit(&R->so, F->query, (struct sockaddr *)&sin)))
 			goto error;
 
 		F->state++;
+	}
 	case DNS_R_QUERY_A:
 		if (dns_so_elapsed(&R->so) >= dns_resconf_timeout(R->resconf))
 			dgoto(R->sp, DNS_R_FOREACH_A);
@@ -7403,7 +7411,7 @@ exec:
 
 		if (dns_p_rcode(F->answer) == DNS_RC_FORMERR ||
 		    dns_p_rcode(F->answer) == DNS_RC_NOTIMP ||
-		    dns_p_rcode(F->answer) == DNS_RC_BADVERS)) {
+		    dns_p_rcode(F->answer) == DNS_RC_BADVERS) {
 			/* Temporarily disable EDNS0 and try again. */
 			if (F->qflags & DNS_Q_EDNS0) {
 				F->qflags &= ~DNS_Q_EDNS0;
@@ -7417,16 +7425,16 @@ exec:
 		if ((error = dns_rr_parse(&rr, 12, F->query)))
 			goto error;
 
-		if (!(len = dns_d_expand(host, sizeof host, rr.dn.p, F->query, &error)))
+		if (!(len = dns_d_expand(u.name, sizeof u.name, rr.dn.p, F->query, &error)))
 			goto error;
-		else if (len >= sizeof host)
+		else if (len >= sizeof u.name)
 			goto toolong;
 
-		dns_rr_foreach(&rr, F->answer, .section = DNS_S_AN, .name = host, .type = rr.type) {
+		dns_rr_foreach(&rr, F->answer, .section = DNS_S_AN, .name = u.name, .type = rr.type) {
 			dgoto(R->sp, DNS_R_FINISH);	/* Found */
 		}
 
-		dns_rr_foreach(&rr, F->answer, .section = DNS_S_AN, .name = host, .type = DNS_T_CNAME) {
+		dns_rr_foreach(&rr, F->answer, .section = DNS_S_AN, .name = u.name, .type = DNS_T_CNAME) {
 			F->ans_cname	= rr;
 
 			dgoto(R->sp, DNS_R_CNAME0_A);
@@ -7462,9 +7470,9 @@ exec:
 		if (&F[1] >= endof(R->stack))
 			dgoto(R->sp, DNS_R_FINISH);
 
-		if ((error = dns_cname_parse((struct dns_cname *)host, &F->ans_cname, F->answer)))
+		if ((error = dns_cname_parse(&u.cname, &F->ans_cname, F->answer)))
 			goto error;
-		if ((error = dns_res_frame_prepare(R, &F[1], host, dns_rr_type(12, F->query), DNS_C_IN)))
+		if ((error = dns_res_frame_prepare(R, &F[1], u.cname.host, dns_rr_type(12, F->query), DNS_C_IN)))
 			goto error;
 
 		F->state++;
