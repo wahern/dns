@@ -7401,14 +7401,16 @@ exec:
 			DNS_SHOW(F->answer, "ANSWER @ DEPTH: %u)", R->sp);
 		}
 
-		/* Temporarily disable EDNS0 and try again on FORMERR. */
-		if (dns_p_rcode(F->answer) == DNS_RC_FORMERR && (F->qflags & DNS_Q_EDNS0)) {
-			F->qflags &= ~DNS_Q_EDNS0;
+		if (dns_p_rcode(F->answer) == DNS_RC_FORMERR ||
+		    dns_p_rcode(F->answer) == DNS_RC_NOTIMP) {
+			/* Temporarily disable EDNS0 and try again. */
+			if (F->qflags & DNS_Q_EDNS0) {
+				F->qflags &= ~DNS_Q_EDNS0;
+				if ((error = dns_q_remake(&F->query, F->qflags)))
+					goto error;
 
-			if ((error = dns_q_remake(&F->query, F->qflags)))
-				goto error;
-
-			dgoto(R->sp, DNS_R_FOREACH_A);
+				dgoto(R->sp, DNS_R_FOREACH_A);
+			}
 		}
 
 		if ((error = dns_rr_parse(&rr, 12, F->query)))
