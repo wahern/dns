@@ -239,6 +239,8 @@ int *dns_debug_p(void) {
 
 #endif /* DNS_DEBUG */
 
+#define DNS_CARP(...) DNS_SAY(__VA_ARGS__)
+
 
 /*
  * V E R S I O N  R O U T I N E S
@@ -6349,29 +6351,35 @@ static int dns_so_verify(struct dns_socket *so, struct dns_packet *P) {
 	char qname[DNS_D_MAXNAME + 1];
 	size_t qlen;
 	struct dns_rr rr;
-	int error	= -1;
+	int error = -1;
 
 	if (so->qid != dns_header(so->answer)->qid)
-		return DNS_EUNKNOWN;
+		goto reject;
 
 	if (!dns_p_count(so->answer, DNS_S_QD))
-		return DNS_EUNKNOWN;
+		goto reject;
 
 	if (0 != dns_rr_parse(&rr, 12, so->answer))
-		return DNS_EUNKNOWN;
+		goto reject;
 
 	if (rr.type != so->qtype || rr.class != so->qclass)
-		return DNS_EUNKNOWN;
+		goto reject;
 
 	if (!(qlen = dns_d_expand(qname, sizeof qname, rr.dn.p, P, &error)))
-		return error;
+		goto error;
 	else if (qlen >= sizeof qname || qlen != so->qlen)
-		return DNS_EUNKNOWN;
+		goto reject;
 
 	if (0 != strcasecmp(so->qname, qname))
-		return DNS_EUNKNOWN;
+		goto reject;
 
 	return 0;
+reject:
+	error = DNS_EUNKNOWN;
+error:
+	DNS_SHOW(P, "rejecting packet (%s)", dns_strerror(error));
+
+	return error;
 } /* dns_so_verify() */
 
 
@@ -6552,6 +6560,7 @@ retry:
 	} /* switch() */
 
 trash:
+	DNS_CARP("discarding packet");
 	goto retry;
 soerr:
 	error	= dns_soerr();
