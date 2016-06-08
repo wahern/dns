@@ -93,14 +93,28 @@
 
 #define DNS_SUNPRO_PREREQ(M, m, p) (__SUNPRO_C > 0 && __SUNPRO_C >= 0x ## M ## m ## p)
 
+#if defined __has_builtin
+#define dns_has_builtin(x) __has_builtin(x)
+#else
+#define dns_has_builtin(x) 0
+#endif
+
 #if defined __has_extension
 #define dns_has_extension(x) __has_extension(x)
 #else
 #define dns_has_extension(x) 0
 #endif
 
+#ifndef HAVE___ASSUME
+#define HAVE___ASSUME DNS_MSC_PREREQ(8,0,0)
+#endif
+
 #ifndef HAVE___BUILTIN_TYPES_COMPATIBLE_P
 #define HAVE___BUILTIN_TYPES_COMPATIBLE_P (DNS_GNUC_PREREQ(3,1,1) || __clang__)
+#endif
+
+#ifndef HAVE___BUILTIN_UNREACHABLE
+#define HAVE___BUILTIN_UNREACHABLE (DNS_GNUC_PREREQ(4,5,0) || dns_has_builtin(__builtin_unreachable))
 #endif
 
 #ifndef HAVE_PRAGMA_MESSAGE
@@ -144,6 +158,14 @@
 #endif
 #define dns_isarray(a) (!dns_same_type((a), (&(a)[0]), 0))
 #define dns_inline_assert(cond) ((void)(sizeof (struct { int:-!(cond); })))
+
+#if HAVE___ASSUME
+#define dns_assume(cond) __assume(cond)
+#elif HAVE___BUILTIN_UNREACHABLE
+#define dns_assume(cond) do { if (!(cond)) __builtin_unreachable(); } while (0)
+#else
+#define dns_assume(cond) do { (void)(cond); } while (0)
+#endif
 
 #ifndef lengthof
 #define lengthof(a) (dns_inline_assert(dns_isarray(a)), (sizeof (a) / sizeof (a)[0]))
@@ -2223,6 +2245,9 @@ size_t dns_d_comp(void *dst_, size_t lim, const void *src_, size_t len, struct d
 						dst.b[a.p++]	= 0xc0
 								| (0x3f & (b.p >> 8));
 						dst.b[a.p++]	= (0xff & (b.p >> 0));
+
+						/* silence static analyzers */
+						dns_assume(a.p > 0);
 
 						return a.p;
 					}
