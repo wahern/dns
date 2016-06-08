@@ -75,9 +75,9 @@
 
 #define DNS_VENDOR "william@25thandClement.com"
 
-#define DNS_V_REL  0x20160528
-#define DNS_V_ABI  0x20160528
-#define DNS_V_API  0x20160528
+#define DNS_V_REL  0x20160607
+#define DNS_V_ABI  0x20160607
+#define DNS_V_API  0x20160607
 
 
 DNS_PUBLIC const char *dns_vendor(void);
@@ -403,6 +403,7 @@ struct dns_packet {
 
 		struct {
 			unsigned short p;
+			unsigned short maxudp;
 			unsigned ttl;
 		} opt;
 	} memo;
