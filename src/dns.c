@@ -1390,36 +1390,36 @@ dns_b_from(const struct dns_buf *b, const void *src, size_t n)
 }
 
 static inline int
-dns_b_getc(const struct dns_buf *_b, int oneof)
+dns_b_getc(const struct dns_buf *_b, const int eof)
 {
 	struct dns_buf *b = (struct dns_buf *)_b;
 
 	if (!(b->p < b->pe))
-		return dns_b_setoverflow(b, 1, DNS_EILLEGAL);
+		return dns_b_setoverflow(b, 1, DNS_EILLEGAL), eof;
 
 	return *b->p++;
 }
 
 static inline intmax_t
-dns_b_get16(const struct dns_buf *b, const intmax_t oneof)
+dns_b_get16(const struct dns_buf *b, const intmax_t eof)
 {
-	uint_fast16_t n;
+	intmax_t n;
 
 	n = (dns_b_getc(b, 0) << 8);
 	n |= (dns_b_getc(b, 0) << 0);
 
-	return (!b->overflow)? n : oneof;
+	return (!b->overflow)? n : eof;
 }
 
 DNS_NOTUSED static inline intmax_t
-dns_b_get32(const struct dns_buf *b, const intmax_t oneof)
+dns_b_get32(const struct dns_buf *b, const intmax_t eof)
 {
-	uint_fast32_t n;
+	intmax_t n;
 
 	n = (dns_b_get16(b, 0) << 16);
 	n |= (dns_b_get16(b, 0) << 0);
 
-	return (!b->overflow)? n : oneof;
+	return (!b->overflow)? n : eof;
 }
 
 static inline dns_error_t
