@@ -75,9 +75,9 @@
 
 #define DNS_VENDOR "william@25thandClement.com"
 
-#define DNS_V_REL  0x20160607
-#define DNS_V_ABI  0x20160607
-#define DNS_V_API  0x20160607
+#define DNS_V_REL  0x20160608
+#define DNS_V_ABI  0x20160608
+#define DNS_V_API  0x20160608
 
 
 DNS_PUBLIC const char *dns_vendor(void);
@@ -895,6 +895,9 @@ struct dns_resolv_conf {
 
 	/* (f)ile, (b)ind, (c)ache */
 	char lookup[4 * (1 + (4 * 2))];
+
+	/* getaddrinfo family by preference order ("inet4", "inet6") */
+	int family[3];
 
 	struct {
 		_Bool edns0;

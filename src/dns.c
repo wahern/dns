@@ -4322,9 +4322,12 @@ error:
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 struct dns_resolv_conf *dns_resconf_open(int *error) {
-	static const struct dns_resolv_conf resconf_initializer
-		= { .lookup = "bf", .options = { .ndots = 1, .timeout = 5, .attempts = 2, .tcp = DNS_RESCONF_TCP_ENABLE, },
-		    .iface = { .ss_family = AF_INET }, };
+	static const struct dns_resolv_conf resconf_initializer = {
+		.lookup = "bf",
+		.family = { AF_INET, AF_INET6 },
+		.options = { .ndots = 1, .timeout = 5, .attempts = 2, .tcp = DNS_RESCONF_TCP_ENABLE, },
+		.iface = { .ss_family = AF_INET },
+	};
 	struct dns_resolv_conf *resconf;
 	struct sockaddr_in *sin;
 
@@ -4447,6 +4450,9 @@ enum dns_resconf_keyword {
 	DNS_RESCONF_FILE,
 	DNS_RESCONF_BIND,
 	DNS_RESCONF_CACHE,
+	DNS_RESCONF_FAMILY,
+	DNS_RESCONF_INET4,
+	DNS_RESCONF_INET6,
 	DNS_RESCONF_OPTIONS,
 	DNS_RESCONF_EDNS0,
 	DNS_RESCONF_NDOTS,
@@ -4474,6 +4480,9 @@ static enum dns_resconf_keyword dns_resconf_keyword(const char *word) {
 		[DNS_RESCONF_FILE]		= "file",
 		[DNS_RESCONF_BIND]		= "bind",
 		[DNS_RESCONF_CACHE]		= "cache",
+		[DNS_RESCONF_FAMILY]		= "family",
+		[DNS_RESCONF_INET4]		= "inet4",
+		[DNS_RESCONF_INET6]		= "inet6",
 		[DNS_RESCONF_OPTIONS]		= "options",
 		[DNS_RESCONF_EDNS0]		= "edns0",
 		[DNS_RESCONF_ROTATE]		= "rotate",
@@ -4639,6 +4648,23 @@ skip:
 					break;
 				} /* switch() */
 			} /* for() */
+
+			break;
+		case DNS_RESCONF_FAMILY:
+			for (i = 1, j = 0; i < wc && j < lengthof(resconf->family); i++) {
+				switch (dns_resconf_keyword(words[i])) {
+				case DNS_RESCONF_INET4:
+					resconf->family[j++]	= AF_INET;
+
+					break;
+				case DNS_RESCONF_INET6:
+					resconf->family[j++]	= AF_INET6;
+
+					break;
+				default:
+					break;
+				}
+			}
 
 			break;
 		case DNS_RESCONF_OPTIONS:
@@ -7764,24 +7790,35 @@ int dns_res_check(struct dns_resolver *R) {
 
 
 struct dns_packet *dns_res_fetch(struct dns_resolver *R, int *error) {
-	struct dns_packet *answer;
+	struct dns_packet *P;
 
-	if (R->stack[0].state != DNS_R_DONE) {
-		*error = DNS_EUNKNOWN;
+	if (R->stack[0].state != DNS_R_DONE)
+		return *error = DNS_EUNKNOWN, NULL;
 
-		return 0;
-	}
+	if (!dns_p_movptr(&P, &R->stack[0].answer))
+		return *error = DNS_EFETCHED, NULL;
 
-	if (!(answer = R->stack[0].answer)) {
-		*error = DNS_EFETCHED;
-
-		return 0;
-	}
-
-	R->stack[0].answer = 0;
-
-	return answer;
+	return P;
 } /* dns_res_fetch() */
+
+
+static struct dns_packet *dns_res_fetch_and_study(struct dns_resolver *R, int *_error) {
+	struct dns_packet *P = NULL;
+	int error;
+
+	if (!(P = dns_res_fetch(R, &error)))
+		goto error;
+	if ((error = dns_p_study(P)))
+		goto error;
+
+	return P;
+error:
+	*_error = error;
+
+	dns_p_free(P);
+
+	return NULL;
+} /* dns_res_fetch_and_study() */
 
 
 struct dns_packet *dns_res_query(struct dns_resolver *res, const char *qname, enum dns_type qtype, enum dns_class qclass, int timeout, int *error_) {
@@ -7834,6 +7871,12 @@ struct dns_addrinfo {
 	enum dns_type qtype;
 	unsigned short qport, port;
 
+	struct {
+		unsigned long todo;
+		int atype;
+		enum dns_type qtype;
+	} af;
+
 	struct dns_packet *answer;
 	struct dns_packet *glue;
 
@@ -7841,12 +7884,62 @@ struct dns_addrinfo {
 	struct dns_rr rr;
 
 	char cname[DNS_D_MAXNAME + 1];
+	char i_cname[DNS_D_MAXNAME + 1], g_cname[DNS_D_MAXNAME + 1];
 
 	int state;
 	int found;
 
 	struct dns_stat st;
 }; /* struct dns_addrinfo */
+
+
+#define DNS_AI_AFMAX 32
+#define DNS_AI_AF2INDEX(af) (1UL << ((af) - 1))
+
+static int dns_ai_nextaf(struct dns_addrinfo *ai) {
+	int qtype = 0, atype = 0;
+	unsigned i;
+
+	dns_static_assert(AF_UNSPEC == 0, "AF_UNSPEC constant not 0");
+	dns_static_assert(AF_INET <= DNS_AI_AFMAX, "AF_INET constant too large");
+	dns_static_assert(AF_INET6 <= DNS_AI_AFMAX, "AF_INET6 constant too large");
+
+	for (i = 0; i < lengthof(ai->res->resconf->family); i++) {
+		int af = ai->res->resconf->family[i];
+
+		if (af == AF_UNSPEC)
+			break;
+		if (af < 0 || af > DNS_AI_AFMAX)
+			continue;
+		if (!(DNS_AI_AF2INDEX(af) & ai->af.todo))
+			continue;
+
+		switch (af) {
+		case AF_INET:
+			atype = AF_INET;
+			qtype = DNS_T_A;
+			goto update;
+		case AF_INET6:
+			atype = AF_INET6;
+			qtype = DNS_T_AAAA;
+			goto update;
+		}
+	}
+
+update:
+	ai->af.atype = atype;
+	ai->af.qtype = qtype;
+
+	if (atype)
+		ai->af.todo &= ~DNS_AI_AF2INDEX(atype);
+
+	return atype;
+} /* dns_ai_nextaf() */
+
+
+static enum dns_type dns_ai_qtype(struct dns_addrinfo *ai) {
+	return (ai->qtype)? ai->qtype : ai->af.qtype;
+} /* dns_ai_qtype() */
 
 
 static dns_error_t dns_ai_parseport(unsigned short *port, const char *serv, const struct addrinfo *hints) {
@@ -7909,8 +8002,30 @@ struct dns_addrinfo *dns_ai_open(const char *host, const char *serv, enum dns_ty
 
 	if (serv && (error = dns_ai_parseport(&ai->qport, serv, hints)))
 		goto error;
-
 	ai->port = ai->qport;
+
+	switch (ai->qtype) {
+	case DNS_T_A:
+		ai->af.todo = DNS_AI_AF2INDEX(AF_INET);
+		break;
+	case DNS_T_AAAA:
+		ai->af.todo = DNS_AI_AF2INDEX(AF_INET6);
+		break;
+	default: /* 0, MX, SRV, etc */
+		switch (ai->hints.ai_family) {
+		case AF_UNSPEC:
+			ai->af.todo = DNS_AI_AF2INDEX(AF_INET) | DNS_AI_AF2INDEX(AF_INET6);
+			break;
+		case AF_INET:
+			ai->af.todo = DNS_AI_AF2INDEX(AF_INET);
+			break;
+		case AF_INET6:
+			ai->af.todo = DNS_AI_AF2INDEX(AF_INET6);
+			break;
+		default:
+			break;
+		}
+	}
 
 	return ai;
 syerr:
@@ -8000,11 +8115,13 @@ static int dns_ai_setent(struct addrinfo **ent, union dns_any *any, enum dns_typ
 
 enum dns_ai_state {
 	DNS_AI_S_INIT,
+	DNS_AI_S_NEXTAF,
 	DNS_AI_S_NUMERIC,
 	DNS_AI_S_SUBMIT,
 	DNS_AI_S_CHECK,
 	DNS_AI_S_FETCH,
 	DNS_AI_S_FOREACH_I,
+	DNS_AI_S_ITERATE_G,
 	DNS_AI_S_FOREACH_G,
 	DNS_AI_S_SUBMIT_G,
 	DNS_AI_S_CHECK_G,
@@ -8019,7 +8136,7 @@ int dns_ai_nextent(struct addrinfo **ent, struct dns_addrinfo *ai) {
 	struct dns_rr rr;
 	char qname[DNS_D_MAXNAME + 1];
 	union dns_any any;
-	size_t len;
+	size_t qlen, clen;
 	int error;
 
 	*ent = 0;
@@ -8029,27 +8146,38 @@ exec:
 	switch (ai->state) {
 	case DNS_AI_S_INIT:
 		ai->state++;
+	case DNS_AI_S_NEXTAF:
+		if (!dns_ai_nextaf(ai))
+			dns_ai_goto(DNS_AI_S_DONE);
+
+		ai->state++;
 	case DNS_AI_S_NUMERIC:
 		if (1 == dns_inet_pton(AF_INET, ai->qname, &any.a)) {
-			ai->state = DNS_AI_S_DONE;
-
-			return dns_ai_setent(ent, &any, DNS_T_A, ai);
+			if (ai->af.atype == AF_INET) {
+				ai->state = DNS_AI_S_NEXTAF;
+				return dns_ai_setent(ent, &any, DNS_T_A, ai);
+			} else {
+				dns_ai_goto(DNS_AI_S_NEXTAF);
+			}
 		}
 
 		if (1 == dns_inet_pton(AF_INET6, ai->qname, &any.aaaa)) {
-			ai->state = DNS_AI_S_DONE;
-
-			return dns_ai_setent(ent, &any, DNS_T_AAAA, ai);
+			if (ai->af.atype == AF_INET6) {
+				ai->state = DNS_AI_S_NEXTAF;
+				return dns_ai_setent(ent, &any, DNS_T_AAAA, ai);
+			} else {
+				dns_ai_goto(DNS_AI_S_NEXTAF);
+			}
 		}
 
 		if (ai->hints.ai_flags & AI_NUMERICHOST)
-			dns_ai_goto(DNS_AI_S_DONE);
+			dns_ai_goto(DNS_AI_S_NEXTAF);
 
 		ai->state++;
 	case DNS_AI_S_SUBMIT:
 		assert(ai->res);
 
-		if ((error = dns_res_submit(ai->res, ai->qname, ai->qtype, DNS_C_IN)))
+		if ((error = dns_res_submit(ai->res, ai->qname, dns_ai_qtype(ai), DNS_C_IN)))
 			return error;
 
 		ai->state++;
@@ -8059,35 +8187,31 @@ exec:
 
 		ai->state++;
 	case DNS_AI_S_FETCH:
-		if (!(ai->answer = dns_res_fetch(ai->res, &error)))
+		if (!(ans = dns_res_fetch_and_study(ai->res, &error)))
+			return error;
+		if (ai->glue != ai->answer)
+			dns_p_free(ai->glue);
+		ai->glue = dns_p_movptr(&ai->answer, &ans);
+
+		/* Search generator may have changed the qname. */
+		if (!(qlen = dns_d_expand(qname, sizeof qname, 12, ai->answer, &error)))
+			return error;
+		else if (qlen >= sizeof qname)
+			return DNS_EILLEGAL;
+		if (!dns_d_cname(ai->cname, sizeof ai->cname, qname, qlen, ai->answer, &error))
 			return error;
 
-		if ((error = dns_p_study(ai->answer)))
-			return error;
-
-		ai->glue = ai->answer;
-
+		dns_strlcpy(ai->i_cname, ai->cname, sizeof ai->i_cname);
 		dns_rr_i_init(&ai->i, ai->answer);
-
 		ai->i.section = DNS_S_AN;
-		ai->i.type    = ai->qtype;
+		ai->i.name    = ai->i_cname;
+		ai->i.type    = dns_ai_qtype(ai);
 		ai->i.sort    = &dns_rr_i_order;
 
 		ai->state++;
 	case DNS_AI_S_FOREACH_I:
-		/* Search generator may have changed our qname. */
-		if (!(len = dns_d_expand(qname, sizeof qname, 12, ai->answer, &error)))
-			return error;
-		else if (len >= sizeof qname)
-			return DNS_EILLEGAL;
-
-		if (!dns_d_cname(ai->cname, sizeof ai->cname, qname, strlen(qname), ai->answer, &error))
-			return error;
-
-		ai->i.name = ai->cname;
-
 		if (!dns_rr_grep(&rr, 1, &ai->i, ai->answer, &error))
-			dns_ai_goto(DNS_AI_S_DONE);
+			dns_ai_goto(DNS_AI_S_NEXTAF);
 
 		if ((error = dns_any_parse(&any, &rr, ai->answer)))
 			return error;
@@ -8099,7 +8223,7 @@ exec:
 		case DNS_T_AAAA:
 			return dns_ai_setent(ent, &any, rr.type, ai);
 		default:
-			if (!dns_any_cname(ai->cname, sizeof ai->cname, &any, rr.type))
+			if (!(clen = dns_any_cname(ai->cname, sizeof ai->cname, &any, rr.type)))
 				dns_ai_goto(DNS_AI_S_FOREACH_I);
 
 			/*
@@ -8109,7 +8233,7 @@ exec:
 			 * CNAME chains on it's own, regardless of whether
 			 * the "smart" option is enabled.
 			 */
-			if (!dns_d_cname(ai->cname, sizeof ai->cname, ai->cname, strlen(ai->cname), ai->answer, &error))
+			if (!dns_d_cname(ai->cname, sizeof ai->cname, ai->cname, clen, ai->answer, &error))
 				return error;
 
 			if (rr.type == DNS_T_SRV)
@@ -8118,11 +8242,13 @@ exec:
 			break;
 		} /* switch() */
 
+		ai->state++;
+	case DNS_AI_S_ITERATE_G:
+		dns_strlcpy(ai->g_cname, ai->cname, sizeof ai->g_cname);
 		dns_rr_i_init(&ai->g, ai->glue);
-
 		ai->g.section = DNS_S_ALL & ~DNS_S_QD;
-		ai->g.name    = ai->cname;
-		ai->g.type    = (ai->hints.ai_family == AF_INET6)? DNS_T_AAAA : DNS_T_A;
+		ai->g.name    = ai->g_cname;
+		ai->g.type    = ai->af.qtype;
 
 		ai->state++;
 	case DNS_AI_S_FOREACH_G:
@@ -8138,6 +8264,7 @@ exec:
 
 		return dns_ai_setent(ent, &any, rr.type, ai);
 	case DNS_AI_S_SUBMIT_G:
+		/* skip if already queried */
 		if (dns_rr_grep(&rr, 1, dns_rr_i_new(ai->glue, .section = DNS_S_QD, .name = ai->g.name, .type = ai->g.type), ai->glue, &error))
 			dns_ai_goto(DNS_AI_S_FOREACH_I);
 
@@ -8151,32 +8278,22 @@ exec:
 
 		ai->state++;
 	case DNS_AI_S_FETCH_G:
-		if (!(ans = dns_res_fetch(ai->res, &error)))
+		if (!(ans = dns_res_fetch_and_study(ai->res, &error)))
 			return error;
 
-		dns_p_study(ans);
-
 		glue = dns_p_merge(ai->glue, DNS_S_ALL, ans, DNS_S_ALL, &error);
-
-		dns_p_free(ans);
-
+		dns_p_setptr(&ans, NULL);
 		if (!glue)
 			return error;
 
 		if (ai->glue != ai->answer)
 			dns_p_free(ai->glue);
-
 		ai->glue = glue;
 
-		dns_rr_i_init(&ai->g, ai->glue);
-
-		/* ai->g.name should already point to ai->cname */
-		if (!dns_d_cname(ai->cname, sizeof ai->cname, ai->cname, strlen(ai->cname), ai->glue, &error))
+		if (!dns_d_cname(ai->cname, sizeof ai->cname, ai->g.name, strlen(ai->g.name), ai->glue, &error))
 			dns_ai_goto(DNS_AI_S_FOREACH_I);
 
-		/* NOTE: Keep all the other iterator filters */
-
-		dns_ai_goto(DNS_AI_S_FOREACH_G);
+		dns_ai_goto(DNS_AI_S_ITERATE_G);
 	case DNS_AI_S_DONE:
 		if (ai->found) {
 			return ENOENT; /* TODO: Just return 0 */
@@ -8236,7 +8353,15 @@ size_t dns_ai_print(void *_dst, size_t lim, struct addrinfo *ent, struct dns_add
 	dns_b_puts(&dst, "[ ");
 	dns_b_puts(&dst, ai->qname);
 	dns_b_puts(&dst, " IN ");
-	dns_b_puts(&dst, dns_strtype(ai->qtype));
+	if (ai->qtype) {
+		dns_b_puts(&dst, dns_strtype(ai->qtype));
+	} else if (ent->ai_family == AF_INET) {
+		dns_b_puts(&dst, dns_strtype(DNS_T_A));
+	} else if (ent->ai_family == AF_INET6) {
+		dns_b_puts(&dst, dns_strtype(DNS_T_AAAA));
+	} else {
+		dns_b_puts(&dst, "0");
+	}
 	dns_b_puts(&dst, " ]\n");
 
 	dns_b_puts(&dst, ".ai_family    = ");
@@ -9288,8 +9413,7 @@ static int resolve_addrinfo(int argc DNS_NOTUSED, char *argv[]) {
 
 	if (!MAIN.qname)
 		MAIN.qname = "www.google.com";
-	if (!MAIN.qtype)
-		MAIN.qtype = DNS_T_A;
+	/* NB: MAIN.qtype of 0 means obey hints.ai_family */
 
 	resconf()->options.recurse = recurse;
 
