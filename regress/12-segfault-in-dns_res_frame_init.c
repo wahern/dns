@@ -31,7 +31,7 @@ int main(void) {
 		goto epilog;
 	} else if (error != EMFILE) {
 		warnx("expected dns_res_open to fail with EMFILE, got %d (%s)", error, dns_strerror(error));
-		goto epilog;		
+		goto epilog;
 	}
 
 	warnx("OK");
