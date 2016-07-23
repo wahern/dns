@@ -7976,6 +7976,8 @@ struct dns_addrinfo {
 	char cname[DNS_D_MAXNAME + 1];
 	char i_cname[DNS_D_MAXNAME + 1], g_cname[DNS_D_MAXNAME + 1];
 
+	int g_depth;
+
 	int state;
 	int found;
 
@@ -8211,6 +8213,7 @@ enum dns_ai_state {
 	DNS_AI_S_CHECK,
 	DNS_AI_S_FETCH,
 	DNS_AI_S_FOREACH_I,
+	DNS_AI_S_INIT_G,
 	DNS_AI_S_ITERATE_G,
 	DNS_AI_S_FOREACH_G,
 	DNS_AI_S_SUBMIT_G,
@@ -8333,6 +8336,10 @@ exec:
 		} /* switch() */
 
 		ai->state++;
+	case DNS_AI_S_INIT_G:
+		ai->g_depth = 0;
+
+		ai->state++;
 	case DNS_AI_S_ITERATE_G:
 		dns_strlcpy(ai->g_cname, ai->cname, sizeof ai->g_cname);
 		dns_rr_i_init(&ai->g, ai->glue);
@@ -8356,6 +8363,9 @@ exec:
 	case DNS_AI_S_SUBMIT_G:
 		/* skip if already queried */
 		if (dns_rr_grep(&rr, 1, dns_rr_i_new(ai->glue, .section = DNS_S_QD, .name = ai->g.name, .type = ai->g.type), ai->glue, &error))
+			dns_ai_goto(DNS_AI_S_FOREACH_I);
+		/* skip if we recursed (CNAME chains should have been handled in the resolver) */
+		if (++ai->g_depth > 1)
 			dns_ai_goto(DNS_AI_S_FOREACH_I);
 
 		if ((error = dns_res_submit(ai->res, ai->g.name, ai->g.type, DNS_C_IN)))
