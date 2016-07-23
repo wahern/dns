@@ -2122,6 +2122,19 @@ static _Bool dns_d_isanchored(const void *_src, size_t len) {
 } /* dns_d_isanchored() */
 
 
+static size_t dns_d_ndots(const void *_src, size_t len) {
+	const unsigned char *p = _src, *pe = p + len;
+	size_t ndots = 0;
+
+	while ((p = memchr(p, '.', pe - p))) {
+		ndots++;
+		p++;
+	}
+
+	return ndots;
+} /* dns_d_ndots() */
+
+
 static size_t dns_d_trim(void *dst_, size_t lim, const void *src_, size_t len, int flags) {
 	unsigned char *dst = dst_;
 	const unsigned char *src = src_;
@@ -5378,14 +5391,13 @@ int dns_resconf_setiface(struct dns_resolv_conf *resconf, const char *addr, unsi
 
 #define DNS_SM_SAVE \
 	do { \
-		*state	= ((0xff & pc) << 0) \
-			| ((0xff & srchi) << 8) \
-			| ((0xff & ndots) << 16); \
+		*state = ((0xff & pc) << 0) \
+		       | ((0xff & srchi) << 8) \
+		       | ((0xff & ndots) << 16); \
 	} while (0)
 
 size_t dns_resconf_search(void *dst, size_t lim, const void *qname, size_t qlen, struct dns_resolv_conf *resconf, dns_resconf_i_t *state) {
 	unsigned pc, srchi, ndots, len;
-	const char *qp, *qe;
 
 	DNS_SM_ENTER;
 
@@ -5396,22 +5408,23 @@ size_t dns_resconf_search(void *dst, size_t lim, const void *qname, size_t qlen,
 		DNS_SM_EXIT;
 	}
 
-	qp = qname;
-	qe = qp + qlen;
-	while ((qp = memchr(qp, '.', qe - qp))) {
-		ndots++;
-		qp++;
-	}
+	ndots = dns_d_ndots(qname, qlen);
 
 	if (ndots >= resconf->options.ndots) {
 		len = dns_d_anchor(dst, lim, qname, qlen);
 		DNS_SM_YIELD(len);
 	}
 
-	if (srchi < lengthof(resconf->search) && resconf->search[srchi][0]) {
-		len = dns_d_anchor(dst, lim, qname, qlen);
-		len += dns_strlcpy((char *)dst + DNS_PP_MIN(len, lim), resconf->search[srchi], lim - DNS_PP_MIN(len, lim));
-		srchi++;
+	while (srchi < lengthof(resconf->search) && resconf->search[srchi][0]) {
+		struct dns_buf buf = DNS_B_INTO(dst, lim);
+		const char *dn = resconf->search[srchi++];
+
+		dns_b_put(&buf, qname, qlen);
+		dns_b_putc(&buf, '.');
+		dns_b_puts(&buf, dn);
+		if (!dns_d_isanchored(dn, strlen(dn)))
+			dns_b_putc(&buf, '.');
+		len = dns_b_strllen(&buf);
 		DNS_SM_YIELD(len);
 	}
 
