@@ -689,6 +689,40 @@ static unsigned short dns_k_shuffle16(unsigned short n, unsigned s) {
 	return ((0xff00 & (a << 8)) | (0x00ff & (b << 0)));
 } /* dns_k_shuffle16() */
 
+/*
+ * S T A T E  M A C H I N E  R O U T I N E S
+ *
+ * Application code should define DNS_SM_RESTORE and DNS_SM_SAVE, and the
+ * local variable pc.
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+#define DNS_SM_ENTER \
+	do { \
+	static const int pc0 = __LINE__; \
+	DNS_SM_RESTORE; \
+	switch (pc0 + pc) { \
+	case __LINE__: (void)0
+
+#define DNS_SM_SAVE_AND_DO(do_statement) \
+	do { \
+		pc = __LINE__ - pc0; \
+		DNS_SM_SAVE; \
+		do_statement; \
+		case __LINE__: (void)0; \
+	} while (0)
+
+#define DNS_SM_YIELD(rv) \
+	DNS_SM_SAVE_AND_DO(return (rv))
+
+#define DNS_SM_EXIT \
+	do { goto leave; } while (0)
+
+#define DNS_SM_LEAVE \
+	leave: (void)0; \
+	DNS_SM_SAVE_AND_DO(break); \
+	} \
+	} while (0)
 
 /*
  * U T I L I T Y  R O U T I N E S
@@ -2080,6 +2114,12 @@ static unsigned short dns_l_skip(unsigned short src, const unsigned char *data, 
 invalid:
 	return end;
 } /* dns_l_skip() */
+
+
+static _Bool dns_d_isanchored(const void *_src, size_t len) {
+	const unsigned char *src = _src;
+	return len > 0 && src[len - 1] == '.';
+} /* dns_d_isanchored() */
 
 
 static size_t dns_d_trim(void *dst_, size_t lim, const void *src_, size_t len, int flags) {
@@ -5329,65 +5369,64 @@ int dns_resconf_setiface(struct dns_resolv_conf *resconf, const char *addr, unsi
 } /* dns_resconf_setiface() */
 
 
+#define DNS_SM_RESTORE \
+	do { \
+		pc = 0xff & (*state >> 0); \
+		srchi = 0xff & (*state >> 8); \
+		ndots = 0xff & (*state >> 16); \
+	} while (0)
+
+#define DNS_SM_SAVE \
+	do { \
+		*state	= ((0xff & pc) << 0) \
+			| ((0xff & srchi) << 8) \
+			| ((0xff & ndots) << 16); \
+	} while (0)
+
 size_t dns_resconf_search(void *dst, size_t lim, const void *qname, size_t qlen, struct dns_resolv_conf *resconf, dns_resconf_i_t *state) {
-	unsigned srchi = 0xff & (*state >> 8);
-	unsigned ndots = 0xff & (*state >> 16);
-	unsigned len = 0;
+	unsigned pc, srchi, ndots, len;
 	const char *qp, *qe;
 
-	switch (0xff & *state) {
-	case 0:
-		qp = qname;
-		qe = qp + qlen;
+	DNS_SM_ENTER;
 
-		while ((qp = memchr(qp, '.', qe - qp)))
-			{ ndots++; qp++; }
+	/* if FQDN then return as-is and finish */
+	if (dns_d_isanchored(qname, qlen)) {
+		len = dns_d_anchor(dst, lim, qname, qlen);
+		DNS_SM_YIELD(len);
+		DNS_SM_EXIT;
+	}
 
-		++*state;
+	qp = qname;
+	qe = qp + qlen;
+	while ((qp = memchr(qp, '.', qe - qp))) {
+		ndots++;
+		qp++;
+	}
 
-		if (ndots >= resconf->options.ndots) {
-			len = dns_d_anchor(dst, lim, qname, qlen);
+	if (ndots >= resconf->options.ndots) {
+		len = dns_d_anchor(dst, lim, qname, qlen);
+		DNS_SM_YIELD(len);
+	}
 
-			break;
-		}
+	if (srchi < lengthof(resconf->search) && resconf->search[srchi][0]) {
+		len = dns_d_anchor(dst, lim, qname, qlen);
+		len += dns_strlcpy((char *)dst + DNS_PP_MIN(len, lim), resconf->search[srchi], lim - DNS_PP_MIN(len, lim));
+		srchi++;
+		DNS_SM_YIELD(len);
+	}
 
-		/* FALL THROUGH */
-	case 1:
-		if (srchi < lengthof(resconf->search) && resconf->search[srchi][0]) {
-			len = dns_d_anchor(dst, lim, qname, qlen);
-			len += dns_strlcpy((char *)dst + DNS_PP_MIN(len, lim), resconf->search[srchi], lim - DNS_PP_MIN(len, lim));
+	if (ndots < resconf->options.ndots) {
+		len = dns_d_anchor(dst, lim, qname, qlen);
+		DNS_SM_YIELD(len);
+	}
 
-			srchi++;
+	DNS_SM_LEAVE;
 
-			break;
-		}
-
-		++*state;
-
-		/* FALL THROUGH */
-	case 2:
-		++*state;
-
-		if (ndots < resconf->options.ndots) {
-			len = dns_d_anchor(dst, lim, qname, qlen);
-
-			break;
-		}
-
-		/* FALL THROUGH */
-	default:
-		break;
-	} /* switch() */
-
-	*state	= ((0xff & *state) << 0)
-		| ((0xff & srchi) << 8)
-		| ((0xff & ndots) << 16);
-
-	if (lim > 0)
-		((char *)dst)[DNS_PP_MIN(lim - 1, len)]	= '\0';
-
-	return len;
+	return dns_strlcpy(dst, "", lim);
 } /* dns_resconf_search() */
+
+#undef DNS_SM_SAVE
+#undef DNS_SM_RESTORE
 
 
 int dns_resconf_dump(struct dns_resolv_conf *resconf, FILE *fp) {
