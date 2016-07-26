@@ -18,6 +18,7 @@ TESTS = \
 
 12-segfault-in-dns_res_frame_init: 12-segfault-in-dns_res_frame_init.c
 14-dns_resconf_search-fqdn: 14-dns_resconf_search-fqdn.c
+15-dns_ai_nextaf-null-deref: 15-dns_ai_nextaf-null-deref.c
 
 ${TESTS}: ../src/dns.c
 ${TESTS}:
