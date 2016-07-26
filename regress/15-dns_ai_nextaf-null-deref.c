@@ -35,9 +35,20 @@ int main(void) {
 		croak("not addrinfo result");
 	if (ent->ai_family != AF_INET)
 		croak("expected AF of %d, got %d", AF_INET, ent->ai_family);
-	if (((struct sockaddr_in *)ent->ai_addr)->sin_addr.s_addr != INADDR_LOOPBACK)
+	if (((struct sockaddr_in *)ent->ai_addr)->sin_addr.s_addr != htonl(INADDR_LOOPBACK))
 		croak("expected IPv4 loopback address");
 	pfree(&ent);
+	ai_close(&ai);
+
+	/*
+	 * Also test that EINVAL is returned if we violate the constraint
+	 * that AI_NUMERICHOST is required if resolver is NULL.
+	 */
+	if ((ai = dns_ai_open("127.0.0.1", NULL, 0, AI_HINTS(AF_UNSPEC, 0), NULL, &error))) {
+		croak("expected failure when resolver is NULL and AI_NUMERICHOST not set");
+	} else if (error != EINVAL) {
+		croak("expected EINVAL when resolver is NULL and AI_NUMERICHOST not set, got %d", error);
+	}
 	ai_close(&ai);
 
 	warnx("OK");

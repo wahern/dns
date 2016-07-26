@@ -6940,8 +6940,11 @@ struct dns_resolver *dns_res_open(struct dns_resolv_conf *resconf, struct dns_ho
 	 * error from, say, dns_resconf_root(), and loading
 	 * dns_resconf_local() by default would create undesirable surpises.
 	 */
-	if (!resconf || !hosts || !hints)
+	if (!resconf || !hosts || !hints) {
+		if (!*_error)
+			*_error = EINVAL;
 		goto _error;
+	}
 
 	if (!(R = malloc(sizeof *R)))
 		goto syerr;
@@ -8087,7 +8090,7 @@ static dns_error_t dns_ai_parseport(unsigned short *port, const char *serv, cons
 } /* dns_ai_parseport() */
 
 
-struct dns_addrinfo *dns_ai_open(const char *host, const char *serv, enum dns_type qtype, const struct addrinfo *hints, struct dns_resolver *res, int *error_) {
+struct dns_addrinfo *dns_ai_open(const char *host, const char *serv, enum dns_type qtype, const struct addrinfo *hints, struct dns_resolver *res, int *_error) {
 	static const struct dns_addrinfo ai_initializer;
 	struct dns_addrinfo *ai;
 	int error;
@@ -8100,6 +8103,8 @@ struct dns_addrinfo *dns_ai_open(const char *host, const char *serv, enum dns_ty
 		 * API function call, such as dns_res_stub(). Should change
 		 * this semantic, but it's applied elsewhere, too.
 		 */
+		if (!*_error)
+			*_error = EINVAL;
 		return NULL;
 	}
 
@@ -8149,7 +8154,7 @@ struct dns_addrinfo *dns_ai_open(const char *host, const char *serv, enum dns_ty
 syerr:
 	error = dns_syerr();
 error:
-	*error_ = error;
+	*_error = error;
 
 	dns_ai_close(ai);
 	dns_res_close(res);
