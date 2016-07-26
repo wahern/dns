@@ -12,11 +12,45 @@
 
 #define AI_HINTS(af, flags) (&(struct addrinfo){ .ai_family = (af), .ai_flags = (flags) })
 
-#define croak(...) do { warnx(__VA_ARGS__); goto epilog; } while (0)
+#define croak(...) do { cluck(__VA_ARGS__); goto epilog; } while (0)
+#define cluck_(fmt, ...) warnx(fmt " (at line %d)", __VA_ARGS__);
+#define cluck(...) cluck_(__VA_ARGS__, __LINE__)
 #define pfree(pp) do { free(*(pp)); *(pp) = NULL; } while (0)
 #define ai_close(aip) do { dns_ai_close(*(aip)); *(aip) = NULL; } while (0)
+#define rc_close(rcp) do { dns_resconf_close(*(rcp)); *(rcp) = NULL; } while (0)
+#define db_close(dbp) do { dns_hosts_close(*(dbp)); *(dbp) = NULL; } while (0)
+#define hints_close(hp) do { dns_hints_close(*(hp)); *(hp) = NULL; } while (0)
+#define res_close(resp) do { dns_res_close(*(resp)); *(resp) = NULL; } while (0)
+
+static _Bool expect(int af, const char *ip, struct dns_addrinfo *ai, int *_error) {
+	struct addrinfo *ent = NULL;
+	char addr[INET6_ADDRSTRLEN + 1];
+	int found = 0, error;
+
+	if ((error = dns_ai_nextent(&ent, ai)))
+		croak("no addrinfo result %s", dns_strerror(error));
+	if (!ent)
+		croak("no addrinfo result");
+	if (ent->ai_family != af)
+		croak("expected AF of %d, got %d", af, ent->ai_family);
+	if ((error = getnameinfo(ent->ai_addr, ent->ai_addrlen, addr, sizeof addr, NULL, 0, NI_NUMERICHOST)))
+		croak("getnameinfo: %s", gai_strerror(error));
+	if (0 != strcmp(addr, ip))
+		croak("expected %s, got %s", ip, addr);
+
+	error = 0;
+	found = 1;
+	goto epilog;
+epilog:
+	pfree(&ent);
+	*_error = error;
+	return found;
+}
 
 int main(void) {
+	struct dns_resolv_conf *resconf = NULL;
+	struct dns_hosts *hosts = NULL;
+	struct dns_resolver *res = NULL;
 	struct dns_addrinfo *ai = NULL;
 	struct addrinfo *ent = NULL;
 	int error, status = 1;
@@ -32,7 +66,7 @@ int main(void) {
 	if ((error = dns_ai_nextent(&ent, ai))) 
 		goto error;
 	if (!ent)
-		croak("not addrinfo result");
+		croak("no addrinfo result");
 	if (ent->ai_family != AF_INET)
 		croak("expected AF of %d, got %d", AF_INET, ent->ai_family);
 	if (((struct sockaddr_in *)ent->ai_addr)->sin_addr.s_addr != htonl(INADDR_LOOPBACK))
@@ -51,6 +85,99 @@ int main(void) {
 	}
 	ai_close(&ai);
 
+	/*
+	 * Because we refactored dns_ai_nextaf test that the expected
+	 * semantics work. Specifically, we intended to copy the semantics
+	 * of OpenBSD's behavior, where the address families resolved are
+	 * the intersection of those specifed by the /etc/resolv.conf family
+	 * directive and the .ai_type hint. So if family is "inet4" and
+	 * .ai_type == AF_INET6, a name of ::1 will return 0 entries even if
+	 * AI_NUMERICHOST is specified. (See also comment in dns_ai_nextaf.)
+	 */
+	if (!(resconf = dns_resconf_open(&error)))
+		goto error;
+	if (!(hosts = dns_hosts_open(&error)))
+		goto error;
+	if ((error = dns_hosts_insert(hosts, AF_INET, &(struct in_addr){ htonl(INADDR_LOOPBACK) }, "localhost", 0)))
+		goto error;
+	if ((error = dns_hosts_insert(hosts, AF_INET6, &in6addr_loopback, "localhost", 0)))
+		goto error;
+
+	/* check that IPv4 hostname resolves with AF_UNSPEC and AF_INET */
+	if (!(res = dns_res_open(resconf, hosts, dns_hints_mortal(dns_hints_open(resconf, &error)), NULL, dns_opts(), &error)))
+		goto error;
+	if (!(ai = dns_ai_open("localhost", NULL, 0, AI_HINTS(AF_UNSPEC, 0), res, &error)))
+		goto error;
+	if (!expect(AF_INET, "127.0.0.1", ai, &error))
+		croak("expected localhost to resolve to 127.0.0.1");
+	ai_close(&ai);
+	if (!(ai = dns_ai_open("localhost", NULL, 0, AI_HINTS(AF_INET, 0), res, &error)))
+		goto error;
+	if (!expect(AF_INET, "127.0.0.1", ai, &error))
+		croak("expected localhost to resolve to 127.0.0.1");
+	ai_close(&ai);
+	res_close(&res);
+
+	/* check that IPv6 hostname resolves with AF_UNSPEC and AF_INET6 */
+	resconf->family[0] = AF_INET6;
+	resconf->family[1] = AF_INET;
+	resconf->family[2] = AF_UNSPEC;
+	if (!(res = dns_res_open(resconf, hosts, dns_hints_mortal(dns_hints_open(resconf, &error)), NULL, dns_opts(), &error)))
+		goto error;
+	if (!(ai = dns_ai_open("localhost", NULL, 0, AI_HINTS(AF_UNSPEC, 0), res, &error)))
+		goto error;
+	if (!expect(AF_INET6, "::1", ai, &error))
+		croak("expected localhost to resolve to ::1");
+	ai_close(&ai);
+	if (!(ai = dns_ai_open("localhost", NULL, 0, AI_HINTS(AF_INET6, 0), res, &error)))
+		goto error;
+	if (!expect(AF_INET6, "::1", ai, &error))
+		croak("expected localhost to resolve to ::1");
+	ai_close(&ai);
+	res_close(&res);
+
+	/* check that IPv6 hostname DOES NOT resolve if missing from hints or resconf */
+	resconf->family[0] = AF_INET; /* missing here but allowed in hints */
+	resconf->family[1] = AF_UNSPEC;
+	if (!(res = dns_res_open(resconf, hosts, dns_hints_mortal(dns_hints_open(resconf, &error)), NULL, dns_opts(), &error)))
+		goto error;
+	if (!(ai = dns_ai_open("localhost", NULL, 0, AI_HINTS(AF_UNSPEC, 0), res, &error)))
+		goto error;
+	if (!expect(AF_INET, "127.0.0.1", ai, &error))
+		croak("expected localhost to resolve to 127.0.0.1");
+	if (!(error = dns_ai_nextent(&ent, ai)))
+		croak("expected localhost to NOT resolve");
+	if (error != ENOENT)
+		croak("expected ENOENT error, got %d (%s)", error, dns_strerror(error));
+	ai_close(&ai);
+	res_close(&res);
+
+	resconf->family[0] = AF_INET; /* missing here but allowed in hints */
+	resconf->family[1] = AF_UNSPEC;
+	if (!(res = dns_res_open(resconf, hosts, dns_hints_mortal(dns_hints_open(resconf, &error)), NULL, dns_opts(), &error)))
+		goto error;
+	if (!(ai = dns_ai_open("localhost", NULL, 0, AI_HINTS(AF_INET6, 0), res, &error)))
+		goto error;
+	if (!(error = dns_ai_nextent(&ent, ai)))
+		croak("expected localhost to NOT resolve");
+	if (error != DNS_ENONAME && error != DNS_EFAIL)
+		croak("expected DNS_ENONAME or DNS_EFAIL error, got %d (%s)", error, dns_strerror(error));
+	ai_close(&ai);
+	res_close(&res);
+
+	resconf->family[0] = AF_INET6; /* set here but not set in hints */
+	resconf->family[1] = AF_UNSPEC;
+	if (!(res = dns_res_open(resconf, hosts, dns_hints_mortal(dns_hints_open(resconf, &error)), NULL, dns_opts(), &error)))
+		goto error;
+	if (!(ai = dns_ai_open("localhost", NULL, 0, AI_HINTS(AF_INET, 0), res, &error)))
+		goto error;
+	if (!(error = dns_ai_nextent(&ent, ai)))
+		croak("expected localhost to NOT resolve");
+	if (error != DNS_ENONAME && error != DNS_EFAIL)
+		croak("expected DNS_ENONAME or DNS_EFAIL error, got %d (%s)", error, dns_strerror(error));
+	ai_close(&ai);
+	res_close(&res);
+
 	warnx("OK");
 	status = 0;
 
@@ -62,6 +189,9 @@ error:
 epilog:
 	pfree(&ent);
 	ai_close(&ai);
+	res_close(&res);
+	db_close(&hosts);
+	rc_close(&resconf);
 
 	return status;
 }
