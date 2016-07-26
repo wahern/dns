@@ -8127,6 +8127,12 @@ struct dns_addrinfo *dns_ai_open(const char *host, const char *serv, enum dns_ty
 		goto error;
 	ai->port = ai->qport;
 
+	/*
+	 * FIXME: If an explicit A or AAAA record type conflicts with
+	 * .ai_family or with resconf.family (i.e. AAAA specified but
+	 * AF_INET6 not in interection of .ai_family and resconf.family),
+	 * then what?
+	 */
 	switch (ai->qtype) {
 	case DNS_T_A:
 		ai->af.todo = DNS_AI_AF2INDEX(AF_INET);
