@@ -11,7 +11,10 @@ rfc4408-tests: rfc4408-tests.c ../src/cache.c ../src/zone.c ../src/spf.c ../src/
 %.c: %.rl
 	ragel -C -o $@ $<
 
-TESTS=12-segfault-in-dns_res_frame_init 14-dns_resconf_search-fqdn
+TESTS = \
+	12-segfault-in-dns_res_frame_init \
+	14-dns_resconf_search-fqdn \
+	15-dns_ai_nextaf-null-deref
 
 12-segfault-in-dns_res_frame_init: 12-segfault-in-dns_res_frame_init.c
 14-dns_resconf_search-fqdn: 14-dns_resconf_search-fqdn.c
