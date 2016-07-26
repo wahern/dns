@@ -7963,6 +7963,7 @@ struct dns_addrinfo {
 
 	struct {
 		unsigned long todo;
+		int state;
 		int atype;
 		enum dns_type qtype;
 	} af;
@@ -7988,46 +7989,71 @@ struct dns_addrinfo {
 #define DNS_AI_AFMAX 32
 #define DNS_AI_AF2INDEX(af) (1UL << ((af) - 1))
 
+static int dns_ai_setaf(struct dns_addrinfo *ai, int af, int qtype) {
+	ai->af.atype = af;
+	ai->af.qtype = qtype;
+
+	ai->af.todo &= ~DNS_AI_AF2INDEX(af);
+
+	return af;
+} /* dns_ai_setaf() */
+
+#define DNS_SM_RESTORE \
+	do { pc = 0xff & (ai->af.state >> 0); i = 0xff & (ai->af.state >> 8); } while (0)
+#define DNS_SM_SAVE \
+	do { ai->af.state = ((0xff & pc) << 0) | ((0xff & i) << 8); } while (0)
+
 static int dns_ai_nextaf(struct dns_addrinfo *ai) {
-	int qtype = 0, atype = 0;
-	unsigned i;
+	int i, pc;
 
 	dns_static_assert(AF_UNSPEC == 0, "AF_UNSPEC constant not 0");
 	dns_static_assert(AF_INET <= DNS_AI_AFMAX, "AF_INET constant too large");
 	dns_static_assert(AF_INET6 <= DNS_AI_AFMAX, "AF_INET6 constant too large");
 
-	for (i = 0; i < lengthof(ai->res->resconf->family); i++) {
-		int af = ai->res->resconf->family[i];
+	DNS_SM_ENTER;
 
-		if (af == AF_UNSPEC)
-			break;
-		if (af < 0 || af > DNS_AI_AFMAX)
-			continue;
-		if (!(DNS_AI_AF2INDEX(af) & ai->af.todo))
-			continue;
+	if (ai->res) {
+		/*
+		 * NB: On OpenBSD, at least, the types of entries resolved
+		 * is the intersection of the /etc/resolv.conf families and
+		 * the families permitted by the .ai_type hint. So if
+		 * /etc/resolv.conf has "family inet4" and .ai_type
+		 * is AF_INET6, then the address ::1 will return 0 entries
+		 * even if AI_NUMERICHOST is specified in .ai_flags.
+		 */
+		while (i < (int)lengthof(ai->res->resconf->family)) {
+			int af = ai->res->resconf->family[i++];
 
-		switch (af) {
-		case AF_INET:
-			atype = AF_INET;
-			qtype = DNS_T_A;
-			goto update;
-		case AF_INET6:
-			atype = AF_INET6;
-			qtype = DNS_T_AAAA;
-			goto update;
+			if (af == AF_UNSPEC) {
+				DNS_SM_EXIT;
+			} else if (af < 0 || af > DNS_AI_AFMAX) {
+				continue;
+			} else if (!(DNS_AI_AF2INDEX(af) & ai->af.todo)) {
+				continue;
+			} else if (af == AF_INET) {
+				DNS_SM_YIELD(dns_ai_setaf(ai, AF_INET, DNS_T_A));
+			} else if (af == AF_INET6) {
+				DNS_SM_YIELD(dns_ai_setaf(ai, AF_INET6, DNS_T_AAAA));
+			}
 		}
+	} else {
+		/*
+		 * NB: If we get here than AI_NUMERICFLAGS should be set and
+		 * order shouldn't matter.
+		 */
+		if (DNS_AI_AF2INDEX(AF_INET) & ai->af.todo)
+			DNS_SM_YIELD(dns_ai_setaf(ai, AF_INET, DNS_T_A));
+		if (DNS_AI_AF2INDEX(AF_INET6) & ai->af.todo)
+			DNS_SM_YIELD(dns_ai_setaf(ai, AF_INET6, DNS_T_AAAA));
 	}
 
-update:
-	ai->af.atype = atype;
-	ai->af.qtype = qtype;
+	DNS_SM_LEAVE;
 
-	if (atype)
-		ai->af.todo &= ~DNS_AI_AF2INDEX(atype);
-
-	return atype;
+	return dns_ai_setaf(ai, AF_UNSPEC, 0);
 } /* dns_ai_nextaf() */
 
+#undef DNS_SM_RESTORE
+#undef DNS_SM_SAVE
 
 static enum dns_type dns_ai_qtype(struct dns_addrinfo *ai) {
 	return (ai->qtype)? ai->qtype : ai->af.qtype;
