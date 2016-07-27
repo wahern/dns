@@ -7992,11 +7992,18 @@ struct dns_addrinfo {
 #define DNS_AI_AFMAX 32
 #define DNS_AI_AF2INDEX(af) (1UL << ((af) - 1))
 
+static inline unsigned long dns_ai_af2index(int af) {
+	dns_static_assert(dns_same_type(unsigned long, DNS_AI_AF2INDEX(1), 1), "internal type mismatch");
+	dns_static_assert(dns_same_type(unsigned long, ((struct dns_addrinfo *)0)->af.todo, 1), "internal type mismatch");
+
+	return (af > 0 && af <= DNS_AI_AFMAX)? DNS_AI_AF2INDEX(af) : 0;
+}
+
 static int dns_ai_setaf(struct dns_addrinfo *ai, int af, int qtype) {
 	ai->af.atype = af;
 	ai->af.qtype = qtype;
 
-	ai->af.todo &= ~DNS_AI_AF2INDEX(af);
+	ai->af.todo &= ~dns_ai_af2index(af);
 
 	return af;
 } /* dns_ai_setaf() */
