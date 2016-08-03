@@ -27,10 +27,9 @@
 #define DNS_H
 
 #include <stddef.h>		/* size_t offsetof() */
+#include <stdint.h>		/* uint64_t */
 #include <stdio.h>		/* FILE */
-
 #include <string.h>		/* strlen(3) */
-
 #include <time.h>		/* struct timespec time_t */
 
 #if _WIN32
@@ -40,11 +39,8 @@
 #include <sys/param.h>		/* BYTE_ORDER BIG_ENDIAN _BIG_ENDIAN */
 #include <sys/types.h>		/* socklen_t */
 #include <sys/socket.h>		/* struct socket */
-
 #include <poll.h>		/* POLLIN POLLOUT */
-
 #include <netinet/in.h>		/* struct in_addr struct in6_addr */
-
 #include <netdb.h>		/* struct addrinfo */
 #endif
 
@@ -75,9 +71,9 @@
 
 #define DNS_VENDOR "william@25thandClement.com"
 
-#define DNS_V_REL  0x20160802
+#define DNS_V_REL  0x20160803
 #define DNS_V_ABI  0x20160608
-#define DNS_V_API  0x20160802
+#define DNS_V_API  0x20160803
 
 
 DNS_PUBLIC const char *dns_vendor(void);
@@ -1225,6 +1221,9 @@ DNS_PUBLIC void dns_ai_settrace(struct dns_addrinfo *, struct dns_trace *);
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+#define DNS_TRACE_ID_C(n) UINT64_C(n)
+typedef uint64_t dns_trace_id_t;
+
 struct dns_trace_event {
 	enum {
 		DNS_TE_RES_SUBMIT,
@@ -1239,6 +1238,7 @@ struct dns_trace_event {
 	} type;
 
 	size_t size;
+	dns_trace_id_t id;
 	struct timespec ts;
 	int abi;
 
@@ -1293,9 +1293,15 @@ DNS_PUBLIC dns_refcount_t dns_trace_acquire(struct dns_trace *);
 
 DNS_PUBLIC dns_refcount_t dns_trace_release(struct dns_trace *);
 
+DNS_PUBLIC dns_trace_id_t dns_trace_id(struct dns_trace *);
+
+DNS_PUBLIC dns_trace_id_t dns_trace_setid(struct dns_trace *, dns_trace_id_t);
+
 DNS_PUBLIC struct dns_trace_event *dns_trace_get(struct dns_trace *, struct dns_trace_event **, dns_error_t *);
 
-DNS_PUBLIC dns_error_t dns_trace_put(const struct dns_trace_event *, const void *, size_t);
+DNS_PUBLIC struct dns_trace_event *dns_trace_tag(struct dns_trace *, struct dns_trace_event *);
+
+DNS_PUBLIC dns_error_t dns_trace_put(struct dns_trace *, const struct dns_trace_event *, const void *, size_t);
 
 DNS_PUBLIC dns_error_t dns_trace_dump(struct dns_trace *, FILE *);
 
