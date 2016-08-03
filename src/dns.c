@@ -39,6 +39,7 @@
 #endif
 
 #include <limits.h>		/* INT_MAX */
+#include <stdarg.h>		/* va_list va_start va_end */
 #include <stddef.h>		/* offsetof() */
 #ifdef _WIN32
 #define uint32_t unsigned int
@@ -46,7 +47,7 @@
 #include <stdint.h>		/* uint32_t */
 #endif
 #include <stdlib.h>		/* malloc(3) realloc(3) free(3) rand(3) random(3) arc4random(3) */
-#include <stdio.h>		/* FILE fopen(3) fclose(3) getc(3) rewind(3) */
+#include <stdio.h>		/* FILE fopen(3) fclose(3) getc(3) rewind(3) vsnprintf(3) */
 #include <string.h>		/* memcpy(3) strlen(3) memmove(3) memchr(3) memcmp(3) strchr(3) strsep(3) strcspn(3) */
 #include <strings.h>		/* strcasecmp(3) strncasecmp(3) */
 #include <ctype.h>		/* isspace(3) isdigit(3) */
@@ -63,6 +64,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #else
+#include <sys/time.h>		/* gettimeofday(2) */
 #include <sys/types.h>		/* FD_SETSIZE socklen_t */
 #include <sys/select.h>		/* FD_ZERO FD_SET fd_set select(2) */
 #include <sys/socket.h>		/* AF_INET AF_INET6 AF_UNIX struct sockaddr struct sockaddr_in struct sockaddr_in6 socket(2) */
@@ -1037,6 +1039,21 @@ size_t dns_strlcat(char *dst, const char *src, size_t lim) {
 } /* dns_strlcat() */
 
 
+static void *dns_reallocarray(void *p, size_t nmemb, size_t size, dns_error_t *error) {
+	void *rp;
+
+	if (nmemb > 0 && SIZE_MAX / nmemb < size) {
+		*error = EOVERFLOW;
+		return NULL;
+	}
+
+	if (!(rp = realloc(p, nmemb * size)))
+		*error = (errno)? errno : EINVAL;
+
+	return rp;
+} /* dns_reallocarray() */
+
+
 #if _WIN32
 
 static char *dns_strsep(char **sp, const char *delim) {
@@ -1082,6 +1099,10 @@ static inline _Bool dns_isalnum(unsigned char c) {
 static inline _Bool dns_isspace(unsigned char c) {
 	return isspace(c);
 } /* dns_isspace() */
+
+static inline _Bool dns_isgraph(unsigned char c) {
+	return isgraph(c);
+} /* dns_isgraph() */
 
 
 static int dns_poll(int fd, short events, int timeout) {
@@ -1234,6 +1255,65 @@ error:
 	return NULL;
 } /* dns_fopen() */
 
+
+struct dns_hxd_lines_i {
+	int pc;
+	size_t p;
+};
+
+#define DNS_SM_RESTORE \
+	do { \
+		pc = state->pc; \
+		sp = src + state->p; \
+		se = src + len; \
+	} while (0)
+#define DNS_SM_SAVE \
+	do { \
+		state->p = sp - src; \
+		state->pc = pc; \
+	} while (0)
+
+static size_t dns_hxd_lines(void *dst, size_t lim, const unsigned char *src, size_t len, struct dns_hxd_lines_i *state) {
+	static const unsigned char hex[] = "0123456789abcdef";
+	static const unsigned char tmpl[] = "                                                    |                |\n";
+	unsigned char ln[sizeof tmpl];
+	const unsigned char *sp, *se;
+	unsigned char *h, *g;
+	unsigned i, n;
+	int pc;
+
+	DNS_SM_ENTER;
+
+	while (sp < se) {
+		memcpy(ln, tmpl, sizeof ln);
+
+		h = &ln[2];
+		g = &ln[53];
+
+		for (n = 0; n < 2; n++) {
+			for (i = 0; i < 8 && se - sp > 0; i++, sp++) {
+				h[0] = hex[0x0f & (*sp >> 4)];
+				h[1] = hex[0x0f & (*sp >> 0)];
+				h += 3;
+
+				*g++ = (dns_isgraph(*sp))? *sp : '.';
+			}
+
+			h++;
+		}
+
+		n = dns_strlcpy(dst, (char *)ln, lim);
+		DNS_SM_YIELD(n);
+	}
+
+	DNS_SM_EXIT;
+	DNS_SM_LEAVE;
+
+	return 0;
+}
+
+#undef DNS_SM_SAVE
+#undef DNS_SM_RESTORE
 
 /*
  * F I X E D - S I Z E D  B U F F E R  R O U T I N E S
@@ -1857,35 +1937,102 @@ error:
 	return error;
 } /* dns_p_push() */
 
+#define DNS_SM_RESTORE do { pc = state->pc; error = state->error; } while (0)
+#define DNS_SM_SAVE do { state->error = error; state->pc = pc; } while (0)
 
-static void dns_p_dump3(struct dns_packet *P, struct dns_rr_i *I, FILE *fp) {
+struct dns_p_lines_i {
+	int pc;
 	enum dns_section section;
 	struct dns_rr rr;
 	int error;
-	union dns_any any;
-	char pretty[sizeof any * 2];
+};
+
+static size_t dns_p_lines_fmt(void *dst, size_t lim, dns_error_t *_error, const char *fmt, ...) {
+	va_list ap;
+	int error = 0, n;
+
+	va_start(ap, fmt);
+	if ((n = vsnprintf(dst, lim, fmt, ap)) < 0)
+		error = errno;
+	va_end(ap);
+
+	*_error = error;
+	return DNS_PP_MAX(n, 0);
+} /* dns_p_lines_fmt() */
+
+#define DNS_P_LINE(...) \
+	do { \
+		len = dns_p_lines_fmt(dst, lim, &error, __VA_ARGS__); \
+		if (len == 0 && error) \
+			goto error; \
+		DNS_SM_YIELD(len); \
+	} while (0)
+
+static size_t dns_p_lines(void *dst, size_t lim, dns_error_t *_error, struct dns_packet *P, struct dns_rr_i *I, struct dns_p_lines_i *state) {
+	int error, pc;
 	size_t len;
 
-	fputs(";; [HEADER]\n", fp);
-	fprintf(fp, ";;    qid : %d\n", ntohs(dns_header(P)->qid));
-	fprintf(fp, ";;     qr : %s(%d)\n", (dns_header(P)->qr)? "RESPONSE" : "QUERY", dns_header(P)->qr);
-	fprintf(fp, ";; opcode : %s(%d)\n", dns_stropcode(dns_header(P)->opcode), dns_header(P)->opcode);
-	fprintf(fp, ";;     aa : %s(%d)\n", (dns_header(P)->aa)? "AUTHORITATIVE" : "NON-AUTHORITATIVE", dns_header(P)->aa);
-	fprintf(fp, ";;     tc : %s(%d)\n", (dns_header(P)->tc)? "TRUNCATED" : "NOT-TRUNCATED", dns_header(P)->tc);
-	fprintf(fp, ";;     rd : %s(%d)\n", (dns_header(P)->rd)? "RECURSION-DESIRED" : "RECURSION-NOT-DESIRED", dns_header(P)->rd);
-	fprintf(fp, ";;     ra : %s(%d)\n", (dns_header(P)->ra)? "RECURSION-ALLOWED" : "RECURSION-NOT-ALLOWED", dns_header(P)->ra);
-	fprintf(fp, ";;  rcode : %s(%d)\n", dns_strrcode(dns_p_rcode(P)), dns_p_rcode(P));
+	*_error = 0;
 
-	section	= 0;
+	DNS_SM_ENTER;
 
-	while (dns_rr_grep(&rr, 1, I, P, &error)) {
-		if (section != rr.section)
-			fprintf(fp, "\n;; [%s:%d]\n", dns_strsection(rr.section), dns_p_count(P, rr.section));
+	DNS_P_LINE(";; [HEADER]\n");
+	DNS_P_LINE(";;    qid : %d\n", ntohs(dns_header(P)->qid));
+	DNS_P_LINE(";;     qr : %s(%d)\n", (dns_header(P)->qr)? "RESPONSE" : "QUERY", dns_header(P)->qr);
+	DNS_P_LINE(";; opcode : %s(%d)\n", dns_stropcode(dns_header(P)->opcode), dns_header(P)->opcode);
+	DNS_P_LINE(";;     aa : %s(%d)\n", (dns_header(P)->aa)? "AUTHORITATIVE" : "NON-AUTHORITATIVE", dns_header(P)->aa);
+	DNS_P_LINE(";;     tc : %s(%d)\n", (dns_header(P)->tc)? "TRUNCATED" : "NOT-TRUNCATED", dns_header(P)->tc);
+	DNS_P_LINE(";;     rd : %s(%d)\n", (dns_header(P)->rd)? "RECURSION-DESIRED" : "RECURSION-NOT-DESIRED", dns_header(P)->rd);
+	DNS_P_LINE(";;     ra : %s(%d)\n", (dns_header(P)->ra)? "RECURSION-ALLOWED" : "RECURSION-NOT-ALLOWED", dns_header(P)->ra);
+	DNS_P_LINE(";;  rcode : %s(%d)\n", dns_strrcode(dns_p_rcode(P)), dns_p_rcode(P));
 
-		if ((len = dns_rr_print(pretty, sizeof pretty, &rr, P, &error)))
-			fprintf(fp, "%s\n", pretty);
+	while (dns_rr_grep(&state->rr, 1, I, P, &error)) {
+		if (state->section != state->rr.section) {
+			DNS_P_LINE("\n");
+			DNS_P_LINE(";; [%s:%d]\n", dns_strsection(state->rr.section), dns_p_count(P, state->rr.section));
+		}
 
-		section	= rr.section;
+		if (!(len = dns_rr_print(dst, lim, &state->rr, P, &error)))
+			goto error;
+		dns_strlcat(dst, "\n", lim);
+		DNS_SM_YIELD(len + 1);
+
+		state->section = state->rr.section;
+	}
+
+	if (error)
+		goto error;
+
+	DNS_SM_EXIT;
+error:
+	for (;;) {
+		*_error = error;
+		DNS_SM_YIELD(0);
+	}
+
+	DNS_SM_LEAVE;
+
+	*_error = 0;
+	return 0;
+} /* dns_p_lines() */
+
+#undef DNS_P_LINE
+#undef DNS_SM_SAVE
+#undef DNS_SM_RESTORE
+
+static void dns_p_dump3(struct dns_packet *P, struct dns_rr_i *I, FILE *fp) {
+	struct dns_p_lines_i lines = { 0 };
+	char line[sizeof (union dns_any) * 2];
+	size_t len;
+	int error;
+
+	while ((len = dns_p_lines(line, sizeof line, &error, P, I, &lines))) {
+		if (len < sizeof line) {
+			fwrite(line, 1, len, fp);
+		} else {
+			fwrite(line, 1, sizeof line - 1, fp);
+			fputc('\n', fp);
+		}
 	}
 } /* dns_p_dump3() */
 
@@ -4083,6 +4230,477 @@ size_t dns_any_cname(void *dst, size_t lim, union dns_any *any, enum dns_type ty
 
 
 /*
+ * E V E N T  T R A C I N G  R O U T I N E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+struct dns_trace {
+	dns_atomic_t refcount;
+
+	FILE *fp;
+
+	struct {
+		struct dns_trace_cname {
+			char host[DNS_D_MAXNAME + 1];
+			struct sockaddr_storage addr;
+		} base[4];
+		size_t p;
+	} cnames;
+};
+
+static void dns_te_initname(struct sockaddr_storage *ss, int fd, int (*f)(int, struct sockaddr *, socklen_t *)) {
+	socklen_t n = sizeof *ss;
+
+	if (0 != f(fd, (struct sockaddr *)ss, &n))
+		goto unspec;
+
+	if (n > sizeof *ss)
+		goto unspec;
+
+	return;
+unspec:
+	memset((char *)ss, '\0', sizeof *ss);
+	ss->ss_family = AF_UNSPEC;
+}
+
+static void dns_te_initnames(struct sockaddr_storage *local, struct sockaddr_storage *remote, int fd) {
+	dns_te_initname(local, fd, &getsockname);
+	dns_te_initname(remote, fd, &getpeername);
+}
+
+struct dns_trace *dns_trace_open(FILE *fp, dns_error_t *error) {
+	static const struct dns_trace trace_initializer = { .refcount = 1 };
+	struct dns_trace *trace;
+
+	if (!(trace = malloc(sizeof *trace)))
+		goto syerr;
+
+	*trace = trace_initializer;
+
+	if (fp) {
+		trace->fp = fp;
+	} else if (!(fp = tmpfile())) {
+		goto syerr;
+	}
+
+	return trace;
+syerr:
+	*error = dns_syerr();
+
+	dns_trace_close(trace);
+
+	return NULL;
+} /* dns_trace_open() */
+
+void dns_trace_close(struct dns_trace *trace) {
+	if (!trace || 1 != dns_trace_release(trace))
+		return;
+
+	if (trace->fp)
+		fclose(trace->fp);
+	free(trace);
+} /* dns_trace_close() */
+
+dns_refcount_t dns_trace_acquire(struct dns_trace *trace) {
+	return dns_atomic_fetch_add(&trace->refcount);
+} /* dns_trace_acquire() */
+
+static struct dns_trace *dns_trace_acquire_p(struct dns_trace *trace) {
+	return (trace)? dns_trace_acquire(trace), trace : NULL;
+} /* dns_trace_acquire_p() */
+
+dns_refcount_t dns_trace_release(struct dns_trace *trace) {
+	return dns_atomic_fetch_sub(&trace->refcount);
+} /* dns_trace_release() */
+
+struct dns_trace_event *dns_trace_fget(struct dns_trace_event **tp, FILE *fp, dns_error_t *error) {
+	const size_t headsize = offsetof(struct dns_trace_event, data);
+	struct dns_trace_event tmp, *te;
+	size_t n;
+
+	errno = 0;
+	if (!(n = fread(&tmp, 1, headsize, fp)))
+		goto none;
+	if (n < offsetof(struct dns_trace_event, data))
+		goto some;
+
+	if (!(te = realloc(*tp, DNS_PP_MAX(headsize, tmp.size)))) {
+		*error = errno;
+		return NULL;
+	}
+
+	*tp = te;
+	memcpy(te, &tmp, offsetof(struct dns_trace_event, data));
+
+	if (dns_te_datasize(te)) {
+		errno = 0;
+		if (!(n = fread(te->data, 1, dns_te_datasize(te), fp)))
+			goto none;
+		if (n < dns_te_datasize(te))
+			goto some;
+	}
+
+	return te;
+none:
+	*error = (ferror(fp))? errno : 0;
+	return NULL;
+some:
+	*error = 0;
+	return NULL;
+}
+
+dns_error_t dns_trace_fput(const struct dns_trace_event *te, const void *data, size_t datasize, FILE *fp) {
+	size_t headsize = offsetof(struct dns_trace_event, data);
+	struct dns_trace_event tmp;
+	struct timeval tv;
+
+	memcpy(&tmp, te, headsize);
+	tmp.size = headsize + datasize;
+
+	gettimeofday(&tv, NULL);
+	TIMEVAL_TO_TIMESPEC(&tv, &tmp.ts);
+	tmp.abi = DNS_V_ABI;
+
+	/* NB: ignore seek error as fp might not point to a regular file */
+	(void)fseek(fp, 0, SEEK_END);
+
+	if (fwrite(&tmp, 1, headsize, fp) < headsize)
+		return errno;
+	if (fwrite(data, 1, datasize, fp) < datasize)
+		return errno;
+
+	return 0;
+}
+
+static void dns_trace_setcname(struct dns_trace *trace, const char *host, const struct sockaddr *addr) {
+	if (!trace || !trace->fp)
+		return;
+
+	struct dns_trace_cname *cname = &trace->cnames.base[trace->cnames.p];
+	dns_strlcpy(cname->host, host, sizeof cname->host);
+	memcpy(&cname->addr, addr, DNS_PP_MIN(dns_sa_len(addr), sizeof cname->addr));
+
+	trace->cnames.p = (trace->cnames.p + 1) % lengthof(trace->cnames.base);
+}
+
+static const char *dns_trace_cname(struct dns_trace *trace, const struct sockaddr *addr) {
+	if (!trace || !trace->fp)
+		return NULL;
+
+	/* NB: start search from the write cursor to  */
+	for (const struct dns_trace_cname *cname = trace->cnames.base; cname < endof(trace->cnames.base); cname++) {
+		if (0 == dns_sa_cmp((struct sockaddr *)addr, (struct sockaddr *)&cname->addr))
+			return cname->host;
+	}
+
+	return NULL;
+}
+
+static void dns_trace_res_submit(struct dns_trace *trace, const char *qname, enum dns_type qtype, enum dns_class qclass, int error) {
+	if (!trace || !trace->fp)
+		return;
+
+	struct dns_trace_event te = { DNS_TE_RES_SUBMIT };
+	dns_strlcpy(te.res_submit.qname, qname, sizeof te.res_submit.qname);
+	te.res_submit.qtype = qtype;
+	te.res_submit.qclass = qclass;
+	te.res_submit.error = error;
+	dns_trace_fput(&te, NULL, 0, trace->fp);
+}
+
+static void dns_trace_res_fetch(struct dns_trace *trace, const struct dns_packet *packet, int error) {
+	if (!trace || !trace->fp)
+		return;
+
+	struct dns_trace_event te = { DNS_TE_RES_FETCH };
+	const void *data = (packet)? packet->data : NULL;
+	size_t datasize = (packet)? packet->end : 0;
+	te.res_fetch.error = error;
+	dns_trace_fput(&te, data, datasize, trace->fp);
+}
+
+static void dns_trace_so_submit(struct dns_trace *trace, const struct dns_packet *packet, const struct sockaddr *haddr, int error) {
+	if (!trace || !trace->fp)
+		return;
+
+	struct dns_trace_event te = { DNS_TE_SO_SUBMIT };
+	memcpy(&te.so_submit.haddr, haddr, DNS_PP_MIN(dns_sa_len(haddr), sizeof te.so_submit.haddr));
+	const char *cname;
+	if ((cname = dns_trace_cname(trace, haddr)))
+		dns_strlcpy(te.so_submit.hname, cname, sizeof te.so_submit.hname);
+	te.so_submit.error = error;
+	dns_trace_fput(&te, packet->data, packet->end, trace->fp);
+}
+
+static void dns_trace_so_reject(struct dns_trace *trace, const struct dns_packet *packet, int error) {
+	if (!trace || !trace->fp)
+		return;
+
+	struct dns_trace_event te = { DNS_TE_SO_REJECT };
+	te.so_reject.error = error;
+	dns_trace_fput(&te, packet->data, packet->end, trace->fp);
+}
+
+static void dns_trace_so_fetch(struct dns_trace *trace, const struct dns_packet *packet, int error) {
+	if (!trace || !trace->fp)
+		return;
+
+	struct dns_trace_event te = { DNS_TE_SO_FETCH };
+	const void *data = (packet)? packet->data : NULL;
+	size_t datasize = (packet)? packet->end : 0;
+	te.so_fetch.error = error;
+	dns_trace_fput(&te, data, datasize, trace->fp);
+}
+
+static void dns_trace_sys_send(struct dns_trace *trace, int fd, int socktype, const void *data, size_t datasize, int error) {
+	if (!trace || !trace->fp)
+		return;
+
+	struct dns_trace_event te = { DNS_TE_SYS_SEND };
+	dns_te_initnames(&te.sys_send.src, &te.sys_send.dst, fd);
+	te.sys_send.socktype = socktype;
+	te.sys_send.error = error;
+	dns_trace_fput(&te, data, datasize, trace->fp);
+}
+
+static void dns_trace_sys_recv(struct dns_trace *trace, int fd, int socktype, const void *data, size_t datasize, int error) {
+	if (!trace || !trace->fp)
+		return;
+
+	struct dns_trace_event te = { DNS_TE_SYS_RECV };
+	dns_te_initnames(&te.sys_recv.dst, &te.sys_recv.src, fd);
+	te.sys_recv.socktype = socktype;
+	te.sys_recv.error = error;
+	dns_trace_fput(&te, data, datasize, trace->fp);
+}
+
+static dns_error_t dns_trace_dump_packet(struct dns_trace *trace, const char *prefix, const unsigned char *data, size_t datasize, FILE *fp) {
+	struct dns_packet *packet = NULL;
+	char *line = NULL, *p;
+	size_t size = 1, skip = 0;
+	int error;
+
+	if (!(packet = dns_p_make(datasize, &error)))
+		goto error;
+
+	memcpy(packet->data, data, datasize);
+	packet->end = datasize;
+	(void)dns_p_study(packet);
+resize:
+	if (!(p = dns_reallocarray(line, size, 2, &error)))
+		goto error;
+	line = p;
+	size *= 2;
+
+	struct dns_rr_i records = { 0 };
+	struct dns_p_lines_i lines = { 0 };
+	size_t len, count = 0;
+
+	while ((len = dns_p_lines(line, size, &error, packet, &records, &lines))) {
+		if (!(len < size)) {
+			skip = count;
+			goto resize;
+		} else if (skip <= count) {
+			fputs(prefix, fp);
+			fwrite(line, 1, len, fp);
+		}
+		count++;
+	}
+
+	if (error)
+		goto error;
+
+	error = 0;
+error:
+	free(line);
+	dns_p_free(packet);
+
+	return error;
+}
+
+static dns_error_t dns_trace_dump_data(struct dns_trace *trace, const char *prefix, const unsigned char *data, size_t datasize, FILE *fp) {
+	struct dns_hxd_lines_i lines = { 0 };
+	char line[128];
+	size_t len;
+
+	while ((len = dns_hxd_lines(line, sizeof line, data, datasize, &lines))) {
+		if (len >= sizeof line)
+			return EOVERFLOW; /* shouldn't be possible */
+		fputs(prefix, fp);
+		fwrite(line, 1, len, fp);
+	}
+
+	return 0;
+}
+
+static dns_error_t dns_trace_dump_addr(struct dns_trace *trace, const struct sockaddr_storage *ss, FILE *fp) {
+	const void *addr;
+	const void *path;
+	socklen_t len;
+	int error;
+
+	if ((addr = dns_sa_addr(ss->ss_family, (struct sockaddr *)ss, NULL))) {
+		char ip[INET6_ADDRSTRLEN + 1];
+
+		if ((error = dns_ntop(ss->ss_family, addr, ip, sizeof ip)))
+			return error;
+		fprintf(fp, "%s", ip);
+	} else if ((path = dns_sa_path((struct sockaddr *)ss, &len))) {
+		fprintf(fp, "unix:%.*s", (int)len, path);
+	} else {
+		return EINVAL;
+	}
+
+	return 0;
+}
+
+dns_error_t dns_trace_dump(struct dns_trace *trace, FILE *fp) {
+	struct dns_trace_event *te = NULL;
+	int error;
+
+	if (!trace || !trace->fp)
+		return EINVAL;
+
+	if (0 != fseek(trace->fp, 0, SEEK_SET))
+		goto syerr;
+
+	while (dns_trace_fget(&te, trace->fp, &error)) {
+		size_t datasize = dns_te_datasize(te);
+		const unsigned char *data = (datasize)? te->data : NULL;
+
+		switch(te->type) {
+		case DNS_TE_RES_SUBMIT:
+			fprintf(fp, "dns_res_submit:\n");
+			fprintf(fp, "  qname: %s\n", te->res_submit.qname);
+			fprintf(fp, "  qtype: %s\n", dns_strtype(te->res_submit.qtype));
+			fprintf(fp, "  qclass: %s\n", dns_strclass(te->res_submit.qclass));
+			fprintf(fp, "  error: %d (%s)\n", te->res_submit.error, dns_strerror(te->res_submit.error));
+			break;
+		case DNS_TE_RES_FETCH:
+			fprintf(fp, "dns_res_fetch:\n");
+			fprintf(fp, "  error: %d (%s)\n", te->res_fetch.error, dns_strerror(te->res_fetch.error));
+
+			if (data) {
+				fprintf(fp, "  packet: |\n");
+				if ((error = dns_trace_dump_packet(trace, "    ", data, datasize, fp)))
+					goto error;
+				fprintf(fp, "  data: |\n");
+				if ((error = dns_trace_dump_data(trace, "    ", data, datasize, fp)))
+					goto error;
+			}
+
+			break;
+		case DNS_TE_SO_SUBMIT:
+			fprintf(fp, "dns_so_submit:\n");
+			fprintf(fp, "  hname: %s\n", te->so_submit.hname);
+			fprintf(fp, "  haddr: ");
+			dns_trace_dump_addr(trace, &te->so_submit.haddr, fp);
+			fputc('\n', fp);
+			fprintf(fp, "  error: %d (%s)\n", te->so_submit.error, dns_strerror(te->so_submit.error));
+
+			if (data) {
+				fprintf(fp, "  packet: |\n");
+				if ((error = dns_trace_dump_packet(trace, "    ", data, datasize, fp)))
+					goto error;
+				fprintf(fp, "  data: |\n");
+				if ((error = dns_trace_dump_data(trace, "    ", data, datasize, fp)))
+					goto error;
+			}
+
+			break;
+		case DNS_TE_SO_REJECT:
+			fprintf(fp, "dns_so_reject:\n");
+			fprintf(fp, "  error: %d (%s)\n", te->so_reject.error, dns_strerror(te->so_reject.error));
+
+			if (data) {
+				fprintf(fp, "  packet: |\n");
+				if ((error = dns_trace_dump_packet(trace, "    ", data, datasize, fp)))
+					goto error;
+				fprintf(fp, "  data: |\n");
+				if ((error = dns_trace_dump_data(trace, "    ", data, datasize, fp)))
+					goto error;
+			}
+
+			break;
+		case DNS_TE_SO_FETCH:
+			fprintf(fp, "dns_so_fetch:\n");
+			fprintf(fp, "  error: %d (%s)\n", te->so_fetch.error, dns_strerror(te->so_fetch.error));
+
+			if (data) {
+				fprintf(fp, "  packet: |\n");
+				if ((error = dns_trace_dump_packet(trace, "    ", data, datasize, fp)))
+					goto error;
+				fprintf(fp, "  data: |\n");
+				if ((error = dns_trace_dump_data(trace, "    ", data, datasize, fp)))
+					goto error;
+			}
+
+			break;
+		case DNS_TE_SYS_SEND: {
+			fprintf(fp, "dns_sys_send:\n");
+			fprintf(fp, "  src: ");
+			dns_trace_dump_addr(trace, &te->sys_send.src, fp);
+			fputc('\n', fp);
+			fprintf(fp, "  dst: ");
+			dns_trace_dump_addr(trace, &te->sys_send.dst, fp);
+			fputc('\n', fp);
+			int socktype = te->sys_send.socktype;
+			fprintf(fp, "  socktype: %d (%s)\n", socktype, ((socktype == SOCK_STREAM)? "SOCK_STREAM" : (socktype == SOCK_DGRAM)? "SOCK_DGRAM" : "?"));
+			fprintf(fp, "  error: %d (%s)\n", te->sys_send.error, dns_strerror(te->sys_send.error));
+
+			if (data) {
+				fprintf(fp, "  data: |\n");
+				if ((error = dns_trace_dump_data(trace, "    ", data, datasize, fp)))
+					goto error;
+			}
+
+			break;
+		}
+		case DNS_TE_SYS_RECV: {
+			fprintf(fp, "dns_sys_recv:\n");
+			fprintf(fp, "  src: ");
+			dns_trace_dump_addr(trace, &te->sys_recv.src, fp);
+			fputc('\n', fp);
+			fprintf(fp, "  dst: ");
+			dns_trace_dump_addr(trace, &te->sys_recv.dst, fp);
+			fputc('\n', fp);
+			int socktype = te->sys_recv.socktype;
+			fprintf(fp, "  socktype: %d (%s)\n", socktype, ((socktype == SOCK_STREAM)? "SOCK_STREAM" : (socktype == SOCK_DGRAM)? "SOCK_DGRAM" : "?"));
+			fprintf(fp, "  error: %d (%s)\n", te->sys_recv.error, dns_strerror(te->sys_recv.error));
+
+			if (data) {
+				fprintf(fp, "  data: |\n");
+				if ((error = dns_trace_dump_data(trace, "    ", data, datasize, fp)))
+					goto error;
+			}
+
+			break;
+		}
+		default:
+			fprintf(fp, "unknown(0x%.2x):\n", te->type);
+
+			if (data) {
+				fprintf(fp, "  data: |\n");
+				if ((error = dns_trace_dump_data(trace, "    ", data, datasize, fp)))
+					goto error;
+			}
+
+			break;
+		}
+	}
+
+	goto epilog;
+syerr:
+	error = errno;
+error:
+	(void)0;
+epilog:
+	free(te);
+
+	return error;
+}
+
+/*
  * H O S T S  R O U T I N E S
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -6245,6 +6863,8 @@ struct dns_socket {
 
 	struct dns_stat stat;
 
+	struct dns_trace *trace;
+
 	/*
 	 * NOTE: dns_so_reset() zeroes everything from here down.
 	 */
@@ -6374,6 +6994,7 @@ error:
 static void dns_so_destroy(struct dns_socket *so) {
 	dns_so_reset(so);
 	dns_so_closefds(so, DNS_SO_CLOSE_ALL);
+	dns_trace_close(so->trace);
 } /* dns_so_destroy() */
 
 
@@ -6451,13 +7072,14 @@ int dns_so_submit(struct dns_socket *so, struct dns_packet *Q, struct sockaddr *
 	so->state	= (so->type == SOCK_STREAM)? DNS_SO_TCP_INIT : DNS_SO_UDP_INIT;
 
 	so->stat.queries++;
+	dns_trace_so_submit(so->trace, Q, host, 0);
 
 	return 0;
 syerr:
 	error	= dns_syerr();
 error:
 	dns_so_reset(so);
-
+	dns_trace_so_submit(so->trace, Q, host, error);
 	return error;
 } /* dns_so_submit() */
 
@@ -6468,13 +7090,13 @@ static int dns_so_verify(struct dns_socket *so, struct dns_packet *P) {
 	struct dns_rr rr;
 	int error = -1;
 
-	if (so->qid != dns_header(so->answer)->qid)
+	if (so->qid != dns_header(P)->qid)
 		goto reject;
 
-	if (!dns_p_count(so->answer, DNS_S_QD))
+	if (!dns_p_count(P, DNS_S_QD))
 		goto reject;
 
-	if (0 != dns_rr_parse(&rr, 12, so->answer))
+	if (0 != dns_rr_parse(&rr, 12, P))
 		goto reject;
 
 	if (rr.type != so->qtype || rr.class != so->qclass)
@@ -6493,7 +7115,7 @@ reject:
 	error = DNS_EUNKNOWN;
 error:
 	DNS_SHOW(P, "rejecting packet (%s)", dns_strerror(error));
-
+	dns_trace_so_reject(so->trace, P, error);
 	return error;
 } /* dns_so_verify() */
 
@@ -6519,6 +7141,7 @@ static _Bool dns_so_tcp_keep(struct dns_socket *so) {
 static int dns_so_tcp_send(struct dns_socket *so) {
 	unsigned char *qsrc;
 	size_t qend;
+	int error;
 	long n;
 
 	so->query->data[-2] = 0xff & (so->query->end >> 8);
@@ -6529,8 +7152,9 @@ static int dns_so_tcp_send(struct dns_socket *so) {
 
 	while (so->qout < qend) {
 		if (0 > (n = dns_send(so->tcp, (void *)&qsrc[so->qout], qend - so->qout, 0)))
-			return dns_soerr();
+			goto soerr;
 
+		dns_trace_sys_send(so->trace, so->tcp, SOCK_STREAM, &qsrc[so->qout], n, 0);
 		so->qout += n;
 		so->stat.tcp.sent.bytes += n;
 	}
@@ -6538,6 +7162,10 @@ static int dns_so_tcp_send(struct dns_socket *so) {
 	so->stat.tcp.sent.count++;
 
 	return 0;
+soerr:
+	error = dns_soerr();
+	dns_trace_sys_send(so->trace, so->tcp, SOCK_STREAM, NULL, 0, error);
+	return error;
 } /* dns_so_tcp_send() */
 
 
@@ -6553,10 +7181,11 @@ static int dns_so_tcp_recv(struct dns_socket *so) {
 		asrc = &so->answer->data[-2];
 
 		if (0 > (n = recv(so->tcp, (void *)&asrc[so->apos], aend - so->apos, 0)))
-			return dns_soerr();
+			goto soerr;
 		else if (n == 0)
 			return DNS_EUNKNOWN;	/* FIXME */
 
+		dns_trace_sys_recv(so->trace, so->tcp, SOCK_STREAM, &asrc[so->apos], n, 0);
 		so->apos += n;
 		so->stat.tcp.rcvd.bytes += n;
 
@@ -6576,6 +7205,10 @@ static int dns_so_tcp_recv(struct dns_socket *so) {
 	so->stat.tcp.rcvd.count++;
 
 	return 0;
+soerr:
+	error = dns_soerr();
+	dns_trace_sys_recv(so->trace, so->tcp, SOCK_STREAM, NULL, 0, error);
+	return error;
 } /* dns_so_tcp_recv() */
 
 #if __clang__
@@ -6597,17 +7230,25 @@ retry:
 
 		so->state++;
 	case DNS_SO_UDP_SEND:
-		if (0 > (n = send(so->udp, (void *)so->query->data, so->query->end, 0)))
-			goto soerr;
+		if (0 > (n = send(so->udp, (void *)so->query->data, so->query->end, 0))) {
+			error = dns_soerr();
+			dns_trace_sys_send(so->trace, so->udp, SOCK_DGRAM, NULL, 0, error);
+			goto error;
+		}
 
+		dns_trace_sys_send(so->trace, so->udp, SOCK_DGRAM, so->query->data, n, 0);
 		so->stat.udp.sent.bytes += n;
 		so->stat.udp.sent.count++;
 
 		so->state++;
 	case DNS_SO_UDP_RECV:
-		if (0 > (n = recv(so->udp, (void *)so->answer->data, so->answer->size, 0)))
-			goto soerr;
+		if (0 > (n = recv(so->udp, (void *)so->answer->data, so->answer->size, 0))) {
+			error = dns_soerr();
+			dns_trace_sys_recv(so->trace, so->udp, SOCK_DGRAM, NULL, 0, error);
+			goto error;
+		}
 
+		dns_trace_sys_recv(so->trace, so->udp, SOCK_DGRAM, so->answer->data, n, 0);
 		so->stat.udp.rcvd.bytes += n;
 		so->stat.udp.rcvd.count++;
 
@@ -6710,10 +7351,12 @@ struct dns_packet *dns_so_fetch(struct dns_socket *so, int *error) {
 	case DNS_SO_TCP_DONE:
 		answer		= so->answer;
 		so->answer	= 0;
+		dns_trace_so_fetch(so->trace, answer, 0);
 
 		return answer;
 	default:
 		*error	= DNS_EUNKNOWN;
+		dns_trace_so_fetch(so->trace, NULL, *error);
 
 		return 0;
 	}
@@ -6819,6 +7462,18 @@ const struct dns_stat *dns_so_stat(struct dns_socket *so) {
 } /* dns_so_stat() */
 
 
+struct dns_trace *dns_so_trace(struct dns_socket *so) {
+	return so->trace;
+} /* dns_so_trace() */
+
+
+void dns_so_settrace(struct dns_socket *so, struct dns_trace *trace) {
+	struct dns_trace *otrace = so->trace;
+	so->trace = dns_trace_acquire_p(trace);
+	dns_trace_close(otrace);
+} /* dns_so_settrace() */
+
+
 /*
  * R E S O L V E R  R O U T I N E S
  *
@@ -6866,6 +7521,7 @@ struct dns_resolver {
 	struct dns_hosts *hosts;
 	struct dns_hints *hints;
 	struct dns_cache *cache;
+	struct dns_trace *trace;
 
 	dns_atomic_t refcount;
 
@@ -7077,6 +7733,7 @@ void dns_res_close(struct dns_resolver *R) {
 	dns_hosts_close(R->hosts);
 	dns_resconf_close(R->resconf);
 	dns_cache_close(R->cache);
+	dns_trace_close(R->trace);
 
 	free(R);
 } /* dns_res_close() */
@@ -7524,6 +8181,8 @@ exec:
 			DNS_SHOW(F->query, "ASKING: %s/%s @ DEPTH: %u)", u.ns.host, addr, R->sp);
 		}
 
+		dns_trace_setcname(R->trace, u.ns.host, (struct sockaddr *)&sin);
+
 		if ((error = dns_so_submit(&R->so, F->query, (struct sockaddr *)&sin)))
 			goto error;
 
@@ -7861,6 +8520,8 @@ int dns_res_submit2(struct dns_resolver *R, const char *qname, size_t qlen, enum
 
 	dns_begin(&R->elapsed);
 
+	dns_trace_res_submit(R->trace, R->qname, R->qtype, R->qclass, 0);
+
 	return 0;
 } /* dns_res_submit2() */
 
@@ -7882,16 +8543,27 @@ int dns_res_check(struct dns_resolver *R) {
 } /* dns_res_check() */
 
 
-struct dns_packet *dns_res_fetch(struct dns_resolver *R, int *error) {
+struct dns_packet *dns_res_fetch(struct dns_resolver *R, int *_error) {
 	struct dns_packet *P = NULL;
+	int error;
 
-	if (R->stack[0].state != DNS_R_DONE)
-		return *error = DNS_EUNKNOWN, NULL;
+	if (R->stack[0].state != DNS_R_DONE) {
+		error = DNS_EUNKNOWN;
+		goto error;
+	}
 
-	if (!dns_p_movptr(&P, &R->stack[0].answer))
-		return *error = DNS_EFETCHED, NULL;
+	if (!dns_p_movptr(&P, &R->stack[0].answer)) {
+		error = DNS_EFETCHED;
+		goto error;
+	}
+
+	dns_trace_res_fetch(R->trace, P, 0);
 
 	return P;
+error:
+	*_error = error;
+	dns_trace_res_fetch(R->trace, NULL, error);
+	return NULL;
 } /* dns_res_fetch() */
 
 
@@ -7951,6 +8623,19 @@ void dns_res_sethints(struct dns_resolver *res, struct dns_hints *hints) {
 } /* dns_res_sethints() */
 
 
+struct dns_trace *dns_res_trace(struct dns_resolver *res) {
+	return res->trace;
+} /* dns_res_trace() */
+
+
+void dns_res_settrace(struct dns_resolver *res, struct dns_trace *trace) {
+	struct dns_trace *otrace = res->trace;
+	res->trace = dns_trace_acquire_p(trace);
+	dns_trace_close(otrace);
+	dns_so_settrace(&res->so, trace);
+} /* dns_res_settrace() */
+
+
 /*
  * A D D R I N F O  R O U T I N E S
  *
@@ -7959,6 +8644,7 @@ void dns_res_sethints(struct dns_resolver *res, struct dns_hints *hints) {
 struct dns_addrinfo {
 	struct addrinfo hints;
 	struct dns_resolver *res;
+	struct dns_trace *trace;
 
 	char qname[DNS_D_MAXNAME + 1];
 	enum dns_type qtype;
@@ -8181,6 +8867,7 @@ void dns_ai_close(struct dns_addrinfo *ai) {
 		return;
 
 	dns_res_close(ai->res);
+	dns_trace_close(ai->trace);
 
 	if (ai->answer != ai->glue)
 		dns_p_free(ai->glue);
@@ -8556,6 +9243,20 @@ const struct dns_stat *dns_ai_stat(struct dns_addrinfo *ai) {
 } /* dns_ai_stat() */
 
 
+struct dns_trace *dns_ai_trace(struct dns_addrinfo *ai) {
+	return ai->trace;
+} /* dns_ai_trace() */
+
+
+void dns_ai_settrace(struct dns_addrinfo *ai, struct dns_trace *trace) {
+	struct dns_trace *otrace = ai->trace;
+	ai->trace = dns_trace_acquire_p(trace);
+	dns_trace_close(otrace);
+	if (ai->res)
+		dns_res_settrace(ai->res, trace);
+} /* dns_ai_settrace() */
+
+
 /*
  * M I S C E L L A N E O U S  R O U T I N E S
  *
@@ -8826,6 +9527,8 @@ struct {
 
 	int (*sort)();
 
+	const char *trace;
+
 	int verbose;
 } MAIN = {
 	.sort	= &dns_rr_i_packet,
@@ -8833,38 +9536,12 @@ struct {
 
 
 static void hexdump(const unsigned char *src, size_t len, FILE *fp) {
-	static const unsigned char hex[]	= "0123456789abcdef";
-	static const unsigned char tmpl[]	= "                                                    |                |\n";
-	unsigned char ln[sizeof tmpl];
-	const unsigned char *sp, *se;
-	unsigned char *h, *g;
-	unsigned i, n;
+	struct dns_hxd_lines_i lines = { 0 };
+	char line[128];
 
-	sp	= src;
-	se	= sp + len;
-
-	while (sp < se) {
-		memcpy(ln, tmpl, sizeof ln);
-
-		h	= &ln[2];
-		g	= &ln[53];
-
-		for (n = 0; n < 2; n++) {
-			for (i = 0; i < 8 && se - sp > 0; i++, sp++) {
-				h[0]	= hex[0x0f & (*sp >> 4)];
-				h[1]	= hex[0x0f & (*sp >> 0)];
-				h	+= 3;
-
-				*g++	= (isgraph(*sp))? *sp : '.';
-			}
-
-			h++;
-		}
-
-		fputs((char *)ln, fp);
+	while (dns_hxd_lines(line, sizeof line, src, len, &lines)) {
+		fputs(line, fp);
 	}
-
-	return /* void */;
 } /* hexdump() */
 
 
@@ -9053,6 +9730,30 @@ static struct dns_cache *cache(void) {
 #else
 static struct dns_cache *cache(void) { return NULL; }
 #endif
+
+
+static struct dns_trace *trace(const char *mode) {
+	static struct dns_trace *trace = NULL;
+	FILE *fp;
+	int error;
+
+	if (!mode) {
+		dns_trace_close(trace);
+		return NULL;
+	}
+
+	if (trace)
+		return trace;
+	if (!MAIN.trace)
+		return NULL;
+
+	if (!(fp = fopen(MAIN.trace, mode)))
+		panic("%s: %s", MAIN.trace, strerror(errno));
+	if (!(trace = dns_trace_open(fp, &error)))
+		panic("%s: %s", MAIN.trace, dns_strerror(error));
+
+	return trace;
+}
 
 
 static void print_packet(struct dns_packet *P, FILE *fp) {
@@ -9515,6 +10216,8 @@ static int resolve_query(int argc DNS_NOTUSED, char *argv[]) {
 	if (!(R = dns_res_open(resconf(), hosts(), dns_hints_mortal(hints(resconf(), &error)), cache(), dns_opts(), &error)))
 		panic("%s: %s", MAIN.qname, dns_strerror(error));
 
+	dns_res_settrace(R, trace("w+b"));
+
 	if ((error = dns_res_submit(R, MAIN.qname, MAIN.qtype, DNS_C_IN)))
 		panic("%s: %s", MAIN.qname, dns_strerror(error));
 
@@ -9567,6 +10270,8 @@ static int resolve_addrinfo(int argc DNS_NOTUSED, char *argv[]) {
 	if (!(ai = dns_ai_open(MAIN.qname, "80", MAIN.qtype, &ai_hints, res, &error)))
 		panic("%s: %s", MAIN.qname, dns_strerror(error));
 
+	dns_ai_settrace(ai, trace("w+b"));
+
 	do {
 		switch (error = dns_ai_nextent(&ent, ai)) {
 		case 0:
@@ -9596,6 +10301,21 @@ static int resolve_addrinfo(int argc DNS_NOTUSED, char *argv[]) {
 
 	return 0;
 } /* resolve_addrinfo() */
+
+
+static int dump_trace(int argc DNS_NOTUSED, char *argv[]) {
+	int error;
+
+	if (!MAIN.trace)
+		panic("no trace file specified");
+
+	if ((error = dns_trace_dump(trace("r"), stdout)))
+		panic("dump_trace: %s", dns_strerror(error));
+
+	trace(NULL);
+
+	return 0;
+} /* dump_trace() */
 
 
 static int echo_port(int argc DNS_NOTUSED, char *argv[] DNS_NOTUSED) {
@@ -9759,6 +10479,7 @@ static const struct { const char *cmd; int (*run)(); const char *help; } cmds[] 
 	{ "addrinfo-stub",	&resolve_addrinfo,	"resolve through getaddrinfo clone" },
 	{ "addrinfo-recurse",	&resolve_addrinfo,	"resolve through getaddrinfo clone" },
 /*	{ "resolve-nameinfo",	&resolve_query,		"resolve as recursive resolver" }, */
+	{ "dump-trace",         &dump_trace,            "dump the contents of a trace file" },
 	{ "echo",		&echo_port,		"server echo mode, for nmap fuzzing" },
 	{ "isection",		&isection,		"parse section string" },
 	{ "iclass",		&iclass,		"parse class string" },
@@ -9779,6 +10500,7 @@ static void print_usage(const char *progname, FILE *fp) {
 		"  -q QNAME  Query name\n"
 		"  -t QTYPE  Query type\n"
 		"  -s HOW    Sort records\n"
+		"  -f PATH   Path to trace file\n"
 		"  -v        Be more verbose (-vv show packets; -vvv hexdump packets)\n"
 		"  -V        Print version info\n"
 		"  -h        Print this usage message\n"
@@ -9823,7 +10545,7 @@ int main(int argc, char **argv) {
 	unsigned i;
 	int ch;
 
-	while (-1 != (ch = getopt(argc, argv, "q:t:c:n:l:z:s:vVh"))) {
+	while (-1 != (ch = getopt(argc, argv, "q:t:c:n:l:z:s:f:vVh"))) {
 		switch (ch) {
 		case 'c':
 			assert(MAIN.resconf.count < lengthof(MAIN.resconf.path));
@@ -9880,6 +10602,10 @@ int main(int argc, char **argv) {
 				MAIN.sort	= &dns_rr_i_order;
 			else
 				panic("%s: invalid sort method", optarg);
+
+			break;
+		case 'f':
+			MAIN.trace = optarg;
 
 			break;
 		case 'v':

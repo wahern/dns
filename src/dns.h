@@ -31,7 +31,7 @@
 
 #include <string.h>		/* strlen(3) */
 
-#include <time.h>		/* time_t */
+#include <time.h>		/* struct timespec time_t */
 
 #if _WIN32
 #include <winsock2.h>
@@ -75,9 +75,9 @@
 
 #define DNS_VENDOR "william@25thandClement.com"
 
-#define DNS_V_REL  0x20160726
+#define DNS_V_REL  0x20160802
 #define DNS_V_ABI  0x20160608
-#define DNS_V_API  0x20160608
+#define DNS_V_API  0x20160802
 
 
 DNS_PUBLIC const char *dns_vendor(void);
@@ -1129,6 +1129,10 @@ DNS_PUBLIC int dns_so_poll(struct dns_socket *, int);
 
 DNS_PUBLIC const struct dns_stat *dns_so_stat(struct dns_socket *);
 
+DNS_PUBLIC struct dns_trace *dns_so_trace(struct dns_socket *);
+
+DNS_PUBLIC void dns_so_settrace(struct dns_socket *, struct dns_trace *);
+
 
 /*
  * R E S O L V E R  I N T E R F A C E
@@ -1177,6 +1181,10 @@ DNS_PUBLIC const struct dns_stat *dns_res_stat(struct dns_resolver *);
 
 DNS_PUBLIC void dns_res_sethints(struct dns_resolver *, struct dns_hints *);
 
+DNS_PUBLIC struct dns_trace *dns_res_trace(struct dns_resolver *);
+
+DNS_PUBLIC void dns_res_settrace(struct dns_resolver *, struct dns_trace *);
+
 
 /*
  * A D D R I N F O  I N T E R F A C E
@@ -1206,6 +1214,94 @@ DNS_PUBLIC time_t dns_ai_timeout(struct dns_addrinfo *);
 DNS_PUBLIC int dns_ai_poll(struct dns_addrinfo *, int);
 
 DNS_PUBLIC const struct dns_stat *dns_ai_stat(struct dns_addrinfo *);
+
+DNS_PUBLIC struct dns_trace *dns_ai_trace(struct dns_addrinfo *);
+
+DNS_PUBLIC void dns_ai_settrace(struct dns_addrinfo *, struct dns_trace *);
+
+
+/*
+ * Q U E R Y  T R A C I N G  I N T E R F A C E
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+struct dns_trace_event {
+	enum {
+		DNS_TE_RES_SUBMIT,
+		DNS_TE_RES_FETCH,
+
+		DNS_TE_SO_SUBMIT,
+		DNS_TE_SO_REJECT,
+		DNS_TE_SO_FETCH,
+
+		DNS_TE_SYS_SEND,
+		DNS_TE_SYS_RECV,
+	} type;
+
+	size_t size;
+	struct timespec ts;
+	int abi;
+
+	union {
+		struct {
+			char qname[DNS_D_MAXNAME + 1];
+			enum dns_type qtype;
+			enum dns_class qclass;
+			int error;
+		} res_submit;
+
+		struct {
+			int error;
+		} res_fetch;
+
+		struct {
+			struct sockaddr_storage haddr;
+			char hname[DNS_D_MAXNAME + 1];
+			int error;
+		} so_submit;
+
+		struct {
+			int error;
+		} so_reject;
+
+		struct {
+			int error;
+		} so_fetch;
+
+		struct {
+			struct sockaddr_storage src, dst;
+			int socktype;
+			dns_error_t error;
+		} sys_send, sys_recv;
+	};
+
+	unsigned char data[];
+};
+
+static inline size_t dns_te_datasize(const struct dns_trace_event *te) {
+	size_t n = offsetof(struct dns_trace_event, data);
+	return (n <= te->size)? te->size - n : 0;
+}
+
+struct dns_trace;
+
+DNS_PUBLIC struct dns_trace *dns_trace_open(FILE *, dns_error_t *);
+
+DNS_PUBLIC void dns_trace_close(struct dns_trace *);
+
+DNS_PUBLIC dns_refcount_t dns_trace_acquire(struct dns_trace *);
+
+DNS_PUBLIC dns_refcount_t dns_trace_release(struct dns_trace *);
+
+DNS_PUBLIC struct dns_trace_event *dns_trace_get(struct dns_trace *, struct dns_trace_event **, dns_error_t *);
+
+DNS_PUBLIC dns_error_t dns_trace_put(const struct dns_trace_event *, const void *, size_t);
+
+DNS_PUBLIC dns_error_t dns_trace_dump(struct dns_trace *, FILE *);
+
+DNS_PUBLIC struct dns_trace_event *dns_trace_fget(struct dns_trace_event **, FILE *, dns_error_t *);
+
+DNS_PUBLIC dns_error_t dns_trace_fput(const struct dns_trace_event *, const void *, size_t, FILE *);
 
 
 /*
