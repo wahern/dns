@@ -72,7 +72,7 @@
 #define DNS_VENDOR "william@25thandClement.com"
 
 #define DNS_V_REL  0x20160803
-#define DNS_V_ABI  0x20160608
+#define DNS_V_ABI  0x20160803
 #define DNS_V_API  0x20160803
 
 
@@ -117,6 +117,7 @@ enum dns_errno {
 	DNS_ESERVICE, /* EAI_SERVICE */
 	DNS_ENONAME,  /* EAI_NONAME */
 	DNS_EFAIL,    /* EAI_FAIL */
+	DNS_ECONNFIN,
 	DNS_ELAST,
 }; /* dns_errno */
 
@@ -1224,6 +1225,8 @@ DNS_PUBLIC void dns_ai_settrace(struct dns_addrinfo *, struct dns_trace *);
 #define DNS_TRACE_ID_C(n) UINT64_C(n)
 typedef uint64_t dns_trace_id_t;
 
+#define DNS_TRACE_ABI 0x20160803
+
 struct dns_trace_event {
 	enum {
 		DNS_TE_RES_SUBMIT,
@@ -1233,6 +1236,7 @@ struct dns_trace_event {
 		DNS_TE_SO_REJECT,
 		DNS_TE_SO_FETCH,
 
+		DNS_TE_SYS_CONNECT,
 		DNS_TE_SYS_SEND,
 		DNS_TE_SYS_RECV,
 	} type;
@@ -1272,7 +1276,7 @@ struct dns_trace_event {
 			struct sockaddr_storage src, dst;
 			int socktype;
 			dns_error_t error;
-		} sys_send, sys_recv;
+		} sys_connect, sys_send, sys_recv;
 	};
 
 	unsigned char data[];
@@ -1284,6 +1288,8 @@ static inline size_t dns_te_datasize(const struct dns_trace_event *te) {
 }
 
 struct dns_trace;
+
+DNS_PUBLIC int dns_trace_abi(void);
 
 DNS_PUBLIC struct dns_trace *dns_trace_open(FILE *, dns_error_t *);
 

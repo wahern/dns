@@ -351,6 +351,8 @@ const char *dns_strerror(int error) {
 		return "The name does not resolve for the supplied parameters";
 	case DNS_EFAIL:
 		return "A non-recoverable error occurred when attempting to resolve the name";
+	case DNS_ECONNFIN:
+		return "Connection closed";
 	default:
 		return strerror(error);
 	} /* switch() */
@@ -1139,19 +1141,46 @@ DNS_NOTUSED static int dns_sigmask(int how, const sigset_t *set, sigset_t *oset)
 #endif
 
 
-static long dns_send(int fd, const void *src, size_t lim, int flags) {
+static size_t dns_send(int fd, const void *src, size_t len, int flags, dns_error_t *error) {
+	long n = send(fd, src, len, flags);
+
+	if (n < 0) {
+		*error = dns_soerr();
+		return 0;
+	} else {
+		*error = 0;
+		return n;
+	}
+} /* dns_send() */
+
+static size_t dns_recv(int fd, void *dst, size_t lim, int flags, dns_error_t *error) {
+	long n = recv(fd, dst, lim, flags);
+
+	if (n < 0) {
+		*error = dns_soerr();
+		return 0;
+	} else if (n == 0) {
+		*error = (lim > 0)? DNS_ECONNFIN : EINVAL;
+		return 0;
+	} else {
+		*error = 0;
+		return n;
+	}
+} /* dns_recv() */
+
+static size_t dns_send_nopipe(int fd, const void *src, size_t len, int flags, dns_error_t *_error) {
 #if _WIN32 || !defined SIGPIPE || defined SO_NOSIGPIPE
-	return send(fd, src, lim, flags);
+	return dns_send(fd, src, len, flags, _error);
 #elif defined MSG_NOSIGNAL
-	return send(fd, src, lim, flags|MSG_NOSIGNAL);
+	return dns_send(fd, src, len, (flags|MSG_NOSIGNAL), _error);
 #elif _POSIX_REALTIME_SIGNALS > 0 /* require sigtimedwait */
 	/*
 	 * SIGPIPE handling similar to the approach described in
 	 * http://krokisplace.blogspot.com/2010/02/suppressing-sigpipe-in-library.html
 	 */
 	sigset_t pending, blocked, piped;
-	long count;
-	int saved, error;
+	size_t count;
+	int error;
 
 	sigemptyset(&pending);
 	sigpending(&pending);
@@ -1165,12 +1194,12 @@ static long dns_send(int fd, const void *src, size_t lim, int flags) {
 			goto error;
 	}
 
-	count = send(fd, src, lim, flags);
+	count = dns_send(fd, src, len, flags, &error);
 
 	if (!sigismember(&pending, SIGPIPE)) {
-		saved = errno;
+		int saved = error;
 
-		if (count == -1 && errno == EPIPE) {
+		if (!count && error == EPIPE) {
 			while (-1 == sigtimedwait(&piped, NULL, &(struct timespec){ 0, 0 }) && errno == EINTR)
 				;;
 		}
@@ -1178,19 +1207,26 @@ static long dns_send(int fd, const void *src, size_t lim, int flags) {
 		if ((error = dns_sigmask(SIG_SETMASK, &blocked, NULL)))
 			goto error;
 
-		errno = saved;
+		error = saved;
 	}
 
+	*_error = error;
 	return count;
 error:
-	errno = error;
-
-	return -1;
+	*_error = error;
+	return 0;
 #else
 #error "unable to suppress SIGPIPE"
-	return send(fd, src, lim, flags);
+	return dns_send(fd, src, len, flags, _error);
 #endif
-} /* dns_send() */
+} /* dns_send_nopipe() */
+
+
+static dns_error_t dns_connect(int fd, const struct sockaddr *addr, socklen_t addrlen) {
+	if (0 != connect(fd, addr, addrlen))
+		return dns_soerr();
+	return 0;
+} /* dns_connect() */
 
 
 #define DNS_FOPEN_STDFLAGS "rwabt+"
@@ -1673,7 +1709,7 @@ static size_t dns_utime_print(void *_dst, size_t lim, dns_microseconds_t us) {
 
 	dns_b_fmtju(&dst, us / 1000000, 1);
 	dns_b_putc(&dst, '.');
-	dns_b_fmtju(&dst, us % 1000000, 1);
+	dns_b_fmtju(&dst, us % 1000000, 6);
 
 	return dns_b_strllen(&dst);
 } /* dns_utime_print() */
@@ -4394,6 +4430,10 @@ static void dns_te_initnames(struct sockaddr_storage *local, struct sockaddr_sto
 	dns_te_initname(remote, fd, &getpeername);
 }
 
+int dns_trace_abi(void) {
+	return DNS_TRACE_ABI;
+}
+
 struct dns_trace *dns_trace_open(FILE *fp, dns_error_t *error) {
 	static const struct dns_trace trace_initializer = { .refcount = 1 };
 	struct dns_trace *trace;
@@ -4464,7 +4504,7 @@ struct dns_trace_event *dns_trace_tag(struct dns_trace *trace, struct dns_trace_
 	te->id = trace->id;
 	gettimeofday(&tv, NULL);
 	TIMEVAL_TO_TIMESPEC(&tv, &te->ts);
-	te->abi = DNS_V_ABI;
+	te->abi = DNS_TRACE_ABI;
 
 	return te;
 } /* dns_trace_tag() */
@@ -4607,6 +4647,18 @@ static void dns_trace_so_fetch(struct dns_trace *trace, const struct dns_packet 
 	dns_trace_tag_and_put(trace, &te, data, datasize);
 }
 
+static void dns_trace_sys_connect(struct dns_trace *trace, int fd, int socktype, const struct sockaddr *dst, int error) {
+	if (!trace || !trace->fp)
+		return;
+
+	struct dns_trace_event te = { DNS_TE_SYS_CONNECT };
+	dns_te_initname(&te.sys_connect.src, fd, &getsockname);
+	memcpy(&te.sys_connect.dst, dst, DNS_PP_MIN(dns_sa_len(dst), sizeof te.sys_connect.dst));
+	te.sys_connect.socktype = socktype;
+	te.sys_connect.error = error;
+	dns_trace_tag_and_put(trace, &te, NULL, 0);
+}
+
 static void dns_trace_sys_send(struct dns_trace *trace, int fd, int socktype, const void *data, size_t datasize, int error) {
 	if (!trace || !trace->fp)
 		return;
@@ -4688,7 +4740,7 @@ static dns_error_t dns_trace_dump_data(struct dns_trace *trace, const char *pref
 	return 0;
 }
 
-static dns_error_t dns_trace_dump_addr(struct dns_trace *trace, const struct sockaddr_storage *ss, FILE *fp) {
+static dns_error_t dns_trace_dump_addr(struct dns_trace *trace, const char *prefix, const struct sockaddr_storage *ss, FILE *fp) {
 	const void *addr;
 	const void *path;
 	socklen_t len;
@@ -4699,13 +4751,18 @@ static dns_error_t dns_trace_dump_addr(struct dns_trace *trace, const struct soc
 
 		if ((error = dns_ntop(ss->ss_family, addr, ip, sizeof ip)))
 			return error;
-		fprintf(fp, "%s", ip);
+		fprintf(fp, "%s%s\n", prefix, ip);
 	} else if ((path = dns_sa_path((struct sockaddr *)ss, &len))) {
-		fprintf(fp, "unix:%.*s", (int)len, path);
+		fprintf(fp, "%sunix:%.*s", prefix, (int)len, path);
 	} else {
 		return EINVAL;
 	}
 
+	return 0;
+}
+
+static dns_error_t dns_trace_dump_error(struct dns_trace *trace, const char *prefix, int error, FILE *fp) {
+	fprintf(fp, "%s%d (%s)\n", prefix, error, (error)? dns_strerror(error) : "none");
 	return 0;
 }
 
@@ -4742,16 +4799,18 @@ dns_error_t dns_trace_dump(struct dns_trace *trace, FILE *fp) {
 			fprintf(fp, "dns_res_submit:\n");
 			fprintf(fp, "  id: %"DNS_TRACE_ID_PRI"\n", te->id);
 			fprintf(fp, "  ts: %s (%s)\n", time_s, elapsed_s);
+			fprintf(fp, "  abi: 0x%x\n", te->abi);
 			fprintf(fp, "  qname: %s\n", te->res_submit.qname);
 			fprintf(fp, "  qtype: %s\n", dns_strtype(te->res_submit.qtype));
 			fprintf(fp, "  qclass: %s\n", dns_strclass(te->res_submit.qclass));
-			fprintf(fp, "  error: %d (%s)\n", te->res_submit.error, dns_strerror(te->res_submit.error));
+			dns_trace_dump_error(trace, "  error: ", te->res_submit.error, fp);
 			break;
 		case DNS_TE_RES_FETCH:
 			fprintf(fp, "dns_res_fetch:\n");
 			fprintf(fp, "  id: %"DNS_TRACE_ID_PRI"\n", te->id);
 			fprintf(fp, "  ts: %s (%s)\n", time_s, elapsed_s);
-			fprintf(fp, "  error: %d (%s)\n", te->res_fetch.error, dns_strerror(te->res_fetch.error));
+			fprintf(fp, "  abi: 0x%x\n", te->abi);
+			dns_trace_dump_error(trace, "  error: ", te->res_fetch.error, fp);
 
 			if (data) {
 				fprintf(fp, "  packet: |\n");
@@ -4767,11 +4826,10 @@ dns_error_t dns_trace_dump(struct dns_trace *trace, FILE *fp) {
 			fprintf(fp, "dns_so_submit:\n");
 			fprintf(fp, "  id: %"DNS_TRACE_ID_PRI"\n", te->id);
 			fprintf(fp, "  ts: %s (%s)\n", time_s, elapsed_s);
+			fprintf(fp, "  abi: 0x%x\n", te->abi);
 			fprintf(fp, "  hname: %s\n", te->so_submit.hname);
-			fprintf(fp, "  haddr: ");
-			dns_trace_dump_addr(trace, &te->so_submit.haddr, fp);
-			fputc('\n', fp);
-			fprintf(fp, "  error: %d (%s)\n", te->so_submit.error, dns_strerror(te->so_submit.error));
+			dns_trace_dump_addr(trace, "  haddr: ", &te->so_submit.haddr, fp);
+			dns_trace_dump_error(trace, "  error: ", te->so_submit.error, fp);
 
 			if (data) {
 				fprintf(fp, "  packet: |\n");
@@ -4787,7 +4845,8 @@ dns_error_t dns_trace_dump(struct dns_trace *trace, FILE *fp) {
 			fprintf(fp, "dns_so_reject:\n");
 			fprintf(fp, "  id: %"DNS_TRACE_ID_PRI"\n", te->id);
 			fprintf(fp, "  ts: %s (%s)\n", time_s, elapsed_s);
-			fprintf(fp, "  error: %d (%s)\n", te->so_reject.error, dns_strerror(te->so_reject.error));
+			fprintf(fp, "  abi: 0x%x\n", te->abi);
+			dns_trace_dump_error(trace, "  error: ", te->so_reject.error, fp);
 
 			if (data) {
 				fprintf(fp, "  packet: |\n");
@@ -4803,7 +4862,8 @@ dns_error_t dns_trace_dump(struct dns_trace *trace, FILE *fp) {
 			fprintf(fp, "dns_so_fetch:\n");
 			fprintf(fp, "  id: %"DNS_TRACE_ID_PRI"\n", te->id);
 			fprintf(fp, "  ts: %s (%s)\n", time_s, elapsed_s);
-			fprintf(fp, "  error: %d (%s)\n", te->so_fetch.error, dns_strerror(te->so_fetch.error));
+			fprintf(fp, "  abi: 0x%x\n", te->abi);
+			dns_trace_dump_error(trace, "  error: ", te->so_fetch.error, fp);
 
 			if (data) {
 				fprintf(fp, "  packet: |\n");
@@ -4815,19 +4875,29 @@ dns_error_t dns_trace_dump(struct dns_trace *trace, FILE *fp) {
 			}
 
 			break;
+		case DNS_TE_SYS_CONNECT: {
+			fprintf(fp, "dns_sys_connect:\n");
+			fprintf(fp, "  id: %"DNS_TRACE_ID_PRI"\n", te->id);
+			fprintf(fp, "  ts: %s (%s)\n", time_s, elapsed_s);
+			fprintf(fp, "  abi: 0x%x\n", te->abi);
+			dns_trace_dump_addr(trace, "  src: ", &te->sys_connect.src, fp);
+			dns_trace_dump_addr(trace, "  dst: ", &te->sys_connect.dst, fp);
+			int socktype = te->sys_connect.socktype;
+			fprintf(fp, "  socktype: %d (%s)\n", socktype, ((socktype == SOCK_STREAM)? "SOCK_STREAM" : (socktype == SOCK_DGRAM)? "SOCK_DGRAM" : "?"));
+			dns_trace_dump_error(trace, "  error: ", te->sys_connect.error, fp);
+
+			break;
+		}
 		case DNS_TE_SYS_SEND: {
 			fprintf(fp, "dns_sys_send:\n");
 			fprintf(fp, "  id: %"DNS_TRACE_ID_PRI"\n", te->id);
 			fprintf(fp, "  ts: %s (%s)\n", time_s, elapsed_s);
-			fprintf(fp, "  src: ");
-			dns_trace_dump_addr(trace, &te->sys_send.src, fp);
-			fputc('\n', fp);
-			fprintf(fp, "  dst: ");
-			dns_trace_dump_addr(trace, &te->sys_send.dst, fp);
-			fputc('\n', fp);
+			fprintf(fp, "  abi: 0x%x\n", te->abi);
+			dns_trace_dump_addr(trace, "  src: ", &te->sys_send.src, fp);
+			dns_trace_dump_addr(trace, "  dst: ", &te->sys_send.dst, fp);
 			int socktype = te->sys_send.socktype;
 			fprintf(fp, "  socktype: %d (%s)\n", socktype, ((socktype == SOCK_STREAM)? "SOCK_STREAM" : (socktype == SOCK_DGRAM)? "SOCK_DGRAM" : "?"));
-			fprintf(fp, "  error: %d (%s)\n", te->sys_send.error, dns_strerror(te->sys_send.error));
+			dns_trace_dump_error(trace, "  error: ", te->sys_send.error, fp);
 
 			if (data) {
 				fprintf(fp, "  data: |\n");
@@ -4841,15 +4911,12 @@ dns_error_t dns_trace_dump(struct dns_trace *trace, FILE *fp) {
 			fprintf(fp, "dns_sys_recv:\n");
 			fprintf(fp, "  id: %"DNS_TRACE_ID_PRI"\n", te->id);
 			fprintf(fp, "  ts: %s (%s)\n", time_s, elapsed_s);
-			fprintf(fp, "  src: ");
-			dns_trace_dump_addr(trace, &te->sys_recv.src, fp);
-			fputc('\n', fp);
-			fprintf(fp, "  dst: ");
-			dns_trace_dump_addr(trace, &te->sys_recv.dst, fp);
-			fputc('\n', fp);
+			fprintf(fp, "  abi: 0x%x\n", te->abi);
+			dns_trace_dump_addr(trace, "  src: ", &te->sys_recv.src, fp);
+			dns_trace_dump_addr(trace, "  dst: ", &te->sys_recv.dst, fp);
 			int socktype = te->sys_recv.socktype;
 			fprintf(fp, "  socktype: %d (%s)\n", socktype, ((socktype == SOCK_STREAM)? "SOCK_STREAM" : (socktype == SOCK_DGRAM)? "SOCK_DGRAM" : "?"));
-			fprintf(fp, "  error: %d (%s)\n", te->sys_recv.error, dns_strerror(te->sys_recv.error));
+			dns_trace_dump_error(trace, "  error: ", te->sys_recv.error, fp);
 
 			if (data) {
 				fprintf(fp, "  data: |\n");
@@ -4863,6 +4930,7 @@ dns_error_t dns_trace_dump(struct dns_trace *trace, FILE *fp) {
 			fprintf(fp, "unknown(0x%.2x):\n", te->type);
 			fprintf(fp, "  id: %"DNS_TRACE_ID_PRI"\n", te->id);
 			fprintf(fp, "  ts: %s (%s)\n", time_s, elapsed_s);
+			fprintf(fp, "  abi: 0x%x\n", te->abi);
 
 			if (data) {
 				fprintf(fp, "  data: |\n");
@@ -7327,7 +7395,7 @@ static int dns_so_tcp_send(struct dns_socket *so) {
 	unsigned char *qsrc;
 	size_t qend;
 	int error;
-	long n;
+	size_t n;
 
 	so->query->data[-2] = 0xff & (so->query->end >> 8);
 	so->query->data[-1] = 0xff & (so->query->end >> 0);
@@ -7336,10 +7404,10 @@ static int dns_so_tcp_send(struct dns_socket *so) {
 	qend = so->query->end + 2;
 
 	while (so->qout < qend) {
-		if (0 > (n = dns_send(so->tcp, (void *)&qsrc[so->qout], qend - so->qout, 0)))
-			goto soerr;
-
-		dns_trace_sys_send(so->trace, so->tcp, SOCK_STREAM, &qsrc[so->qout], n, 0);
+		n = dns_send_nopipe(so->tcp, (void *)&qsrc[so->qout], qend - so->qout, 0, &error);
+		dns_trace_sys_send(so->trace, so->tcp, SOCK_STREAM, &qsrc[so->qout], n, error);
+		if (error)
+			return error;
 		so->qout += n;
 		so->stat.tcp.sent.bytes += n;
 	}
@@ -7347,30 +7415,24 @@ static int dns_so_tcp_send(struct dns_socket *so) {
 	so->stat.tcp.sent.count++;
 
 	return 0;
-soerr:
-	error = dns_soerr();
-	dns_trace_sys_send(so->trace, so->tcp, SOCK_STREAM, NULL, 0, error);
-	return error;
 } /* dns_so_tcp_send() */
 
 
 static int dns_so_tcp_recv(struct dns_socket *so) {
 	unsigned char *asrc;
-	size_t aend, alen;
+	size_t aend, alen, n;
 	int error;
-	long n;
 
 	aend = so->alen + 2;
 
 	while (so->apos < aend) {
 		asrc = &so->answer->data[-2];
 
-		if (0 > (n = recv(so->tcp, (void *)&asrc[so->apos], aend - so->apos, 0)))
-			goto soerr;
-		else if (n == 0)
-			return DNS_EUNKNOWN;	/* FIXME */
+		n = dns_recv(so->tcp, (void *)&asrc[so->apos], aend - so->apos, 0, &error);
+		dns_trace_sys_recv(so->trace, so->tcp, SOCK_STREAM, &asrc[so->apos], n, error);
+		if (error)
+			return error;
 
-		dns_trace_sys_recv(so->trace, so->tcp, SOCK_STREAM, &asrc[so->apos], n, 0);
 		so->apos += n;
 		so->stat.tcp.rcvd.bytes += n;
 
@@ -7390,10 +7452,6 @@ static int dns_so_tcp_recv(struct dns_socket *so) {
 	so->stat.tcp.rcvd.count++;
 
 	return 0;
-soerr:
-	error = dns_soerr();
-	dns_trace_sys_recv(so->trace, so->tcp, SOCK_STREAM, NULL, 0, error);
-	return error;
 } /* dns_so_tcp_recv() */
 
 #if __clang__
@@ -7403,37 +7461,35 @@ soerr:
 
 int dns_so_check(struct dns_socket *so) {
 	int error;
-	long n;
+	size_t n;
 
 retry:
 	switch (so->state) {
 	case DNS_SO_UDP_INIT:
 		so->state++;
 	case DNS_SO_UDP_CONN:
-		if (0 != connect(so->udp, (struct sockaddr *)&so->remote, dns_sa_len(&so->remote)))
-			goto soerr;
+		error = dns_connect(so->udp, (struct sockaddr *)&so->remote, dns_sa_len(&so->remote));
+		dns_trace_sys_connect(so->trace, so->udp, SOCK_DGRAM, (struct sockaddr *)&so->remote, error);
+		if (error)
+			goto error;
 
 		so->state++;
 	case DNS_SO_UDP_SEND:
-		if (0 > (n = send(so->udp, (void *)so->query->data, so->query->end, 0))) {
-			error = dns_soerr();
-			dns_trace_sys_send(so->trace, so->udp, SOCK_DGRAM, NULL, 0, error);
+		n = dns_send(so->udp, (void *)so->query->data, so->query->end, 0, &error);
+		dns_trace_sys_send(so->trace, so->udp, SOCK_DGRAM, so->query->data, n, error);
+		if (error)
 			goto error;
-		}
 
-		dns_trace_sys_send(so->trace, so->udp, SOCK_DGRAM, so->query->data, n, 0);
 		so->stat.udp.sent.bytes += n;
 		so->stat.udp.sent.count++;
 
 		so->state++;
 	case DNS_SO_UDP_RECV:
-		if (0 > (n = recv(so->udp, (void *)so->answer->data, so->answer->size, 0))) {
-			error = dns_soerr();
-			dns_trace_sys_recv(so->trace, so->udp, SOCK_DGRAM, NULL, 0, error);
+		n = dns_recv(so->udp, (void *)so->answer->data, so->answer->size, 0, &error);
+		dns_trace_sys_recv(so->trace, so->udp, SOCK_DGRAM, so->answer->data, n, error);
+		if (error)
 			goto error;
-		}
 
-		dns_trace_sys_recv(so->trace, so->udp, SOCK_DGRAM, so->answer->data, n, 0);
 		so->stat.udp.rcvd.bytes += n;
 		so->stat.udp.rcvd.count++;
 
@@ -7464,10 +7520,10 @@ retry:
 
 		so->state++;
 	case DNS_SO_TCP_CONN:
-		if (0 != connect(so->tcp, (struct sockaddr *)&so->remote, dns_sa_len(&so->remote))) {
-			if (dns_soerr() != DNS_EISCONN)
-				goto soerr;
-		}
+		error = dns_connect(so->tcp, (struct sockaddr *)&so->remote, dns_sa_len(&so->remote));
+		dns_trace_sys_connect(so->trace, so->tcp, SOCK_STREAM, (struct sockaddr *)&so->remote, error);
+		if (error && error != DNS_EISCONN)
+			goto error;
 
 		so->state++;
 	case DNS_SO_TCP_SEND:
@@ -7503,10 +7559,6 @@ retry:
 trash:
 	DNS_CARP("discarding packet");
 	goto retry;
-soerr:
-	error	= dns_soerr();
-
-	goto error;
 error:
 	switch (error) {
 	case DNS_EINTR:
