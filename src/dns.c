@@ -23,19 +23,10 @@
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
  * ==========================================================================
  */
-#if !defined(__FreeBSD__) && !defined(__sun)
-#ifndef _XOPEN_SOURCE
-#define _XOPEN_SOURCE	600
-#endif
-
-#undef _BSD_SOURCE
-#define _BSD_SOURCE
-
-#undef _DARWIN_C_SOURCE
-#define _DARWIN_C_SOURCE
-
-#undef _NETBSD_SOURCE
-#define _NETBSD_SOURCE
+#if HAVE_CONFIG_H
+#include "config.h"
+#elif !defined _GNU_SOURCE
+#define _GNU_SOURCE 1
 #endif
 
 #include <limits.h>		/* INT_MAX */
@@ -4742,7 +4733,7 @@ static dns_error_t dns_trace_dump_data(struct dns_trace *trace, const char *pref
 
 static dns_error_t dns_trace_dump_addr(struct dns_trace *trace, const char *prefix, const struct sockaddr_storage *ss, FILE *fp) {
 	const void *addr;
-	const void *path;
+	const char *path;
 	socklen_t len;
 	int error;
 
