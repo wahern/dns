@@ -71,7 +71,7 @@ expand() {
 
 	EXPANS=$($SPF $VERBOSE "$@" expand $MACRO 2>$ERRBUF | sed -e 's/^\[//' -e 's/\]$//')
 
-	[ "$EXPANS" == "$EXPECT" ]
+	[ "$EXPANS" = "$EXPECT" ]
 
 	check $? "expand \`%s' \`%s'\n" "$MACRO" "$EXPANS"
 } # expand
@@ -86,7 +86,7 @@ ip() {
 
 	EXPANS=$($SPF $VERBOSE $VERSION $IP "$@" 2>$ERRBUF)
 
-	[ "$EXPANS" == "$EXPECT" ]
+	[ "$EXPANS" = "$EXPECT" ]
 
 	check $? "$VERSION \`%s' \`%s' %s\n" "$IP" "$EXPANS" "$*"
 } # ip
@@ -110,7 +110,7 @@ fixdn() {
 
 	EXPANS=$($SPF $VERBOSE fixdn $DN "$@" 2>$ERRBUF)
 
-	[ "$EXPANS" == "$EXPECT" ]
+	[ "$EXPANS" = "$EXPECT" ]
 
 	check $? "fixdn \`%s' \`%s' %s\n" "$DN" "$EXPANS" "$*"
 } # fixdn
@@ -157,7 +157,7 @@ TMPDIR=${TMPDIR%/}
 
 ERRBUF="${TMPDIR}/.spf.t.$(rand)"
 
-if [ "${ERRBUF}" == "${TMPDIR}/.spf.t." ]; then
+if [ "${ERRBUF}" = "${TMPDIR}/.spf.t." ]; then
 	printf "$0: unable to divert stderr\n"
 
 	if [ -a /dev/stderr ]; then
