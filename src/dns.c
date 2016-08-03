@@ -4554,6 +4554,8 @@ dns_error_t dns_trace_fput(const struct dns_trace_event *te, const void *data, s
 		return errno;
 	if (fwrite(data, 1, datasize, fp) < datasize)
 		return errno;
+	if (fflush(fp))
+		return errno;
 
 	return 0;
 }
