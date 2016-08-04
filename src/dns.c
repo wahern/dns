@@ -4412,13 +4412,20 @@ static void dns_te_initname(struct sockaddr_storage *ss, int fd, int (*f)(int, s
 
 	return;
 unspec:
-	memset((char *)ss, '\0', sizeof *ss);
+	memset(ss, '\0', sizeof *ss);
 	ss->ss_family = AF_UNSPEC;
 }
 
 static void dns_te_initnames(struct sockaddr_storage *local, struct sockaddr_storage *remote, int fd) {
 	dns_te_initname(local, fd, &getsockname);
 	dns_te_initname(remote, fd, &getpeername);
+}
+
+static struct dns_trace_event *dns_te_init(struct dns_trace_event *te, int type) {
+	/* NB: silence valgrind */
+	memset(te, '\0', offsetof(struct dns_trace_event, data));
+	te->type = type;
+	return te;
 }
 
 int dns_trace_abi(void) {
@@ -4588,7 +4595,8 @@ static void dns_trace_res_submit(struct dns_trace *trace, const char *qname, enu
 	if (!trace || !trace->fp)
 		return;
 
-	struct dns_trace_event te = { DNS_TE_RES_SUBMIT };
+	struct dns_trace_event te;
+	dns_te_init(&te, DNS_TE_RES_SUBMIT);
 	dns_strlcpy(te.res_submit.qname, qname, sizeof te.res_submit.qname);
 	te.res_submit.qtype = qtype;
 	te.res_submit.qclass = qclass;
@@ -4600,7 +4608,8 @@ static void dns_trace_res_fetch(struct dns_trace *trace, const struct dns_packet
 	if (!trace || !trace->fp)
 		return;
 
-	struct dns_trace_event te = { DNS_TE_RES_FETCH };
+	struct dns_trace_event te;
+	dns_te_init(&te, DNS_TE_RES_FETCH);
 	const void *data = (packet)? packet->data : NULL;
 	size_t datasize = (packet)? packet->end : 0;
 	te.res_fetch.error = error;
@@ -4611,7 +4620,8 @@ static void dns_trace_so_submit(struct dns_trace *trace, const struct dns_packet
 	if (!trace || !trace->fp)
 		return;
 
-	struct dns_trace_event te = { DNS_TE_SO_SUBMIT };
+	struct dns_trace_event te;
+	dns_te_init(&te, DNS_TE_SO_SUBMIT);
 	memcpy(&te.so_submit.haddr, haddr, DNS_PP_MIN(dns_sa_len(haddr), sizeof te.so_submit.haddr));
 	const char *cname;
 	if ((cname = dns_trace_cname(trace, haddr)))
@@ -4624,7 +4634,8 @@ static void dns_trace_so_reject(struct dns_trace *trace, const struct dns_packet
 	if (!trace || !trace->fp)
 		return;
 
-	struct dns_trace_event te = { DNS_TE_SO_REJECT };
+	struct dns_trace_event te;
+	dns_te_init(&te, DNS_TE_SO_REJECT);
 	te.so_reject.error = error;
 	dns_trace_tag_and_put(trace, &te, packet->data, packet->end);
 }
@@ -4633,7 +4644,8 @@ static void dns_trace_so_fetch(struct dns_trace *trace, const struct dns_packet 
 	if (!trace || !trace->fp)
 		return;
 
-	struct dns_trace_event te = { DNS_TE_SO_FETCH };
+	struct dns_trace_event te;
+	dns_te_init(&te, DNS_TE_SO_FETCH);
 	const void *data = (packet)? packet->data : NULL;
 	size_t datasize = (packet)? packet->end : 0;
 	te.so_fetch.error = error;
@@ -4644,7 +4656,8 @@ static void dns_trace_sys_connect(struct dns_trace *trace, int fd, int socktype,
 	if (!trace || !trace->fp)
 		return;
 
-	struct dns_trace_event te = { DNS_TE_SYS_CONNECT };
+	struct dns_trace_event te;
+	dns_te_init(&te, DNS_TE_SYS_CONNECT);
 	dns_te_initname(&te.sys_connect.src, fd, &getsockname);
 	memcpy(&te.sys_connect.dst, dst, DNS_PP_MIN(dns_sa_len(dst), sizeof te.sys_connect.dst));
 	te.sys_connect.socktype = socktype;
@@ -4656,7 +4669,8 @@ static void dns_trace_sys_send(struct dns_trace *trace, int fd, int socktype, co
 	if (!trace || !trace->fp)
 		return;
 
-	struct dns_trace_event te = { DNS_TE_SYS_SEND };
+	struct dns_trace_event te;
+	dns_te_init(&te, DNS_TE_SYS_SEND);
 	dns_te_initnames(&te.sys_send.src, &te.sys_send.dst, fd);
 	te.sys_send.socktype = socktype;
 	te.sys_send.error = error;
@@ -4667,7 +4681,8 @@ static void dns_trace_sys_recv(struct dns_trace *trace, int fd, int socktype, co
 	if (!trace || !trace->fp)
 		return;
 
-	struct dns_trace_event te = { DNS_TE_SYS_RECV };
+	struct dns_trace_event te;
+	dns_te_init(&te, DNS_TE_SYS_RECV);
 	dns_te_initnames(&te.sys_recv.dst, &te.sys_recv.src, fd);
 	te.sys_recv.socktype = socktype;
 	te.sys_recv.error = error;
@@ -8397,6 +8412,7 @@ exec:
 		if ((error = dns_a_parse(&a, &rr, F->hints)))
 			goto error;
 
+		memset(&sin, '\0', sizeof sin); /* NB: silence valgrind */
 		sin.sin_family	= AF_INET;
 		sin.sin_addr	= a.addr;
 		if (R->sp == 0)
