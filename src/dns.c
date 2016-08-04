@@ -9776,6 +9776,12 @@ struct {
 	const char *trace;
 
 	int verbose;
+
+	struct {
+		struct dns_resolv_conf *resconf;
+		struct dns_hosts *hosts;
+		struct dns_trace *trace;
+	} memo;
 } MAIN = {
 	.sort	= &dns_rr_i_packet,
 };
@@ -9855,15 +9861,15 @@ static size_t slurp(unsigned char **dst, size_t osize, FILE *fp, const char *pat
 
 
 static struct dns_resolv_conf *resconf(void) {
-	static struct dns_resolv_conf *resconf;
+	struct dns_resolv_conf **resconf = &MAIN.memo.resconf;
 	const char *path;
 	unsigned i;
 	int error;
 
-	if (resconf)
-		return resconf;
+	if (*resconf)
+		return *resconf;
 
-	if (!(resconf = dns_resconf_open(&error)))
+	if (!(*resconf = dns_resconf_open(&error)))
 		panic("dns_resconf_open: %s", dns_strerror(error));
 
 	if (!MAIN.resconf.count)
@@ -9873,9 +9879,9 @@ static struct dns_resolv_conf *resconf(void) {
 		path	= MAIN.resconf.path[i];
 
 		if (0 == strcmp(path, "-"))
-			error	= dns_resconf_loadfile(resconf, stdin);
+			error	= dns_resconf_loadfile(*resconf, stdin);
 		else
-			error	= dns_resconf_loadpath(resconf, path);
+			error	= dns_resconf_loadpath(*resconf, path);
 
 		if (error)
 			panic("%s: %s", path, dns_strerror(error));
@@ -9885,9 +9891,9 @@ static struct dns_resolv_conf *resconf(void) {
 		path	= MAIN.nssconf.path[i];
 
 		if (0 == strcmp(path, "-"))
-			error	= dns_nssconf_loadfile(resconf, stdin);
+			error	= dns_nssconf_loadfile(*resconf, stdin);
 		else
-			error	= dns_nssconf_loadpath(resconf, path);
+			error	= dns_nssconf_loadpath(*resconf, path);
 
 		if (error)
 			panic("%s: %s", path, dns_strerror(error));
@@ -9896,51 +9902,51 @@ static struct dns_resolv_conf *resconf(void) {
 	if (!MAIN.nssconf.count) {
 		path = "/etc/nsswitch.conf";
 
-		if (!(error = dns_nssconf_loadpath(resconf, path)))
+		if (!(error = dns_nssconf_loadpath(*resconf, path)))
 			MAIN.nssconf.path[MAIN.nssconf.count++] = path;
 		else if (error != ENOENT)
 			panic("%s: %s", path, dns_strerror(error));
 	}
 
-	return resconf;
+	return *resconf;
 } /* resconf() */
 
 
 static struct dns_hosts *hosts(void) {
-	static struct dns_hosts *hosts;
+	struct dns_hosts **hosts = &MAIN.memo.hosts;
 	const char *path;
 	unsigned i;
 	int error;
 
-	if (hosts)
-		return hosts;
+	if (*hosts)
+		return *hosts;
 
 	if (!MAIN.hosts.count) {
 		MAIN.hosts.path[MAIN.hosts.count++]	= "/etc/hosts";
 
 		/* Explicitly test dns_hosts_local() */
-		if (!(hosts = dns_hosts_local(&error)))
+		if (!(*hosts = dns_hosts_local(&error)))
 			panic("%s: %s", "/etc/hosts", dns_strerror(error));
 
-		return hosts;
+		return *hosts;
 	}
 
-	if (!(hosts = dns_hosts_open(&error)))
+	if (!(*hosts = dns_hosts_open(&error)))
 		panic("dns_hosts_open: %s", dns_strerror(error));
 
 	for (i = 0; i < MAIN.hosts.count; i++) {
 		path	= MAIN.hosts.path[i];
 
 		if (0 == strcmp(path, "-"))
-			error	= dns_hosts_loadfile(hosts, stdin);
+			error	= dns_hosts_loadfile(*hosts, stdin);
 		else
-			error	= dns_hosts_loadpath(hosts, path);
+			error	= dns_hosts_loadpath(*hosts, path);
 
 		if (error)
 			panic("%s: %s", path, dns_strerror(error));
 	}
 
-	return hosts;
+	return *hosts;
 } /* hosts() */
 
 
@@ -9979,26 +9985,24 @@ static struct dns_cache *cache(void) { return NULL; }
 
 
 static struct dns_trace *trace(const char *mode) {
-	static struct dns_trace *trace = NULL;
+	static char omode[64] = "";
+	struct dns_trace **trace = &MAIN.memo.trace;
 	FILE *fp;
 	int error;
 
-	if (!mode) {
-		dns_trace_close(trace);
-		return NULL;
-	}
-
-	if (trace)
-		return trace;
+	if (*trace && 0 == strcmp(omode, mode))
+		return *trace;
 	if (!MAIN.trace)
 		return NULL;
 
 	if (!(fp = fopen(MAIN.trace, mode)))
 		panic("%s: %s", MAIN.trace, strerror(errno));
-	if (!(trace = dns_trace_open(fp, &error)))
+	dns_trace_close(*trace);
+	if (!(*trace = dns_trace_open(fp, &error)))
 		panic("%s: %s", MAIN.trace, dns_strerror(error));
+	dns_strlcpy(omode, mode, sizeof omode);
 
-	return trace;
+	return *trace;
 }
 
 
@@ -10558,8 +10562,6 @@ static int dump_trace(int argc DNS_NOTUSED, char *argv[]) {
 	if ((error = dns_trace_dump(trace("r"), stdout)))
 		panic("dump_trace: %s", dns_strerror(error));
 
-	trace(NULL);
-
 	return 0;
 } /* dump_trace() */
 
@@ -10784,12 +10786,23 @@ static void print_version(const char *progname, FILE *fp) {
 } /* print_version() */
 
 
+static void main_exit(void) {
+	dns_trace_close(MAIN.memo.trace);
+	MAIN.memo.trace = NULL;
+	dns_hosts_close(MAIN.memo.hosts);
+	MAIN.memo.hosts = NULL;
+	dns_resconf_close(MAIN.memo.resconf);
+	MAIN.memo.resconf = NULL;
+} /* main_exit() */
+
 int main(int argc, char **argv) {
 	extern int optind;
 	extern char *optarg;
 	const char *progname	= argv[0];
 	unsigned i;
 	int ch;
+
+	atexit(&main_exit);
 
 	while (-1 != (ch = getopt(argc, argv, "q:t:c:n:l:z:s:f:vVh"))) {
 		switch (ch) {
