@@ -1696,6 +1696,17 @@ static dns_microseconds_t dns_ts2us(const struct timespec *ts, _Bool rup) {
 	}
 } /* dns_ts2us() */
 
+static struct timespec *dns_tv2ts(struct timespec *ts, const struct timeval *tv) {
+	if (tv) {
+		ts->tv_sec = tv->tv_sec;
+		ts->tv_nsec = tv->tv_usec * 1000;
+
+		return ts;
+	} else {
+		return NULL;
+	}
+} /* dns_tv2ts() */
+
 static size_t dns_utime_print(void *_dst, size_t lim, dns_microseconds_t us) {
 	struct dns_buf dst = DNS_B_INTO(_dst, lim);
 
@@ -4505,7 +4516,7 @@ struct dns_trace_event *dns_trace_tag(struct dns_trace *trace, struct dns_trace_
 
 	te->id = trace->id;
 	gettimeofday(&tv, NULL);
-	TIMEVAL_TO_TIMESPEC(&tv, &te->ts);
+	dns_tv2ts(&te->ts, &tv);
 	te->abi = DNS_TRACE_ABI;
 
 	return te;
