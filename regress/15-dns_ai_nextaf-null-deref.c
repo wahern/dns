@@ -98,7 +98,9 @@ int main(void) {
 		goto error;
 	if (!(hosts = dns_hosts_open(&error)))
 		goto error;
-	if ((error = dns_hosts_insert(hosts, AF_INET, &(struct in_addr){ htonl(INADDR_LOOPBACK) }, "localhost", 0)))
+	struct in_addr inaddr_loopback;
+	inaddr_loopback.s_addr = htonl(INADDR_LOOPBACK);
+	if ((error = dns_hosts_insert(hosts, AF_INET, &inaddr_loopback, "localhost", 0)))
 		goto error;
 	if ((error = dns_hosts_insert(hosts, AF_INET6, &in6addr_loopback, "localhost", 0)))
 		goto error;
