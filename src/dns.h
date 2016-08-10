@@ -118,6 +118,7 @@ enum dns_errno {
 	DNS_ENONAME,  /* EAI_NONAME */
 	DNS_EFAIL,    /* EAI_FAIL */
 	DNS_ECONNFIN,
+	DNS_EVERIFY,
 	DNS_ELAST,
 }; /* dns_errno */
 
@@ -1229,14 +1230,14 @@ typedef uint64_t dns_trace_id_t;
 
 struct dns_trace_event {
 	enum {
-		DNS_TE_RES_SUBMIT,
-		DNS_TE_RES_FETCH,
+		DNS_TE_RES_SUBMIT = 1,
+		DNS_TE_RES_FETCH = 99,
 
-		DNS_TE_SO_SUBMIT,
-		DNS_TE_SO_REJECT,
-		DNS_TE_SO_FETCH,
+		DNS_TE_SO_SUBMIT = 100,
+		DNS_TE_SO_VERIFY,
+		DNS_TE_SO_FETCH = 199,
 
-		DNS_TE_SYS_CONNECT,
+		DNS_TE_SYS_CONNECT = 200,
 		DNS_TE_SYS_SEND,
 		DNS_TE_SYS_RECV,
 	} type;
@@ -1266,7 +1267,7 @@ struct dns_trace_event {
 
 		struct {
 			int error;
-		} so_reject;
+		} so_verify;
 
 		struct {
 			int error;

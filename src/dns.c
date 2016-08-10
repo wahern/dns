@@ -345,6 +345,8 @@ const char *dns_strerror(int error) {
 		return "A non-recoverable error occurred when attempting to resolve the name";
 	case DNS_ECONNFIN:
 		return "Connection closed";
+	case DNS_EVERIFY:
+		return "Reply failed verification";
 	default:
 		return strerror(error);
 	} /* switch() */
@@ -4645,13 +4647,13 @@ static void dns_trace_so_submit(struct dns_trace *trace, const struct dns_packet
 	dns_trace_tag_and_put(trace, &te, packet->data, packet->end);
 }
 
-static void dns_trace_so_reject(struct dns_trace *trace, const struct dns_packet *packet, int error) {
+static void dns_trace_so_verify(struct dns_trace *trace, const struct dns_packet *packet, int error) {
 	if (!trace || !trace->fp)
 		return;
 
 	struct dns_trace_event te;
-	dns_te_init(&te, DNS_TE_SO_REJECT);
-	te.so_reject.error = error;
+	dns_te_init(&te, DNS_TE_SO_VERIFY);
+	te.so_verify.error = error;
 	dns_trace_tag_and_put(trace, &te, packet->data, packet->end);
 }
 
@@ -4784,6 +4786,18 @@ static dns_error_t dns_trace_dump_addr(struct dns_trace *trace, const char *pref
 	return 0;
 }
 
+static dns_error_t dns_trace_dump_meta(struct dns_trace *trace, const char *prefix, const struct dns_trace_event *te, dns_microseconds_t elapsed, FILE *fp) {
+	char time_s[48], elapsed_s[48];
+
+	dns_utime_print(time_s, sizeof time_s, dns_ts2us(&te->ts, 0));
+	dns_utime_print(elapsed_s, sizeof elapsed_s, elapsed);
+
+	fprintf(fp, "%sid: %"DNS_TRACE_ID_PRI"\n", prefix, te->id);
+	fprintf(fp, "%sts: %s (%s)\n", prefix, time_s, elapsed_s);
+	fprintf(fp, "%sabi: 0x%x (0x%x)\n", prefix, te->abi, DNS_TRACE_ABI);
+	return 0;
+}
+
 static dns_error_t dns_trace_dump_error(struct dns_trace *trace, const char *prefix, int error, FILE *fp) {
 	fprintf(fp, "%s%d (%s)\n", prefix, error, (error)? dns_strerror(error) : "none");
 	return 0;
@@ -4806,7 +4820,6 @@ dns_error_t dns_trace_dump(struct dns_trace *trace, FILE *fp) {
 	while (dns_trace_fget(&te, trace->fp, &error)) {
 		size_t datasize = dns_te_datasize(te);
 		const unsigned char *data = (datasize)? te->data : NULL;
-		char time_s[48], elapsed_s[48];
 
 		if (state.id != te->id) {
 			state.id = te->id;
@@ -4814,15 +4827,10 @@ dns_error_t dns_trace_dump(struct dns_trace *trace, FILE *fp) {
 		}
 		dns_time_diff(&state.elapsed, dns_ts2us(&te->ts, 0), state.begin);
 
-		dns_utime_print(time_s, sizeof time_s, dns_ts2us(&te->ts, 0));
-		dns_utime_print(elapsed_s, sizeof elapsed_s, state.elapsed);
-
 		switch(te->type) {
 		case DNS_TE_RES_SUBMIT:
 			fprintf(fp, "dns_res_submit:\n");
-			fprintf(fp, "  id: %"DNS_TRACE_ID_PRI"\n", te->id);
-			fprintf(fp, "  ts: %s (%s)\n", time_s, elapsed_s);
-			fprintf(fp, "  abi: 0x%x (0x%x)\n", te->abi, DNS_TRACE_ABI);
+			dns_trace_dump_meta(trace, "  ", te, state.elapsed, fp);
 			fprintf(fp, "  qname: %s\n", te->res_submit.qname);
 			fprintf(fp, "  qtype: %s\n", dns_strtype(te->res_submit.qtype));
 			fprintf(fp, "  qclass: %s\n", dns_strclass(te->res_submit.qclass));
@@ -4830,9 +4838,7 @@ dns_error_t dns_trace_dump(struct dns_trace *trace, FILE *fp) {
 			break;
 		case DNS_TE_RES_FETCH:
 			fprintf(fp, "dns_res_fetch:\n");
-			fprintf(fp, "  id: %"DNS_TRACE_ID_PRI"\n", te->id);
-			fprintf(fp, "  ts: %s (%s)\n", time_s, elapsed_s);
-			fprintf(fp, "  abi: 0x%x (0x%x)\n", te->abi, DNS_TRACE_ABI);
+			dns_trace_dump_meta(trace, "  ", te, state.elapsed, fp);
 			dns_trace_dump_error(trace, "  error: ", te->res_fetch.error, fp);
 
 			if (data) {
@@ -4847,9 +4853,7 @@ dns_error_t dns_trace_dump(struct dns_trace *trace, FILE *fp) {
 			break;
 		case DNS_TE_SO_SUBMIT:
 			fprintf(fp, "dns_so_submit:\n");
-			fprintf(fp, "  id: %"DNS_TRACE_ID_PRI"\n", te->id);
-			fprintf(fp, "  ts: %s (%s)\n", time_s, elapsed_s);
-			fprintf(fp, "  abi: 0x%x (0x%x)\n", te->abi, DNS_TRACE_ABI);
+			dns_trace_dump_meta(trace, "  ", te, state.elapsed, fp);
 			fprintf(fp, "  hname: %s\n", te->so_submit.hname);
 			dns_trace_dump_addr(trace, "  haddr: ", &te->so_submit.haddr, fp);
 			dns_trace_dump_error(trace, "  error: ", te->so_submit.error, fp);
@@ -4864,12 +4868,10 @@ dns_error_t dns_trace_dump(struct dns_trace *trace, FILE *fp) {
 			}
 
 			break;
-		case DNS_TE_SO_REJECT:
-			fprintf(fp, "dns_so_reject:\n");
-			fprintf(fp, "  id: %"DNS_TRACE_ID_PRI"\n", te->id);
-			fprintf(fp, "  ts: %s (%s)\n", time_s, elapsed_s);
-			fprintf(fp, "  abi: 0x%x (0x%x)\n", te->abi, DNS_TRACE_ABI);
-			dns_trace_dump_error(trace, "  error: ", te->so_reject.error, fp);
+		case DNS_TE_SO_VERIFY:
+			fprintf(fp, "dns_so_verify:\n");
+			dns_trace_dump_meta(trace, "  ", te, state.elapsed, fp);
+			dns_trace_dump_error(trace, "  error: ", te->so_verify.error, fp);
 
 			if (data) {
 				fprintf(fp, "  packet: |\n");
@@ -4883,9 +4885,7 @@ dns_error_t dns_trace_dump(struct dns_trace *trace, FILE *fp) {
 			break;
 		case DNS_TE_SO_FETCH:
 			fprintf(fp, "dns_so_fetch:\n");
-			fprintf(fp, "  id: %"DNS_TRACE_ID_PRI"\n", te->id);
-			fprintf(fp, "  ts: %s (%s)\n", time_s, elapsed_s);
-			fprintf(fp, "  abi: 0x%x (0x%x)\n", te->abi, DNS_TRACE_ABI);
+			dns_trace_dump_meta(trace, "  ", te, state.elapsed, fp);
 			dns_trace_dump_error(trace, "  error: ", te->so_fetch.error, fp);
 
 			if (data) {
@@ -4900,9 +4900,7 @@ dns_error_t dns_trace_dump(struct dns_trace *trace, FILE *fp) {
 			break;
 		case DNS_TE_SYS_CONNECT: {
 			fprintf(fp, "dns_sys_connect:\n");
-			fprintf(fp, "  id: %"DNS_TRACE_ID_PRI"\n", te->id);
-			fprintf(fp, "  ts: %s (%s)\n", time_s, elapsed_s);
-			fprintf(fp, "  abi: 0x%x (0x%x)\n", te->abi, DNS_TRACE_ABI);
+			dns_trace_dump_meta(trace, "  ", te, state.elapsed, fp);
 			dns_trace_dump_addr(trace, "  src: ", &te->sys_connect.src, fp);
 			dns_trace_dump_addr(trace, "  dst: ", &te->sys_connect.dst, fp);
 			int socktype = te->sys_connect.socktype;
@@ -4913,9 +4911,7 @@ dns_error_t dns_trace_dump(struct dns_trace *trace, FILE *fp) {
 		}
 		case DNS_TE_SYS_SEND: {
 			fprintf(fp, "dns_sys_send:\n");
-			fprintf(fp, "  id: %"DNS_TRACE_ID_PRI"\n", te->id);
-			fprintf(fp, "  ts: %s (%s)\n", time_s, elapsed_s);
-			fprintf(fp, "  abi: 0x%x (0x%x)\n", te->abi, DNS_TRACE_ABI);
+			dns_trace_dump_meta(trace, "  ", te, state.elapsed, fp);
 			dns_trace_dump_addr(trace, "  src: ", &te->sys_send.src, fp);
 			dns_trace_dump_addr(trace, "  dst: ", &te->sys_send.dst, fp);
 			int socktype = te->sys_send.socktype;
@@ -4932,9 +4928,7 @@ dns_error_t dns_trace_dump(struct dns_trace *trace, FILE *fp) {
 		}
 		case DNS_TE_SYS_RECV: {
 			fprintf(fp, "dns_sys_recv:\n");
-			fprintf(fp, "  id: %"DNS_TRACE_ID_PRI"\n", te->id);
-			fprintf(fp, "  ts: %s (%s)\n", time_s, elapsed_s);
-			fprintf(fp, "  abi: 0x%x (0x%x)\n", te->abi, DNS_TRACE_ABI);
+			dns_trace_dump_meta(trace, "  ", te, state.elapsed, fp);
 			dns_trace_dump_addr(trace, "  src: ", &te->sys_recv.src, fp);
 			dns_trace_dump_addr(trace, "  dst: ", &te->sys_recv.dst, fp);
 			int socktype = te->sys_recv.socktype;
@@ -4951,9 +4945,7 @@ dns_error_t dns_trace_dump(struct dns_trace *trace, FILE *fp) {
 		}
 		default:
 			fprintf(fp, "unknown(0x%.2x):\n", te->type);
-			fprintf(fp, "  id: %"DNS_TRACE_ID_PRI"\n", te->id);
-			fprintf(fp, "  ts: %s (%s)\n", time_s, elapsed_s);
-			fprintf(fp, "  abi: 0x%x (0x%x)\n", te->abi, DNS_TRACE_ABI);
+			dns_trace_dump_meta(trace, "  ", te, state.elapsed, fp);
 
 			if (data) {
 				fprintf(fp, "  data: |\n");
@@ -7366,6 +7358,9 @@ static int dns_so_verify(struct dns_socket *so, struct dns_packet *P) {
 	struct dns_rr rr;
 	int error = -1;
 
+	if (P->end < 12)
+		goto reject;
+
 	if (so->qid != dns_header(P)->qid)
 		goto reject;
 
@@ -7386,12 +7381,15 @@ static int dns_so_verify(struct dns_socket *so, struct dns_packet *P) {
 	if (0 != strcasecmp(so->qname, qname))
 		goto reject;
 
+	dns_trace_so_verify(so->trace, P, 0);
+
 	return 0;
 reject:
-	error = DNS_EUNKNOWN;
+	error = DNS_EVERIFY;
 error:
 	DNS_SHOW(P, "rejecting packet (%s)", dns_strerror(error));
-	dns_trace_so_reject(so->trace, P, error);
+	dns_trace_so_verify(so->trace, P, error);
+
 	return error;
 } /* dns_so_verify() */
 
@@ -7513,11 +7511,9 @@ retry:
 		if (error)
 			goto error;
 
+		so->answer->end = n;
 		so->stat.udp.rcvd.bytes += n;
 		so->stat.udp.rcvd.count++;
-
-		if ((so->answer->end = n) < 12)
-			goto trash;
 
 		if ((error = dns_so_verify(so, so->answer)))
 			goto trash;
@@ -7565,9 +7561,6 @@ retry:
 			if ((error = dns_so_closefd(so, &so->tcp)))
 				goto error;
 		}
-
-		if (so->answer->end < 12)
-			return DNS_EILLEGAL;
 
 		if ((error = dns_so_verify(so, so->answer)))
 			goto error;
