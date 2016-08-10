@@ -4189,6 +4189,10 @@ int spf_poll(struct spf_resolver *spf, int timeout) {
 } /* spf_poll() */
 
 
+void spf_settrace(struct spf_resolver *spf, struct dns_trace *trace) {
+	dns_res_settrace(spf->res, trace);
+} /* spf_settrace() */
+
 
 #if SPF_MAIN
 
@@ -4209,6 +4213,7 @@ int spf_poll(struct spf_resolver *spf, int timeout) {
 struct {
 	const char *resconf;
 	const char *cache;
+	const char *trace;
 	struct dns_resolver *res;
 } MAIN;
 
@@ -4275,8 +4280,22 @@ static struct dns_resolver *mkres(void) {
 		return MAIN.res;
 
 	MAIN.res = dns_res_open(mkresconf(), dns_hosts_mortal(dns_hosts_local(&error)), dns_hints_mortal(dns_hints_local(mkresconf(), &error)), mkcache(), dns_opts(), &error);
+	if (!MAIN.res)
+		panic("dns_res_open: %s", dns_strerror(error));
 
-	assert(MAIN.res);
+	if (MAIN.trace) {
+		FILE *fp;
+		if (!(fp = fopen(MAIN.trace, "w+b")))
+			panic("%s: %s", MAIN.trace, dns_strerror(error));
+
+		struct dns_trace *trace;
+		if (!(trace = dns_trace_open(fp, &error))) {
+			fclose(fp);
+			panic("dns_trace_open: %s", dns_strerror(error));
+		}
+
+		dns_res_settrace(MAIN.res, trace);
+	}
 
 	return MAIN.res;
 } /* mkres() */
@@ -4673,9 +4692,10 @@ int printenv(int argc, char *argv[], const struct spf_env *env) {
 	"  -C IP      SMTP client IP\n" \
 	"  -R DOMAIN  domain name of host performing the check\n" \
 	"  -T TIME    current timestamp\n" \
-	"  -f PATH    path to file (e.g. to load vm instead of stdin)\n" \
+	"  -f PATH    path to VM opcode file (instead of stdin)\n" \
 	"  -c PATH    path to resolv.conf\n" \
 	"  -z PATH    path to zone cache file\n" \
+	"  -t PATH    output path for resolver trace\n" \
 	"  -W         print version\n" \
 	"  -v         be verbose (use more to increase verboseness)\n" \
 	"  -h         print usage\n" \
@@ -4720,7 +4740,7 @@ int main(int argc, char **argv) {
 	gethostname(env.r, sizeof env.r);
 	spf_itoa(env.t, sizeof env.t, (unsigned)time(0));
 
-	while (-1 != (opt = getopt(argc, argv, "S:L:O:D:I:P:V:H:C:R:T:f:c:z:vWh"))) {
+	while (-1 != (opt = getopt(argc, argv, "S:L:O:D:I:P:V:H:C:R:T:f:c:z:t:vWh"))) {
 		switch (opt) {
 		case 'S':
 			{
@@ -4784,6 +4804,10 @@ setenv:
 			break;
 		case 'z':
 			MAIN.cache = optarg;
+
+			break;
+		case 't':
+			MAIN.trace = optarg;
 
 			break;
 		case 'v':

@@ -79,7 +79,7 @@ int spf_iresult(const char *);
 
 #define SPF_V_REL  0x20160516
 #define SPF_V_ABI  0x20100428
-#define SPF_V_API  0x20100428
+#define SPF_V_API  0x20160809
 
 
 const char *spf_vendor(void);
@@ -396,5 +396,8 @@ int spf_pollfd(struct spf_resolver *);
 
 int spf_poll(struct spf_resolver *, int);
 
+struct dns_trace;
+
+void spf_settrace(struct spf_resolver *, struct dns_trace *);
 
 #endif /* SPF_H */
