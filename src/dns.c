@@ -4822,7 +4822,7 @@ dns_error_t dns_trace_dump(struct dns_trace *trace, FILE *fp) {
 			fprintf(fp, "dns_res_submit:\n");
 			fprintf(fp, "  id: %"DNS_TRACE_ID_PRI"\n", te->id);
 			fprintf(fp, "  ts: %s (%s)\n", time_s, elapsed_s);
-			fprintf(fp, "  abi: 0x%x\n", te->abi);
+			fprintf(fp, "  abi: 0x%x (0x%x)\n", te->abi, DNS_TRACE_ABI);
 			fprintf(fp, "  qname: %s\n", te->res_submit.qname);
 			fprintf(fp, "  qtype: %s\n", dns_strtype(te->res_submit.qtype));
 			fprintf(fp, "  qclass: %s\n", dns_strclass(te->res_submit.qclass));
@@ -4832,7 +4832,7 @@ dns_error_t dns_trace_dump(struct dns_trace *trace, FILE *fp) {
 			fprintf(fp, "dns_res_fetch:\n");
 			fprintf(fp, "  id: %"DNS_TRACE_ID_PRI"\n", te->id);
 			fprintf(fp, "  ts: %s (%s)\n", time_s, elapsed_s);
-			fprintf(fp, "  abi: 0x%x\n", te->abi);
+			fprintf(fp, "  abi: 0x%x (0x%x)\n", te->abi, DNS_TRACE_ABI);
 			dns_trace_dump_error(trace, "  error: ", te->res_fetch.error, fp);
 
 			if (data) {
@@ -4849,7 +4849,7 @@ dns_error_t dns_trace_dump(struct dns_trace *trace, FILE *fp) {
 			fprintf(fp, "dns_so_submit:\n");
 			fprintf(fp, "  id: %"DNS_TRACE_ID_PRI"\n", te->id);
 			fprintf(fp, "  ts: %s (%s)\n", time_s, elapsed_s);
-			fprintf(fp, "  abi: 0x%x\n", te->abi);
+			fprintf(fp, "  abi: 0x%x (0x%x)\n", te->abi, DNS_TRACE_ABI);
 			fprintf(fp, "  hname: %s\n", te->so_submit.hname);
 			dns_trace_dump_addr(trace, "  haddr: ", &te->so_submit.haddr, fp);
 			dns_trace_dump_error(trace, "  error: ", te->so_submit.error, fp);
@@ -4868,7 +4868,7 @@ dns_error_t dns_trace_dump(struct dns_trace *trace, FILE *fp) {
 			fprintf(fp, "dns_so_reject:\n");
 			fprintf(fp, "  id: %"DNS_TRACE_ID_PRI"\n", te->id);
 			fprintf(fp, "  ts: %s (%s)\n", time_s, elapsed_s);
-			fprintf(fp, "  abi: 0x%x\n", te->abi);
+			fprintf(fp, "  abi: 0x%x (0x%x)\n", te->abi, DNS_TRACE_ABI);
 			dns_trace_dump_error(trace, "  error: ", te->so_reject.error, fp);
 
 			if (data) {
@@ -4885,7 +4885,7 @@ dns_error_t dns_trace_dump(struct dns_trace *trace, FILE *fp) {
 			fprintf(fp, "dns_so_fetch:\n");
 			fprintf(fp, "  id: %"DNS_TRACE_ID_PRI"\n", te->id);
 			fprintf(fp, "  ts: %s (%s)\n", time_s, elapsed_s);
-			fprintf(fp, "  abi: 0x%x\n", te->abi);
+			fprintf(fp, "  abi: 0x%x (0x%x)\n", te->abi, DNS_TRACE_ABI);
 			dns_trace_dump_error(trace, "  error: ", te->so_fetch.error, fp);
 
 			if (data) {
@@ -4902,7 +4902,7 @@ dns_error_t dns_trace_dump(struct dns_trace *trace, FILE *fp) {
 			fprintf(fp, "dns_sys_connect:\n");
 			fprintf(fp, "  id: %"DNS_TRACE_ID_PRI"\n", te->id);
 			fprintf(fp, "  ts: %s (%s)\n", time_s, elapsed_s);
-			fprintf(fp, "  abi: 0x%x\n", te->abi);
+			fprintf(fp, "  abi: 0x%x (0x%x)\n", te->abi, DNS_TRACE_ABI);
 			dns_trace_dump_addr(trace, "  src: ", &te->sys_connect.src, fp);
 			dns_trace_dump_addr(trace, "  dst: ", &te->sys_connect.dst, fp);
 			int socktype = te->sys_connect.socktype;
@@ -4915,7 +4915,7 @@ dns_error_t dns_trace_dump(struct dns_trace *trace, FILE *fp) {
 			fprintf(fp, "dns_sys_send:\n");
 			fprintf(fp, "  id: %"DNS_TRACE_ID_PRI"\n", te->id);
 			fprintf(fp, "  ts: %s (%s)\n", time_s, elapsed_s);
-			fprintf(fp, "  abi: 0x%x\n", te->abi);
+			fprintf(fp, "  abi: 0x%x (0x%x)\n", te->abi, DNS_TRACE_ABI);
 			dns_trace_dump_addr(trace, "  src: ", &te->sys_send.src, fp);
 			dns_trace_dump_addr(trace, "  dst: ", &te->sys_send.dst, fp);
 			int socktype = te->sys_send.socktype;
@@ -4934,7 +4934,7 @@ dns_error_t dns_trace_dump(struct dns_trace *trace, FILE *fp) {
 			fprintf(fp, "dns_sys_recv:\n");
 			fprintf(fp, "  id: %"DNS_TRACE_ID_PRI"\n", te->id);
 			fprintf(fp, "  ts: %s (%s)\n", time_s, elapsed_s);
-			fprintf(fp, "  abi: 0x%x\n", te->abi);
+			fprintf(fp, "  abi: 0x%x (0x%x)\n", te->abi, DNS_TRACE_ABI);
 			dns_trace_dump_addr(trace, "  src: ", &te->sys_recv.src, fp);
 			dns_trace_dump_addr(trace, "  dst: ", &te->sys_recv.dst, fp);
 			int socktype = te->sys_recv.socktype;
@@ -4953,7 +4953,7 @@ dns_error_t dns_trace_dump(struct dns_trace *trace, FILE *fp) {
 			fprintf(fp, "unknown(0x%.2x):\n", te->type);
 			fprintf(fp, "  id: %"DNS_TRACE_ID_PRI"\n", te->id);
 			fprintf(fp, "  ts: %s (%s)\n", time_s, elapsed_s);
-			fprintf(fp, "  abi: 0x%x\n", te->abi);
+			fprintf(fp, "  abi: 0x%x (0x%x)\n", te->abi, DNS_TRACE_ABI);
 
 			if (data) {
 				fprintf(fp, "  data: |\n");

@@ -64,16 +64,16 @@
  * Three versions:
  *
  * REL	Official "release"--bug fixes, new features, etc.
- * ABI	Changes to existing object sizes or parameter types.
+ * ABI	Changes to existing object sizes or parameter types
  * API	Changes that might effect application source.
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 #define DNS_VENDOR "william@25thandClement.com"
 
-#define DNS_V_REL  0x20160803
-#define DNS_V_ABI  0x20160803
-#define DNS_V_API  0x20160803
+#define DNS_V_REL  0x20160809
+#define DNS_V_ABI  0x20160608
+#define DNS_V_API  0x20160809
 
 
 DNS_PUBLIC const char *dns_vendor(void);
