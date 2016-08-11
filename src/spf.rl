@@ -459,7 +459,8 @@ struct in_addr *spf_pto4(struct in_addr *ip, const char *src) {
 		iaddr |= 0xff & spf_atoi(byte[i]);
 	}
 
-	iaddr <<= 8 * (4 - i);
+	if (i > 0)
+		iaddr <<= 8 * (4 - i);
 
 	ip->s_addr = htonl(iaddr);
 
