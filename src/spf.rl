@@ -61,7 +61,11 @@
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+#if __GNUC__
 #define SPF_NOTUSED __attribute__((unused))
+#else
+#define SPF_NOTUSED
+#endif
 
 #if __clang__
 #pragma clang diagnostic push
@@ -228,17 +232,16 @@ unsigned long spf_atoi(const char *src) {
 
 
 unsigned spf_xtoi(const char *src) {
-	static const unsigned char tobase[] =
-		{ [0 ... 255] = 0xf0,
-		  ['0'] = 0x0, ['1'] = 0x1, ['2'] = 0x2, ['3'] = 0x3, ['4'] = 0x4,
-		  ['5'] = 0x5, ['6'] = 0x6, ['7'] = 0x7, ['8'] = 0x8, ['9'] = 0x9,
-		  ['a'] = 0xa, ['b'] = 0xb, ['c'] = 0xc, ['d'] = 0xd, ['e'] = 0xe, ['f'] = 0xf,
-		  ['A'] = 0xA, ['B'] = 0xB, ['C'] = 0xC, ['D'] = 0xD, ['E'] = 0xE, ['F'] = 0xF };
+	static const unsigned char tobase[256] =
+		{ ['0'] = 0x10, ['1'] = 0x11, ['2'] = 0x12, ['3'] = 0x13, ['4'] = 0x14,
+		  ['5'] = 0x15, ['6'] = 0x16, ['7'] = 0x17, ['8'] = 0x18, ['9'] = 0x19,
+		  ['a'] = 0x1a, ['b'] = 0x1b, ['c'] = 0x1c, ['d'] = 0x1d, ['e'] = 0x1e, ['f'] = 0x1f,
+		  ['A'] = 0x1A, ['B'] = 0x1B, ['C'] = 0x1C, ['D'] = 0x1D, ['E'] = 0x1E, ['F'] = 0x1F };
 	unsigned n, i = 0;
 
-	while (!(0xf0 & (n = tobase[0xff & (unsigned char)*src++]))) {
+	while ((0xf0 & (n = tobase[0xff & (unsigned char)*src++]))) {
 		i <<= 4;
-		i |= n;
+		i |= 0x0f & n;
 	}
 
 	return i;
@@ -4170,7 +4173,7 @@ int spf_elapsed(struct spf_resolver *spf) {
 
 
 void spf_clear(struct spf_resolver *spf) {
-	return dns_res_clear(spf->res);
+	dns_res_clear(spf->res);
 } /* spf_clear() */
 
 

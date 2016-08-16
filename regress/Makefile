@@ -12,10 +12,12 @@ rfc4408-tests: rfc4408-tests.c ../src/cache.c ../src/zone.c ../src/spf.c ../src/
 	ragel -C -o $@ $<
 
 TESTS = \
+	00-spf_xtoi \
 	12-segfault-in-dns_res_frame_init \
 	14-dns_resconf_search-fqdn \
 	15-dns_ai_nextaf-null-deref
 
+00-spf_xtoi: 00-spf_xtoi.c ../src/spf.c
 12-segfault-in-dns_res_frame_init: 12-segfault-in-dns_res_frame_init.c
 14-dns_resconf_search-fqdn: 14-dns_resconf_search-fqdn.c
 15-dns_ai_nextaf-null-deref: 15-dns_ai_nextaf-null-deref.c
