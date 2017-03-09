@@ -7542,8 +7542,11 @@ exec:
 		if (dns_so_elapsed(&R->so) >= dns_resconf_timeout(R->resconf))
 			dgoto(R->sp, DNS_R_FOREACH_A);
 
-		if ((error = dns_so_check(&R->so)))
+		error = dns_so_check(&R->so);
+		if (error == EAGAIN)
 			goto error;
+		if (error)
+			dgoto(R->sp, DNS_R_FOREACH_A);
 
 		if (!dns_p_setptr(&F->answer, dns_so_fetch(&R->so, &error)))
 			goto error;
