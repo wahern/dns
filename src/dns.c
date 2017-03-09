@@ -6596,6 +6596,11 @@ retry:
 	case DNS_SO_UDP_INIT:
 		so->state++;
 	case DNS_SO_UDP_CONN:
+#if __linux
+		/* work-around for https://github.com/wahern/dns/issues/19 */
+		if (so->stat.udp.sent.count)
+			connect(so->udp, &(struct sockaddr){.sa_family = AF_UNSPEC}, sizeof(struct sockaddr));
+#endif
 		if (0 != connect(so->udp, (struct sockaddr *)&so->remote, dns_sa_len(&so->remote)))
 			goto soerr;
 
@@ -7537,8 +7542,11 @@ exec:
 		if (dns_so_elapsed(&R->so) >= dns_resconf_timeout(R->resconf))
 			dgoto(R->sp, DNS_R_FOREACH_A);
 
-		if ((error = dns_so_check(&R->so)))
+		error = dns_so_check(&R->so);
+		if (error == EAGAIN)
 			goto error;
+		if (error)
+			dgoto(R->sp, DNS_R_FOREACH_A);
 
 		if (!dns_p_setptr(&F->answer, dns_so_fetch(&R->so, &error)))
 			goto error;
