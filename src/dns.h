@@ -962,6 +962,10 @@ typedef unsigned long dns_resconf_i_t;
 
 DNS_PUBLIC size_t dns_resconf_search(void *, size_t, const void *, size_t, struct dns_resolv_conf *, dns_resconf_i_t *);
 
+typedef struct {
+    int fd;
+    int want_events; /* DNS_POLLIN or DNS_POLLOUT, or combination */
+} dns_pollfd_result;
 
 /*
  * H I N T  S E R V E R  I N T E R F A C E
@@ -1024,7 +1028,7 @@ struct dns_cache {
 	int (*check)(struct dns_cache *);
 	struct dns_packet *(*fetch)(struct dns_cache *, int *);
 
-	int (*pollfd)(struct dns_cache *);
+	dns_pollfd_result (*pollfd)(struct dns_cache *);
 	short (*events)(struct dns_cache *);
 	void (*clear)(struct dns_cache *);
 
@@ -1123,7 +1127,7 @@ DNS_PUBLIC void dns_so_clear(struct dns_socket *);
 
 DNS_PUBLIC int dns_so_events(struct dns_socket *);
 
-DNS_PUBLIC int dns_so_pollfd(struct dns_socket *);
+DNS_PUBLIC dns_pollfd_result dns_so_pollfd(struct dns_socket *);
 
 DNS_PUBLIC int dns_so_poll(struct dns_socket *, int);
 
@@ -1165,7 +1169,7 @@ DNS_PUBLIC void dns_res_clear(struct dns_resolver *);
 
 DNS_PUBLIC int dns_res_events(struct dns_resolver *);
 
-DNS_PUBLIC int dns_res_pollfd(struct dns_resolver *);
+DNS_PUBLIC dns_pollfd_result dns_res_pollfd(struct dns_resolver *);
 
 DNS_PUBLIC time_t dns_res_timeout(struct dns_resolver *);
 
@@ -1199,7 +1203,7 @@ DNS_PUBLIC void dns_ai_clear(struct dns_addrinfo *);
 
 DNS_PUBLIC int dns_ai_events(struct dns_addrinfo *);
 
-DNS_PUBLIC int dns_ai_pollfd(struct dns_addrinfo *);
+DNS_PUBLIC dns_pollfd_result dns_ai_pollfd(struct dns_addrinfo *);
 
 DNS_PUBLIC time_t dns_ai_timeout(struct dns_addrinfo *);
 
