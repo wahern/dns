@@ -4419,6 +4419,7 @@ struct dns_resolv_conf *dns_resconf_open(int *error) {
 	};
 	struct dns_resolv_conf *resconf;
 	struct sockaddr_in *sin;
+	size_t len;
 
 	if (!(resconf = malloc(sizeof *resconf)))
 		goto syerr;
@@ -4436,13 +4437,11 @@ struct dns_resolv_conf *dns_resconf_open(int *error) {
 	if (0 != gethostname(resconf->search[0], sizeof resconf->search[0]))
 		goto syerr;
 
-	dns_d_anchor(resconf->search[0], sizeof resconf->search[0], resconf->search[0], strlen(resconf->search[0]));
-	dns_d_cleave(resconf->search[0], sizeof resconf->search[0], resconf->search[0], strlen(resconf->search[0]));
-
-	/*
-	 * XXX: If gethostname() returned a string without any label
-	 *      separator, then search[0][0] should be NUL.
-	 */
+	len = strlen(resconf->search[0]);
+	len = dns_d_anchor(resconf->search[0], sizeof resconf->search[0], resconf->search[0], len);
+	len = dns_d_cleave(resconf->search[0], sizeof resconf->search[0], resconf->search[0], len);
+	if (1 == len) /* gethostname() returned a string without any label */
+		resconf->search[0][0] = '\0';
 
 	dns_resconf_acquire(resconf);
 
