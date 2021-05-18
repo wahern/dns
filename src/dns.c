@@ -8203,7 +8203,8 @@ static int dns_ai_setent(struct addrinfo **ent, union dns_any *any, enum dns_typ
 
 	switch (type) {
 	case DNS_T_A:
-		saddr	= memset(&sin, '\0', sizeof sin);
+		memset(&sin, '\0', sizeof sin);
+		saddr	= &sin;
 
 		sin.sin_family	= AF_INET;
 		sin.sin_port	= htons(ai->port);
@@ -8212,7 +8213,8 @@ static int dns_ai_setent(struct addrinfo **ent, union dns_any *any, enum dns_typ
 
 		break;
 	case DNS_T_AAAA:
-		saddr	= memset(&sin6, '\0', sizeof sin6);
+		memset(&sin6, '\0', sizeof sin6);
+		saddr	= &sin6;
 
 		sin6.sin6_family	= AF_INET6;
 		sin6.sin6_port		= htons(ai->port);
